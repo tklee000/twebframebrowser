@@ -96,6 +96,9 @@ public:
     void UpdateElementClass(const std::shared_ptr<Node>& node,
                             const std::wstring& oldClass,
                             const std::wstring& newClass);
+    void UpdateElementName(const std::shared_ptr<Node>& node,
+                           const std::wstring& oldName,
+                           const std::wstring& newName);
     bool IndexSubtree(const std::shared_ptr<Node>& node);
     bool UnindexSubtree(const std::shared_ptr<Node>& node);
     std::uint64_t FullReindexCount() const noexcept { return fullReindexCount_; }
@@ -111,6 +114,7 @@ private:
     using NodeIndexBucket = std::unordered_map<const Node*, std::weak_ptr<Node>>;
     FastMap<std::wstring, std::weak_ptr<Node>> ids_;
     FastMap<std::wstring, size_t> idCounts_;
+    FastMap<std::wstring, size_t> nameCounts_;
     FastMap<std::wstring, NodeIndexBucket> tags_;
     FastMap<std::wstring, NodeIndexBucket> classes_;
     NodeIndexBucket ownedNodes_;

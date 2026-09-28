@@ -236,6 +236,51 @@ void CheckNestedOverflow(float scale) {
     raster.Paint(layout);
     layout.DiscardDeviceResources();
 }
+
+void CheckOverflowingAncestor(float scale) {
+    Document document;
+    StyleSheet styles;
+    Check(document.Parse(LR"HTML(<style>
+        *{margin:0;padding:0}
+        .viewport{width:300px;height:200px;overflow:auto}
+        .flow{width:250px}.short{height:20px;overflow:visible}
+        .child{margin-top:300px;width:200px;height:40px;background:#d03020}
+        </style><div class='viewport'><div class='flow'>
+        <div class='short' id='overflow-host'><div class='child'></div></div>
+        <div class='short'></div><div class='short'></div><div class='short'></div>
+        <div class='short'></div><div class='short'></div><div class='short'></div>
+        <div class='short'></div><div class='short'></div>
+        </div></div>)HTML"),
+        L"overflowing ancestor fixture parses");
+    Check(styles.Parse(document.StyleText()), L"overflowing ancestor CSS parses");
+    LayoutEngine layout(document, styles);
+    layout.Layout(800, 400, scale);
+    const auto viewport = document.QuerySelector(L".viewport");
+    const auto shortParent = document.QuerySelector(L"#overflow-host");
+    const auto child = document.QuerySelector(L".child");
+    viewport->scrollTop = 140;
+    Check(layout.SyncScroll(viewport), L"overflowing descendant scrolls into view");
+    const auto* parentBox = layout.BoxFor(shortParent);
+    const auto* childBox = layout.BoxFor(child);
+    Check(parentBox && childBox && parentBox->rect.y + parentBox->rect.height < 0 &&
+        childBox->rect.y >= 0 && childBox->rect.y < 200,
+        L"ancestor is offscreen while its overflowing child is visible");
+    Check(childBox && layout.HitTest(childBox->rect.x + 5, childBox->rect.y + 5) == child,
+        L"indexed hit testing keeps an overflowing descendant outside its parent");
+    Raster raster(scale);
+    if (raster.target && childBox) {
+        raster.Paint(layout);
+        const auto pixels = raster.Snapshot();
+        const unsigned x = static_cast<unsigned>((childBox->rect.x + 20) * scale);
+        const unsigned y = static_cast<unsigned>((childBox->rect.y + 20) * scale);
+        const unsigned backgroundX = static_cast<unsigned>(700 * scale);
+        Check(x < raster.width && y < raster.height &&
+            pixels[static_cast<size_t>(y) * raster.width + x] !=
+            pixels[static_cast<size_t>(y) * raster.width + backgroundX],
+            L"paint keeps an overflowing child when its ancestor is offscreen");
+    }
+    layout.DiscardDeviceResources();
+}
 }
 
 int wmain(int argc, wchar_t** argv) {
@@ -245,6 +290,7 @@ int wmain(int argc, wchar_t** argv) {
     for (float scale : {1.0f, 1.5f}) {
         for (bool positioned : {false, true}) Run(scale, positioned, benchmark ? 3000 : 80, benchmark);
         CheckNestedOverflow(scale);
+        CheckOverflowingAncestor(scale);
     }
     if (failures) { std::wcerr << failures << L" checks failed\n"; return 1; }
     std::wcout << L"Scroll rendering regression passed at 100% and 150% DPI\n";

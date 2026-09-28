@@ -27,6 +27,9 @@ public:
     // reach the shared decoder unchanged.
     using BinaryResourceLoader = std::function<bool(
         const std::wstring&, std::vector<unsigned char>&)>;
+    // Called for non-fragment link and script navigation. A browser host can
+    // load the target, update its address bar, and maintain history.
+    using NavigationHandler = std::function<void(const std::wstring&, bool newWindow)>;
 
     static std::unique_ptr<View> Create(HWND parent, const RECT& bounds);
     ~View();
@@ -41,6 +44,10 @@ public:
     void SetLoadHandler(LoadHandler handler);
     void SetResourceLoader(ResourceLoader loader);
     void SetBinaryResourceLoader(BinaryResourceLoader loader);
+    void SetNavigationHandler(NavigationHandler handler);
+    // Best-effort mode for fetched HTML: page scripts are not executed.
+    // This does not provide a browser sandbox or security boundary.
+    void SetBrowserMode(bool enabled);
 
     bool Navigate(const std::wstring& filePath);
     bool NavigateToString(const std::wstring& html, const std::wstring& basePath = L"");
@@ -68,6 +75,7 @@ public:
     // otherwise TWebFrame emits a deterministic DOM path.
     std::wstring DumpAccessibilityJson() const;
     std::wstring LastError() const;
+    std::wstring DocumentTitle() const;
 
 private:
     struct Impl;

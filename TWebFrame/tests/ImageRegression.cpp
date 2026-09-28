@@ -189,6 +189,79 @@ void CheckResponsiveImageScale(float scale){
     measure(2200,2300,1908,L"max-width does not enlarge an image beyond its intrinsic width");
 }
 
+void CheckInlineImageIntrinsicHeight(float scale){
+    auto image=std::make_shared<RasterImage>();image->width=13;image->height=16;
+    Document document;std::wstring error;
+    Check(document.Parse(
+        L"<style>*{box-sizing:border-box;margin:0;padding:0}"
+        L"#notice{display:inline-block;max-width:455px;white-space:nowrap;line-height:20px}"
+        L"#icon{vertical-align:middle}</style>"
+        L"<a id='notice'><img id='icon'> Board notice title</a>",&error),
+        L"inline image height fixture parses");
+    const auto icon=document.QuerySelector(L"#icon");icon->image=image;icon->imageComplete=true;
+    StyleSheet style;Check(style.Parse(document.StyleText(),&error),
+        L"inline image height CSS parses");
+    LayoutEngine layout(document,style);layout.Layout(900,120,scale);
+    const auto* iconBox=layout.BoxFor(icon);
+    const auto* noticeBox=layout.BoxFor(document.QuerySelector(L"#notice"));
+    Check(iconBox&&std::fabs(iconBox->rect.width-13.0f)<0.75f&&
+          std::fabs(iconBox->rect.height-16.0f)<0.75f,
+          scale>1?L"150 percent keeps an inline icon at its intrinsic dimensions":
+                  L"100 percent keeps an inline icon at its intrinsic dimensions");
+    Check(noticeBox&&noticeBox->rect.height>=16.0f&&noticeBox->rect.height<32.0f,
+          scale>1?L"150 percent keeps a notice link at one line of height":
+                  L"100 percent keeps a notice link at one line of height");
+}
+
+void CheckFloatedPopupScale(float scale){
+    Document document;std::wstring error;
+    Check(document.Parse(
+        L"<style>*{box-sizing:border-box;margin:0;padding:0}"
+        L".nav{position:relative;width:320px;height:38px;overflow:visible;background:#333}"
+        L".entry{position:relative;width:100px;height:38px}"
+        L".popup{position:absolute;left:0;top:38px;width:206px;height:auto;overflow:hidden;"
+        L"padding:3px 2px;border:2px solid #666;background:#f02010;z-index:100;line-height:1.43}"
+        L".popup *{box-sizing:border-box;line-height:1.43}.popup ul{float:left;width:50%;height:inherit;list-style:none}"
+        L".popup li{display:block;height:auto}.popup li.title{width:90%;padding:2px 0 2px 4px;font-size:11px}"
+        L".popup li a{display:block;padding:2px 0 1px 5px;font-size:13px;white-space:nowrap}"
+        L".content{height:350px;background:#1030d0}"
+        L"</style><nav class='nav'><div class='entry'><div id='popup' class='popup'>"
+        L"<ul id='left'><li class='title'>Left</li><li><a>one</a></li><li><a>two</a></li>"
+        L"<li><a>three</a></li><li><a>four</a></li><li><a>five</a></li><li><a>six</a></li>"
+        L"<li><a>seven</a></li><li><a>eight</a></li><li><a>nine</a></li><li><a>ten</a></li>"
+        L"<li><a>eleven</a></li><li id='left-last'><a>twelve</a></li></ul>"
+        L"<ul id='right'><li class='title'>Right</li><li><a>one</a></li><li><a>two</a></li>"
+        L"<li><a>three</a></li><li><a>four</a></li><li><a>five</a></li><li><a>six</a></li>"
+        L"<li><a>seven</a></li><li><a>eight</a></li><li><a>nine</a></li><li><a>ten</a></li>"
+        L"<li><a>eleven</a></li><li><a>twelve</a></li></ul>"
+        L"</div></div></nav><main class='content'></main>",&error),
+        L"floated popup fixture parses");
+    StyleSheet style;Check(style.Parse(document.StyleText(),&error),L"floated popup CSS parses");
+    LayoutEngine layout(document,style);layout.Layout(320,200,scale);
+    const auto popup=document.QuerySelector(L"#popup");
+    const auto left=document.QuerySelector(L"#left");
+    const auto right=document.QuerySelector(L"#right");
+    const auto* popupBox=layout.BoxFor(popup);
+    const auto* leftBox=layout.BoxFor(left);
+    const auto* rightBox=layout.BoxFor(right);
+    const auto* lastBox=layout.BoxFor(document.QuerySelector(L"#left-last"));
+    Check(popupBox&&std::fabs(popupBox->rect.width-206.0f)<0.01f&&
+          popupBox->rect.height>270.0f&&popupBox->rect.height<310.0f,
+          scale>1?L"150 percent keeps an auto-height floated popup at CSS geometry":
+                  L"100 percent keeps an auto-height floated popup at CSS geometry");
+    Check(leftBox&&rightBox&&std::fabs(leftBox->rect.y-rightBox->rect.y)<0.01f&&
+          std::fabs(leftBox->rect.x+leftBox->rect.width-rightBox->rect.x)<0.01f,
+          L"left floats form adjacent popup columns instead of vertical blocks");
+    Check(popupBox&&lastBox&&lastBox->rect.y+lastBox->rect.height<=
+          popupBox->content.y+popupBox->content.height+0.01f,
+          L"an overflow-clipping auto-height popup encloses every floated menu row");
+    const auto raster=Paint(layout,scale,320,400);if(raster.bytes.empty())return;
+    const auto overlap=raster.At(50,60,scale);
+    Check(overlap.red>220&&overlap.green<80&&overlap.blue<60,
+          scale>1?L"150 percent paints a z-index popup above following content":
+                  L"100 percent paints a z-index popup above following content");
+}
+
 void CheckDialogBackdropScale(float scale){
     Document document;std::wstring error;
     Check(document.Parse(
@@ -282,6 +355,8 @@ int wmain(){
         CheckScale(1.0f,png);CheckScale(1.5f,png);
         CheckBackgroundScale(1.0f,png);CheckBackgroundScale(1.5f,png);
         CheckResponsiveImageScale(1.0f);CheckResponsiveImageScale(1.5f);
+        CheckInlineImageIntrinsicHeight(1.0f);CheckInlineImageIntrinsicHeight(1.5f);
+        CheckFloatedPopupScale(1.0f);CheckFloatedPopupScale(1.5f);
         CheckDialogBackdropScale(1.0f);CheckDialogBackdropScale(1.5f);
         CheckOutlineScale(1.0f);CheckOutlineScale(1.5f);
     }

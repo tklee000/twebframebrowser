@@ -5,6 +5,7 @@
 #include <cwctype>
 #include <functional>
 #include <sstream>
+#include <string_view>
 #include <unordered_set>
 
 namespace TWebFrame::Internal {
@@ -164,9 +165,59 @@ void ParseStyleAttribute(const std::wstring& source,
     }
 }
 
-bool MatchSimple(const std::shared_ptr<Node>& node, std::wstring selector) {
+bool MatchPlainSimple(const std::shared_ptr<Node>& node,std::wstring_view selector) {
+    while(!selector.empty()&&IsSpace(selector.front()))selector.remove_prefix(1);
+    while(!selector.empty()&&IsSpace(selector.back()))selector.remove_suffix(1);
+    if(selector.empty()||selector==L"*")return true;
+    const auto identifier=[](wchar_t character){
+        return std::iswalnum(character)||character==L'-'||character==L'_';
+    };
+    const auto equalsInsensitive=[](const std::wstring& value,std::wstring_view expected){
+        return value.size()==expected.size()&&std::equal(value.begin(),value.end(),expected.begin(),
+            [](wchar_t left,wchar_t right){return std::towlower(left)==std::towlower(right);});
+    };
+    size_t index=0;
+    if(std::iswalpha(selector[index])||selector[index]==L'_'){
+        const size_t begin=index++;
+        while(index<selector.size()&&identifier(selector[index]))++index;
+        if(!equalsInsensitive(node->tag,selector.substr(begin,index-begin)))return false;
+    }else if(selector[index]==L'*')++index;
+    while(index<selector.size()){
+        if(selector[index]!=L'#'&&selector[index]!=L'.'){++index;continue;}
+        const wchar_t kind=selector[index++];const size_t begin=index;
+        while(index<selector.size()&&identifier(selector[index]))++index;
+        const auto token=selector.substr(begin,index-begin);
+        if(token.empty())return false;
+        if(kind==L'#'){
+            const auto found=node->attributes.find(L"id");
+            if(found==node->attributes.end()||found->second.size()!=token.size()||
+               found->second.compare(0,token.size(),token.data(),token.size())!=0)return false;
+        }else{
+            const auto found=node->attributes.find(L"class");
+            if(found==node->attributes.end())return false;
+            const auto& classes=found->second;size_t position=0;bool matched=false;
+            while(position<classes.size()){
+                while(position<classes.size()&&IsSpace(classes[position]))++position;
+                const size_t start=position;
+                while(position<classes.size()&&!IsSpace(classes[position]))++position;
+                if(position-start==token.size()&&
+                   classes.compare(start,token.size(),token.data(),token.size())==0){matched=true;break;}
+            }
+            if(!matched)return false;
+        }
+    }
+    return true;
+}
+
+bool MatchSimple(const std::shared_ptr<Node>& node, const std::wstring& source) {
     if (!node || node->type != NodeType::Element) return false;
-    selector = Trim(selector);
+    // The overwhelming majority of production selectors are tag/class/id
+    // compounds.  Match those without copying and repeatedly scanning the
+    // selector for every supported pseudo-class.  Functional/state selectors
+    // stay on the complete path below.
+    if(source.find(L':')==std::wstring::npos&&source.find(L'[')==std::wstring::npos)
+        return MatchPlainSimple(node,source);
+    auto selector = Trim(source);
     if (selector.empty() || selector == L"*") return true;
 
     // Supported dynamic pseudo classes and relational/simple functional selectors.
@@ -201,6 +252,25 @@ bool MatchSimple(const std::shared_ptr<Node>& node, std::wstring selector) {
         else{for(auto it=parent->children.rbegin();it!=parent->children.rend();++it)if((*it)->type==NodeType::Element)return *it==node;}
         return false;
     };
+    auto isEdgeOfType=[&](bool first){
+        auto parent=node->parent.lock();if(!parent)return false;
+        if(first){for(const auto& child:parent->children)
+            if(child->type==NodeType::Element&&child->tag==node->tag)return child==node;}
+        else{for(auto it=parent->children.rbegin();it!=parent->children.rend();++it)
+            if((*it)->type==NodeType::Element&&(*it)->tag==node->tag)return *it==node;}
+        return false;
+    };
+    auto elementSiblingCount=[&](bool sameType){
+        auto parent=node->parent.lock();if(!parent)return 0;
+        int count=0;for(const auto& child:parent->children)
+            if(child->type==NodeType::Element&&(!sameType||child->tag==node->tag))++count;
+        return count;
+    };
+    const bool canBeDisabled=node->tag==L"button"||node->tag==L"fieldset"||
+        node->tag==L"input"||node->tag==L"optgroup"||node->tag==L"option"||
+        node->tag==L"select"||node->tag==L"textarea";
+    const bool canBeRequired=node->tag==L"input"||node->tag==L"select"||node->tag==L"textarea";
+    const bool isLink=(node->tag==L"a"||node->tag==L"area")&&node->attributes.count(L"href")!=0;
     auto isEmpty=[&](){
         for(const auto& child:node->children)
             if(child->type==NodeType::Element||
@@ -256,15 +326,25 @@ bool MatchSimple(const std::shared_ptr<Node>& node, std::wstring selector) {
     }
     if (!consumePseudo(L":checked", node->checked) ||
         !consumePseudo(L":indeterminate", node->indeterminate) ||
-        !consumePseudo(L":disabled", node->disabled) ||
+        !consumePseudo(L":disabled", canBeDisabled&&node->disabled) ||
+        !consumePseudo(L":enabled", canBeDisabled&&!node->disabled) ||
+        !consumePseudo(L":required", canBeRequired&&node->attributes.count(L"required")!=0) ||
+        !consumePseudo(L":optional", canBeRequired&&node->attributes.count(L"required")==0) ||
+        !consumePseudo(L":link",isLink) ||
+        !consumePseudo(L":any-link",isLink) ||
         !consumePseudo(L":hover", node->hovered) ||
         !consumePseudo(L":focus-within", node->focusWithin||node->focused) ||
         !consumePseudo(L":focus-visible", node->focusVisible) ||
         !consumePseudo(L":focus", node->focused) ||
         !consumePseudo(L":empty",isEmpty()) ||
         !consumePseudo(L":first-child",isEdgeChild(true)) ||
-        !consumePseudo(L":last-child",isEdgeChild(false))) return false;
-    if(selector.find(L":active")!=std::wstring::npos)return false;
+        !consumePseudo(L":last-child",isEdgeChild(false)) ||
+        !consumePseudo(L":first-of-type",isEdgeOfType(true)) ||
+        !consumePseudo(L":last-of-type",isEdgeOfType(false)) ||
+        !consumePseudo(L":only-child",elementSiblingCount(false)==1) ||
+        !consumePseudo(L":only-of-type",elementSiblingCount(true)==1)) return false;
+    if(selector.find(L":active")!=std::wstring::npos||
+       selector.find(L":visited")!=std::wstring::npos)return false;
     // Unsupported pseudo-classes invalidate a selector. Removing only the
     // colon would make a state rule match every element with its base selector.
     if(selector.find(L':')!=std::wstring::npos)return false;
@@ -655,23 +735,29 @@ std::wstring Node::Attribute(const std::wstring& name) const {
 void Node::SetAttribute(const std::wstring& name, const std::wstring& value) {
     const auto key = ToLower(name);
     const auto oldClass = key == L"class" ? Attribute(L"class") : L"";
+    const auto oldName = key == L"name" ? Attribute(L"name") : L"";
     attributes[key] = value;
     if (key == L"checked") checked = true;
     if (key == L"disabled") disabled = true;
     if (key == L"style") { inlineStyle.clear(); ParseStyleAttribute(value, inlineStyle); }
     if (key == L"class" && ownerDocument)
         ownerDocument->UpdateElementClass(shared_from_this(), oldClass, value);
+    if (key == L"name" && ownerDocument)
+        ownerDocument->UpdateElementName(shared_from_this(), oldName, value);
 }
 
 void Node::RemoveAttribute(const std::wstring& name) {
     const auto key = ToLower(name);
     const auto oldClass = key == L"class" ? Attribute(L"class") : L"";
+    const auto oldName = key == L"name" ? Attribute(L"name") : L"";
     attributes.erase(key);
     if (key == L"checked") checked = false;
     if (key == L"disabled") disabled = false;
     if (key == L"style") inlineStyle.clear();
     if (key == L"class" && ownerDocument)
         ownerDocument->UpdateElementClass(shared_from_this(), oldClass, L"");
+    if (key == L"name" && ownerDocument)
+        ownerDocument->UpdateElementName(shared_from_this(), oldName, L"");
 }
 
 bool Node::HasClass(const std::wstring& name) const {
@@ -794,6 +880,10 @@ std::shared_ptr<Node> Document::GetElementById(const std::wstring& id) const {
 
 std::vector<std::shared_ptr<Node>> Document::GetElementsByName(const std::wstring& name) const {
     std::vector<std::shared_ptr<Node>> result;
+    // Named window/document property lookup is attempted for every otherwise
+    // unknown property.  Avoid walking the whole tree when no such name exists;
+    // retain the tree walk for present names so results remain in document order.
+    if (name.empty() || nameCounts_.find(name) == nameCounts_.end()) return result;
     Walk(root_, [&](const auto& node) { if (node->Attribute(L"name") == name) result.push_back(node); });
     return result;
 }
@@ -962,7 +1052,7 @@ void Document::Reindex() {
         if (const auto node = entry.second.lock(); node && node->ownerDocument == this)
             node->ownerDocument = nullptr;
     ownedNodes_.clear();
-    ids_.clear();idCounts_.clear();tags_.clear();classes_.clear();
+    ids_.clear();idCounts_.clear();nameCounts_.clear();tags_.clear();classes_.clear();
     Walk(root_, [&](const auto& node) {
         node->ownerDocument = this;
         ownedNodes_[node.get()] = node;
@@ -976,6 +1066,8 @@ void Document::Reindex() {
         }
         const auto id = node->Attribute(L"id");
         if (!id.empty()) { ids_[id] = node; ++idCounts_[id]; }
+        const auto name = node->Attribute(L"name");
+        if (!name.empty()) ++nameCounts_[name];
     });
 }
 
@@ -1018,6 +1110,23 @@ void Document::UpdateElementClass(const std::shared_ptr<Node>& node,
         classes_[token][node.get()] = node;
 }
 
+void Document::UpdateElementName(const std::shared_ptr<Node>& node,
+                                 const std::wstring& oldName,
+                                 const std::wstring& newName) {
+    if (!node || oldName == newName) return;
+    auto root = node;
+    while (auto parent = root->parent.lock()) root = std::move(parent);
+    if (root != root_) return;
+    if (!oldName.empty()) {
+        const auto found = nameCounts_.find(oldName);
+        if (found != nameCounts_.end()) {
+            if (found->second > 1) --found->second;
+            else nameCounts_.erase(oldName);
+        }
+    }
+    if (!newName.empty()) ++nameCounts_[newName];
+}
+
 bool Document::IndexSubtree(const std::shared_ptr<Node>& node) {
     if(!node)return true;
     auto root=node;while(auto parent=root->parent.lock())root=std::move(parent);
@@ -1042,6 +1151,8 @@ bool Document::IndexSubtree(const std::shared_ptr<Node>& node) {
         if(classes!=current->attributes.end())ForEachClassToken(classes->second,[&](const auto& token){
             classes_[token][current.get()]=current;
         });
+        const auto name=current->attributes.find(L"name");
+        if(name!=current->attributes.end()&&!name->second.empty())++nameCounts_[name->second];
     });
     for(const auto& item:entries){ids_[item.first]=item.second;idCounts_[item.first]=1;}
     return true;
@@ -1074,6 +1185,13 @@ bool Document::UnindexSubtree(const std::shared_ptr<Node>& node) {
         if(classes!=current->attributes.end())ForEachClassToken(classes->second,[&](const auto& token){
             const auto found=classes_.find(token);if(found!=classes_.end())found->second.erase(current.get());
         });
+        const auto name=current->attributes.find(L"name");
+        if(name!=current->attributes.end()&&!name->second.empty()){
+            const auto found=nameCounts_.find(name->second);
+            if(found!=nameCounts_.end()){
+                if(found->second>1)--found->second;else nameCounts_.erase(name->second);
+            }
+        }
     });
     for(const auto& item:entries){ids_.erase(item.first);idCounts_.erase(item.first);}
     return true;

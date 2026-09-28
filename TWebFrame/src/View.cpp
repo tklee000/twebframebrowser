@@ -20,6 +20,7 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <shlwapi.h>
 #include <uxtheme.h>
 #include <algorithm>
 #include <chrono>
@@ -39,6 +40,7 @@
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "uxtheme.lib")
 
 namespace TWebFrame {
@@ -58,6 +60,25 @@ constexpr UINT_PTR kTooltipToolId = 0x5750;
 
 std::wstring Utf8ToWide(const std::string& value) {
     if(value.empty())return {};int count=MultiByteToWideChar(CP_UTF8,0,value.data(),static_cast<int>(value.size()),nullptr,0);std::wstring out(count,L'\0');MultiByteToWideChar(CP_UTF8,0,value.data(),static_cast<int>(value.size()),out.data(),count);return out;
+}
+
+std::wstring EncodeFormComponent(const std::wstring& value,UINT codePage){
+    const int size=WideCharToMultiByte(codePage,0,value.c_str(),static_cast<int>(value.size()),
+        nullptr,0,nullptr,nullptr);
+    if(size<=0)return L"";
+    std::string bytes(static_cast<size_t>(size),'\0');
+    WideCharToMultiByte(codePage,0,value.c_str(),static_cast<int>(value.size()),
+        bytes.data(),size,nullptr,nullptr);
+    constexpr wchar_t digits[]=L"0123456789ABCDEF";
+    std::wstring encoded;
+    for(unsigned char byte:bytes){
+        if((byte>=L'A'&&byte<=L'Z')||(byte>=L'a'&&byte<=L'z')||
+            (byte>=L'0'&&byte<=L'9')||byte==L'*'||byte==L'-'||byte==L'.'||byte==L'_')
+            encoded.push_back(static_cast<wchar_t>(byte));
+        else if(byte==L' ')encoded.push_back(L'+');
+        else{encoded.push_back(L'%');encoded.push_back(digits[byte>>4]);encoded.push_back(digits[byte&15]);}
+    }
+    return encoded;
 }
 
 ATOM EnsureWindowClass(HINSTANCE instance,const wchar_t* className,WNDPROC proc) {
@@ -94,6 +115,15 @@ bool IsAtomicEditingElement(const std::shared_ptr<Node>& node) {
     return tag==L"img"||tag==L"br"||tag==L"hr"||tag==L"input"||
            tag==L"canvas"||tag==L"svg"||tag==L"iframe"||tag==L"video"||
            tag==L"audio"||tag==L"embed"||tag==L"object";
+}
+
+bool IsClassicJavaScriptType(const std::wstring& authoredType) {
+    auto type=ToLower(Trim(authoredType));
+    const auto parameters=type.find(L';');
+    if(parameters!=std::wstring::npos)type=Trim(type.substr(0,parameters));
+    return type.empty()||type==L"text/javascript"||type==L"application/javascript"||
+           type==L"text/ecmascript"||type==L"application/ecmascript"||
+           type==L"text/jscript"||type==L"text/livescript";
 }
 
 std::shared_ptr<Node> EditableRoot(const std::shared_ptr<Node>& node) {
@@ -249,12 +279,15 @@ struct View::Impl {
     LoadHandler loadHandler;
     View::ResourceLoader resourceLoader;
     View::BinaryResourceLoader binaryResourceLoader;
+    View::NavigationHandler navigationHandler;
+    bool browserMode=false;
     std::unordered_map<std::wstring,std::shared_ptr<RasterImage>> rasterImageCache;
     struct ChildFrame { std::shared_ptr<Node> node; std::unique_ptr<View> view; };
     std::vector<ChildFrame> childFrames;
     std::wstring lastError;
     std::wstring basePath;
     std::wstring pendingNavigation;
+    bool pendingNavigationNewWindow=false;
     ComPtr<ID2D1Factory> d2dFactory;
     ComPtr<IDWriteFactory> writeFactory;
     ComPtr<ID2D1HwndRenderTarget> renderTarget;
@@ -347,20 +380,23 @@ struct View::Impl {
     }){}
 
     bool LoadTextResource(const std::wstring& reference,std::wstring& content)const{
+        const auto resolved=ResolveResourceReference(reference);
         auto resource=reference;
         const auto suffix=resource.find_first_of(L"?#");
         if(suffix!=std::wstring::npos)resource.resize(suffix);
-        auto resolved=resource;const auto scheme=basePath.find(L"://");
-        if(scheme!=std::wstring::npos&&resource.find(L"://")==std::wstring::npos){
-            auto base=basePath;const auto baseSuffix=base.find_first_of(L"?#");if(baseSuffix!=std::wstring::npos)base.resize(baseSuffix);
-            const auto originEnd=base.find(L'/',scheme+3);
-            if(resource.rfind(L"//",0)==0)resolved=base.substr(0,scheme+1)+resource;
-            else if(!resource.empty()&&resource.front()==L'/')resolved=(originEnd==std::wstring::npos?base:base.substr(0,originEnd))+resource;
-            else{const auto slash=base.find_last_of(L'/');resolved=(slash==std::wstring::npos?base+L'/':base.substr(0,slash+1))+resource;}
-        }
         if(resourceLoader&&resourceLoader(resolved,content))return true;
-        if(resolved!=resource&&resourceLoader&&resourceLoader(resource,content))return true;
-        if(scheme!=std::wstring::npos)return false;
+        if(resolved!=reference&&resourceLoader&&resourceLoader(reference,content))return true;
+        // Preserve the trusted-UI loader's historical queryless lookup while
+        // browser hosts receive the full URL first, including its query.
+        if(!browserMode&&resourceLoader){
+            auto withoutQuery=resolved;
+            const auto query=withoutQuery.find_first_of(L"?#");
+            if(query!=std::wstring::npos){
+                withoutQuery.resize(query);
+                if(resourceLoader(withoutQuery,content))return true;
+            }
+        }
+        if(basePath.find(L"://")!=std::wstring::npos||resolved.find(L"://")!=std::wstring::npos)return false;
         std::filesystem::path path(resource);
         if(path.is_relative()&&!basePath.empty())path=std::filesystem::path(basePath)/path;
         std::ifstream input(path,std::ios::binary);if(!input)return false;
@@ -387,6 +423,12 @@ struct View::Impl {
     }
     std::wstring ResolveResourceReference(const std::wstring& reference)const{
         if(reference.rfind(L"data:",0)==0)return reference;
+        if(basePath.find(L"://")!=std::wstring::npos){
+            std::vector<wchar_t> combined(32768,L'\0');
+            DWORD length=static_cast<DWORD>(combined.size());
+            if(SUCCEEDED(UrlCombineW(basePath.c_str(),reference.c_str(),combined.data(),&length,0)))
+                return combined.data();
+        }
         auto resolved=reference;
         const auto baseScheme=basePath.find(L"://");
         if(baseScheme!=std::wstring::npos&&reference.find(L"://")==std::wstring::npos){
@@ -726,6 +768,7 @@ struct View::Impl {
         });
         javascript.SetNavigationSink([this](const std::wstring& target){
             pendingNavigation=target;
+            pendingNavigationNewWindow=false;
             PostMessageW(hwnd,kNavigationMessage,0,0);
         });
         javascript.SetDialogSink([this](const std::wstring& message){
@@ -2091,10 +2134,63 @@ struct View::Impl {
     bool SubmitNearestForm(const std::shared_ptr<Node>& control){
         const auto form=NearestForm(control);if(!form)return false;
         if(javascript.DispatchNodeEvent(form,L"submit"))return true;
-        if(ToLower(form->Attribute(L"method"))==L"dialog")if(const auto dialog=form->Closest(L"dialog");dialog&&dialog->attributes.count(L"open")){
+        const auto method=ToLower(form->Attribute(L"method"));
+        if(method==L"dialog")if(const auto dialog=form->Closest(L"dialog");dialog&&dialog->attributes.count(L"open")){
             dialog->RemoveAttribute(L"open");dialog->modal=false;dialog->SetAttribute(L"returnvalue",control?control->Attribute(L"value"):L"");
             JavaScriptRuntime::EventInit close{};close.bubbles=false;close.cancelable=false;javascript.DispatchNodeEvent(dialog,L"close",close);
             layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);
+        }
+        if(browserMode&&method!=L"dialog"){
+            if(!method.empty()&&method!=L"get"){
+                lastError=L"POST form submission is not supported by this browser";
+                if(loadHandler)loadHandler(false,lastError);
+                return true;
+            }
+            UINT codePage=CP_UTF8;
+            for(const auto& meta:document.QuerySelectorAll(L"meta")){
+                const auto declaration=ToLower(meta->Attribute(L"charset")+L" "+meta->Attribute(L"content"));
+                if(declaration.find(L"euc-kr")!=std::wstring::npos||
+                   declaration.find(L"windows-949")!=std::wstring::npos){codePage=949;break;}
+            }
+            std::wstring query;
+            std::function<void(const std::shared_ptr<Node>&)> collect=[&](const std::shared_ptr<Node>& node){
+                if(!node||node->disabled)return;
+                if(node!=form&&(node->tag==L"input"||node->tag==L"textarea"||
+                                node->tag==L"select"||node->tag==L"button")){
+                    const auto name=node->Attribute(L"name");
+                    const auto type=ToLower(node->Attribute(L"type"));
+                    bool include=!name.empty();
+                    if(type==L"button"||type==L"reset"||type==L"file")include=false;
+                    if(node->tag==L"button"&&node!=control)include=false;
+                    if((type==L"submit"||type==L"image")&&node!=control)include=false;
+                    if((type==L"checkbox"||type==L"radio")&&!node->checked)include=false;
+                    if(include){
+                        std::wstring value=node->Attribute(L"value");
+                        if((type==L"checkbox"||type==L"radio")&&
+                           !node->attributes.count(L"value"))value=L"on";
+                        if(node->tag==L"textarea"&&!node->attributes.count(L"value"))
+                            value=node->InnerText();
+                        if(node->tag==L"select"&&!node->attributes.count(L"value")){
+                            auto options=SelectOptions(node);
+                            auto selected=std::find_if(options.begin(),options.end(),
+                                [](const std::shared_ptr<Node>& option){return option->attributes.count(L"selected")>0;});
+                            if(selected==options.end())selected=options.begin();
+                            if(selected!=options.end())value=OptionValue(*selected);
+                        }
+                        if(!query.empty())query+=L"&";
+                        query+=EncodeFormComponent(name,codePage)+L"="+
+                               EncodeFormComponent(value,codePage);
+                    }
+                }
+                for(const auto& child:node->children)collect(child);
+            };
+            collect(form);
+            const auto action=form->Attribute(L"action");
+            std::wstring target=action.empty()?basePath:ResolveResourceReference(action);
+            const auto hash=target.find(L'#');if(hash!=std::wstring::npos)target.resize(hash);
+            if(!query.empty())target+=(target.find(L'?')==std::wstring::npos?L"?":L"&")+query;
+            pendingNavigation=target;pendingNavigationNewWindow=false;
+            PostMessageW(hwnd,kNavigationMessage,0,0);
         }
         return true;
     }
@@ -2109,6 +2205,11 @@ struct View::Impl {
             const auto anchor=node->Closest(L"a[href]");
             if(anchor){const auto href=Trim(anchor->Attribute(L"href"));
                 if(!href.empty()&&href.front()==L'#')javascript.NavigateToFragment(href);
+                else if(!href.empty()&&href.rfind(L"javascript:",0)!=0){
+                    pendingNavigation=ResolveResourceReference(href);
+                    pendingNavigationNewWindow=ToLower(anchor->Attribute(L"target"))==L"_blank";
+                    PostMessageW(hwnd,kNavigationMessage,0,0);
+                }
             }
             auto submitter=node;if(node->tag!=L"button"&&node->tag!=L"input")submitter=node->Closest(L"button");
             if(submitter&&!submitter->disabled){const auto submitterType=ToLower(submitter->Attribute(L"type"));
@@ -2500,6 +2601,7 @@ struct View::Impl {
         case kNavigationMessage:{
             auto target=std::move(pendingNavigation);pendingNavigation.clear();
             if(target.empty())return 0;
+            if(navigationHandler){navigationHandler(target,pendingNavigationNewWindow);return 0;}
             std::wstring html;
             if(!LoadTextResource(target,html)){
                 lastError=L"Cannot load HTML resource: "+target;
@@ -2709,36 +2811,65 @@ struct View::Impl {
             if(hit==HTCLIENT){SetCursor(CursorAtCurrentPosition());return TRUE;}break;}
         case WM_DESTROY:pendingNavigation.clear();HideTooltip();if(tooltip){DestroyWindow(tooltip);tooltip=nullptr;}if(tooltipFont){DeleteObject(tooltipFont);tooltipFont=nullptr;}KillTimer(hwnd,kAnimationFrameTimer);KillTimer(hwnd,kJavaScriptTimer);KillTimer(hwnd,kCssTransitionTimer);KillTimer(hwnd,kCaretBlinkTimer);KillTimer(hwnd,kImageAnimationTimer);caretBlinkTimerActive=false;cssTransitionTimerActive=false;imageAnimationTimerActive=false;childFrames.clear();textInput.Cancel(nullptr);if(accessibility)accessibility->Disconnect();ResetRenderTargets();return 0;default:break;}return DefWindowProcW(hwnd,message,wParam,lParam);}
     bool LoadHtml(const std::wstring& html,const std::wstring& base,const std::wstring& location){
-        HideTooltip();lastError.clear();childFrames.clear();basePath=base;rasterImageCache.clear();textInput.Cancel(nullptr);focused.reset();editingNode.reset();ClearEditingBoundary();textSelectionDragging=false;if(GetCapture()==hwnd)ReleaseCapture();StopCaretBlink();hovered.reset();hoverPath.clear();hasPointerPosition=false;pointerX=pointerY=0;scrollbarDragNode.reset();scrollbarDragOffset=0;scrollbarDragHorizontal=false;openSelectPopup.reset();selectPopupHotIndex=-1;selectPopupScrollOffset=0;selectPopupShowAll=false;selectPopupScrollDragging=false;selectPopupScrollDragOffset=0;selectionAnchor=caretPosition=0;textEditDirty=false;liveRegions.clear();liveRegionText.clear();KillTimer(hwnd,kCssTransitionTimer);KillTimer(hwnd,kImageAnimationTimer);cssTransitionTimerActive=false;imageAnimationTimerActive=false;layout.ClearTransitions();javascript.Clear();UpdateJavaScriptViewport();if(!document.Parse(html,&lastError)){if(loadHandler)loadHandler(false,lastError);return false;}
+        HideTooltip();lastError.clear();childFrames.clear();basePath=base;rasterImageCache.clear();textInput.Cancel(nullptr);focused.reset();editingNode.reset();ClearEditingBoundary();textSelectionDragging=false;if(GetCapture()==hwnd)ReleaseCapture();StopCaretBlink();hovered.reset();hoverPath.clear();hasPointerPosition=false;pointerX=pointerY=0;scrollbarDragNode.reset();scrollbarDragOffset=0;scrollbarDragHorizontal=false;openSelectPopup.reset();selectPopupHotIndex=-1;selectPopupScrollOffset=0;selectPopupShowAll=false;selectPopupScrollDragging=false;selectPopupScrollDragOffset=0;selectionAnchor=caretPosition=0;textEditDirty=false;liveRegions.clear();liveRegionText.clear();KillTimer(hwnd,kCssTransitionTimer);KillTimer(hwnd,kImageAnimationTimer);cssTransitionTimerActive=false;imageAnimationTimerActive=false;layout.ClearTransitions();javascript.Clear();javascript.SetDocumentReadyState(L"loading");UpdateJavaScriptViewport();if(!document.Parse(html,&lastError)){if(loadHandler)loadHandler(false,lastError);return false;}
         std::wstring css=document.StyleText();
         for(const auto& link:document.QuerySelectorAll(L"link[rel='stylesheet']")){
             std::wstring external;if(LoadTextResource(link->Attribute(L"href"),external))css+=external+L"\n";
-            else{lastError=L"Cannot load stylesheet: "+link->Attribute(L"href");if(loadHandler)loadHandler(false,lastError);return false;}
+            else if(!browserMode){lastError=L"Cannot load stylesheet: "+link->Attribute(L"href");if(loadHandler)loadHandler(false,lastError);return false;}
         }
-        if(!styles.Parse(css,&lastError)){if(loadHandler)loadHandler(false,lastError);return false;}
-        std::wstring scripts;
-        for(const auto& script:document.QuerySelectorAll(L"script")){
-            const auto source=script->Attribute(L"src");
-            if(source.empty())scripts+=script->InnerText()+L"\n";
-            else{std::wstring external;if(LoadTextResource(source,external))scripts+=external+L"\n";else{lastError=L"Cannot load script: "+source;if(loadHandler)loadHandler(false,lastError);return false;}}
+        if(!styles.Parse(css,&lastError)){
+            if(!browserMode){if(loadHandler)loadHandler(false,lastError);return false;}
+            styles.Parse(L"",nullptr);lastError.clear();
         }
         LoadImages(false);std::vector<std::pair<std::shared_ptr<Node>,std::wstring>> initialImages;
         for(const auto& image:document.QuerySelectorAll(L"img"))
             initialImages.push_back({image,image->imageSource});
         javascript.SetLocation(location);
-        if(!javascript.Load(scripts,&lastError)){if(loadHandler)loadHandler(false,lastError);return false;}
+        // Each classic script is its own JavaScript Script Record. A load or
+        // syntax/runtime error in one script must not prevent later scripts
+        // from running, and function declarations are hoisted only within the
+        // script that contains them. Browser mode intentionally skips scripts.
+        for(const auto& script:browserMode?std::vector<std::shared_ptr<Node>>{}:
+                                            document.QuerySelectorAll(L"script")){
+            if(!IsClassicJavaScriptType(script->Attribute(L"type")))continue;
+            const auto source=script->Attribute(L"src");std::wstring program;
+            if(source.empty())program=script->InnerText();
+            else if(!LoadTextResource(source,program)){
+                JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
+                javascript.DispatchNodeEvent(script,L"error",event);continue;
+            }
+            std::wstring scriptError;
+            if(!javascript.Execute(program,nullptr,&scriptError)){
+                JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
+                javascript.DispatchNodeEvent(script,L"error",event);continue;
+            }
+            if(!source.empty()){
+                JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
+                javascript.DispatchNodeEvent(script,L"load",event);
+            }
+        }
+        lastError.clear();
         for(const auto& item:initialImages)if(item.first->imageSource==item.second&&!item.second.empty()){
             JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
             javascript.DispatchNodeEvent(item.first,item.first->image?L"load":L"error",event);
         }
+        javascript.SetDocumentReadyState(L"interactive");
         javascript.DispatchDocumentEvent(L"DOMContentLoaded");
         for(const auto& node:document.QuerySelectorAll(L"iframe[src]")){
             const auto source=node->Attribute(L"src");std::wstring childHtml;
-            if(!LoadTextResource(source,childHtml)){lastError=L"Cannot load frame: "+source;if(loadHandler)loadHandler(false,lastError);return false;}
+            if(!LoadTextResource(source,childHtml)){
+                JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
+                javascript.DispatchNodeEvent(node,L"error",event);continue;
+            }
             RECT bounds{0,0,1,1};auto child=View::Create(hwnd,bounds);
-            if(!child){lastError=L"Cannot create frame: "+source;if(loadHandler)loadHandler(false,lastError);return false;}
+            if(!child){
+                JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
+                javascript.DispatchNodeEvent(node,L"error",event);continue;
+            }
             child->SetResourceLoader(resourceLoader);
             child->SetBinaryResourceLoader(binaryResourceLoader);
+            child->SetBrowserMode(browserMode);
+            child->SetNavigationHandler(navigationHandler);
             child->SetMessageHandler([this](const std::wstring& message){if(messageHandler)messageHandler(message);});
             child->impl_->javascript.SetParentMessageSink([this,node](const std::wstring& data){
                 javascript.DispatchWindowMessageAsJson(data,node);
@@ -2750,14 +2881,18 @@ struct View::Impl {
             if(framePath.is_relative())framePath=std::filesystem::path(basePath)/framePath;
             auto& frame=*childFrames.back().view;
             if(!frame.impl_->LoadHtml(childHtml,framePath.parent_path().wstring(),framePath.wstring())){
-                lastError=L"Cannot load frame: "+source+L" ("+frame.LastError()+L")";
-                if(loadHandler)loadHandler(false,lastError);return false;
+                childFrames.pop_back();
+                JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
+                javascript.DispatchNodeEvent(node,L"error",event);continue;
             }
             javascript.DispatchNodeEvent(node,L"load");
         }
+        javascript.SetDocumentReadyState(L"complete");
+        javascript.DispatchWindowEvent(L"load");
         layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);JavaScriptRuntime::Mutation initialMutation;
         initialMutation.kind=JavaScriptRuntime::MutationKind::Tree;initialMutation.targets.push_back(document.Root());
-        NotifyAccessibilityMutation(initialMutation,true);if(loadHandler)loadHandler(true,L"");return true;
+        NotifyAccessibilityMutation(initialMutation,true);
+        if(loadHandler)loadHandler(true,L"");return true;
     }
 };
 
@@ -2777,6 +2912,8 @@ void View::SetMessageHandler(MessageHandler handler){impl_->messageHandler=std::
 void View::SetLoadHandler(LoadHandler handler){impl_->loadHandler=std::move(handler);}
 void View::SetResourceLoader(ResourceLoader loader){impl_->resourceLoader=std::move(loader);}
 void View::SetBinaryResourceLoader(BinaryResourceLoader loader){impl_->binaryResourceLoader=std::move(loader);}
+void View::SetNavigationHandler(NavigationHandler handler){impl_->navigationHandler=std::move(handler);}
+void View::SetBrowserMode(bool enabled){impl_->browserMode=enabled;}
 bool View::Navigate(const std::wstring& filePath){auto path=filePath;const auto suffix=path.find_first_of(L"?#");if(suffix!=std::wstring::npos)path.resize(suffix);std::ifstream input(path,std::ios::binary);if(!input){impl_->lastError=L"Cannot open HTML file: "+path;if(impl_->loadHandler)impl_->loadHandler(false,impl_->lastError);return false;}std::ostringstream bytes;bytes<<input.rdbuf();auto slash=path.find_last_of(L"\\/");return impl_->LoadHtml(Utf8ToWide(bytes.str()),slash==std::wstring::npos?L"":path.substr(0,slash),filePath);}
 bool View::NavigateToString(const std::wstring& html,const std::wstring& basePath){return impl_->LoadHtml(html,basePath,basePath);}
 bool View::ExecuteScript(const std::wstring& source,std::wstring* result,std::wstring* error){const bool ok=impl_->javascript.Execute(source,result,error);if(!ok)impl_->lastError=error?*error:L"JavaScript execution failed";impl_->RefreshTextSelectionFromDom();return ok;}
@@ -2785,5 +2922,6 @@ void View::PostWebMessageAsString(const std::wstring& message){impl_->javascript
 std::wstring View::DumpLayoutJson()const{if(impl_->layoutDirty)const_cast<Impl*>(impl_.get())->Rebuild();return impl_->layout.DumpJson();}
 std::wstring View::DumpAccessibilityJson()const{return const_cast<Impl*>(impl_.get())->DumpAccessibilityJson();}
 std::wstring View::LastError()const{return impl_->lastError;}
+std::wstring View::DocumentTitle()const{const auto title=impl_->document.QuerySelector(L"title");return title?title->InnerText():L"";}
 
 } // namespace TWebFrame

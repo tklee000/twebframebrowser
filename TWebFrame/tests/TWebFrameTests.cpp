@@ -450,6 +450,26 @@ int wmain(int argc,wchar_t** argv) {
           L"class token scan handles whitespace without stream allocation");
     Check(queryDoc.QuerySelector(L"section.alpha")==queryScope,
           L"direct native class mutation updates the owning document candidate index");
+    Document stateSelectorDoc;
+    Check(stateSelectorDoc.Parse(
+        L"<body><section><span id='first-type'></span><em id='only-type'></em><span id='last-type'></span></section>"
+        L"<div><b id='only-child'></b></div><a id='link' href=''></a><a id='anchor'></a>"
+        L"<input id='required-control' required><input id='disabled-control' disabled><div id='plain'></div></body>"),
+        L"structural and state selector fixture parses");
+    Check(Document::MatchesSelector(stateSelectorDoc.GetElementById(L"first-type"),L"span:first-of-type")&&
+          Document::MatchesSelector(stateSelectorDoc.GetElementById(L"last-type"),L"span:last-of-type")&&
+          Document::MatchesSelector(stateSelectorDoc.GetElementById(L"only-type"),L"em:only-of-type")&&
+          Document::MatchesSelector(stateSelectorDoc.GetElementById(L"only-child"),L"b:only-child"),
+          L"structural pseudo-classes use generic element sibling relationships");
+    Check(Document::MatchesSelector(stateSelectorDoc.GetElementById(L"link"),L"a:link")&&
+          Document::MatchesSelector(stateSelectorDoc.GetElementById(L"link"),L"a:any-link")&&
+          !Document::MatchesSelector(stateSelectorDoc.GetElementById(L"anchor"),L"a:link"),
+          L"link pseudo-classes depend on href presence, including an empty URL");
+    Check(Document::MatchesSelector(stateSelectorDoc.GetElementById(L"required-control"),L"input:enabled:required")&&
+          Document::MatchesSelector(stateSelectorDoc.GetElementById(L"disabled-control"),L"input:disabled:optional")&&
+          !Document::MatchesSelector(stateSelectorDoc.GetElementById(L"plain"),L"div:enabled")&&
+          !Document::MatchesSelector(stateSelectorDoc.GetElementById(L"plain"),L"div:optional"),
+          L"form state pseudo-classes do not leak onto elements that cannot have those states");
     std::shared_ptr<Node> retainedAfterDocument;
     {
         Document ownerDoc;
@@ -562,6 +582,20 @@ int wmain(int argc,wchar_t** argv) {
           !mutationDoc.QuerySelector(L"article.candidate-set")&&
           mutationDoc.FullReindexCount()==incrementalIndexStart,
           L"subtree removal clears tag and class candidate indexes incrementally");
+    Check(mutationJs.Execute(L"const namedChild=document.createElement('input');namedChild.name='original-name';document.getElementById('scroll').appendChild(namedChild);",nullptr,&error)&&
+          mutationDoc.GetElementsByName(L"original-name").size()==1&&
+          mutationDoc.GetElementsByName(L"absent-name").empty()&&
+          mutationDoc.FullReindexCount()==incrementalIndexStart,
+          L"subtree insertion indexes named elements and absent names without a full reindex");
+    Check(mutationJs.Execute(L"namedChild.setAttribute('name','renamed-name');",nullptr,&error)&&
+          mutationDoc.GetElementsByName(L"original-name").empty()&&
+          mutationDoc.GetElementsByName(L"renamed-name").size()==1&&
+          mutationDoc.FullReindexCount()==incrementalIndexStart,
+          L"name attribute replacement updates named lookup incrementally");
+    Check(mutationJs.Execute(L"namedChild.remove();",nullptr,&error)&&
+          mutationDoc.GetElementsByName(L"renamed-name").empty()&&
+          mutationDoc.FullReindexCount()==incrementalIndexStart,
+          L"subtree removal clears the named-element presence index incrementally");
     Check(mutationJs.Execute(L"const duplicateA=document.createElement('b');const duplicateB=document.createElement('b');duplicateA.id='duplicate-id';duplicateB.id='duplicate-id';document.getElementById('scroll').append(duplicateA,duplicateB);",nullptr,&error)&&
           mutationDoc.GetElementById(L"duplicate-id")&&
           mutationDoc.FullReindexCount()==incrementalIndexStart+1,
@@ -674,6 +708,85 @@ int wmain(int argc,wchar_t** argv) {
         L"return innerWidth+'|'+innerHeight+'|'+window.innerWidth+'|'+window.innerHeight;",
         &semanticsResult,&error)&&semanticsResult==L"1280|720|1280|720",
         L"viewport dimensions are exposed through browser window globals");
+    semanticsJs.SetDevicePixelRatio(1.5);
+    Check(semanticsJs.Execute(
+        L"return (window.document===document)+'|'+document.compatMode+'|'+document.readyState+'|'"
+        L"+screen.width+'|'+screen.height+'|'+navigator.appName+'|'"
+        L"+matchMedia('(min-width: 1000px) and (orientation: landscape)').matches+'|'"
+        L"+matchMedia('(max-width: 600px)').matches+'|'"
+        L"+matchMedia('(min-resolution: 1.5dppx)').matches;",
+        &semanticsResult,&error)&&
+        semanticsResult==L"true|CSS1Compat|complete|1280|720|Netscape|true|false|true",
+        L"browser globals and media queries reflect CSS viewport units and device scale");
+    Check(semanticsJs.Execute(
+        L"window.libraryExport=()=>41;var declaredGlobal=1;"
+        L"function assignUndeclared(){undeclaredGlobal=2;}assignUndeclared();"
+        L"return libraryExport()+'|'+window.declaredGlobal+'|'+window.undeclaredGlobal+'|'"
+        L"+('libraryExport' in window)+'|'+(window.Object===Object);",
+        &semanticsResult,&error)&&semanticsResult==L"41|1|2|true|true",
+        L"the Window object and global identifier environment share reusable browser script exports");
+    Check(semanticsJs.Execute(
+        L"const objectTag=({}).toString;"
+        L"return objectTag.call(function(){})+'|'+objectTag.call([])+'|'"
+        L"+objectTag.call({})+'|'+('toString' in {});",
+        &semanticsResult,&error)&&
+        semanticsResult==L"[object Function]|[object Array]|[object Object]|true",
+        L"Object prototype tags classify functions and objects through detached call");
+    Check(semanticsJs.Execute(
+        L"var arrayMethods=[],detachedPush=arrayMethods.push,detachedSlice=arrayMethods.slice,"
+        L"detachedIndexOf=arrayMethods.indexOf,detachedConcat=arrayMethods.concat;"
+        L"var arrayLike={0:'first',length:1};detachedPush.call(arrayLike,'second');"
+        L"var copied=detachedSlice.call(arrayLike,0),flattened=detachedConcat.apply([],[[1],[2]]);"
+        L"return (Object(arrayLike)===arrayLike)+'|'+typeof Object+'|'"
+        L"+({}).toString.call(Object)+'|'+arrayLike.length+'|'+copied.join(',')+'|'"
+        L"+detachedIndexOf.call(arrayLike,'second')+'|'+flattened.join(',');",
+        &semanticsResult,&error)&&
+        semanticsResult==L"true|function|[object Function]|2|first,second|1|1,2",
+        L"Object coercion and detached Array methods preserve generic array-like receivers");
+    Check(semanticsJs.Execute(
+        L"window.classBodyExecutions=0;var singleton=new class {"
+        L"value(){return 7;} dormant(){window.classBodyExecutions++;}};"
+        L"return singleton.value()+'|'+classBodyExecutions;",
+        &semanticsResult,&error)&&semanticsResult==L"7|0",
+        L"anonymous class expressions construct instances without executing dormant method bodies");
+    Check(semanticsJs.Execute(
+        L"var placeholder=new RegExp('{memo}','g');"
+        L"return 'x{memo}{memo}'.replace(placeholder,'ok')+'|'"
+        L"+'a{memo}b{image}'.replace(/{[a-zA-Z0-9_]+}/g,'')+'|'"
+        L"+'aaa'.replace(/a{2}/g,'x');",
+        &semanticsResult,&error)&&semanticsResult==L"xokok|ab|xa",
+        L"legacy regular expressions distinguish literal braces from numeric quantifiers");
+    Document classifiedReadyDoc;
+    Check(classifiedReadyDoc.Parse(L"<div id='ready-output'></div>",&error),
+          L"classified ready callback fixture parses");
+    JavaScriptRuntime classifiedReadyJs(classifiedReadyDoc);std::wstring classifiedReadyResult;
+    classifiedReadyJs.SetDocumentReadyState(L"loading");
+    Check(classifiedReadyJs.Execute(
+        L"var readyCallbacks=[];var classify=({}).toString;"
+        L"function onReady(callback){if(classify.call(callback)==='[object Function]')readyCallbacks.push(callback);}"
+        L"document.addEventListener('DOMContentLoaded',function(){readyCallbacks.forEach(function(callback){callback();});});"
+        L"onReady(function(){document.getElementById('ready-output').textContent='ready';});",
+        nullptr,&error),error.c_str());
+    classifiedReadyJs.SetDocumentReadyState(L"interactive");
+    classifiedReadyJs.DispatchDocumentEvent(L"DOMContentLoaded");
+    Check(classifiedReadyJs.Execute(
+        L"return document.getElementById('ready-output').textContent;",
+        &classifiedReadyResult,&error)&&classifiedReadyResult==L"ready",
+        L"function-tagged ready callbacks run when DOMContentLoaded is dispatched");
+    Check(semanticsJs.Execute(
+        L"let responsiveChanges=0;let responsiveMatch='';"
+        L"const responsiveMedia=matchMedia('(max-width: 900px)');"
+        L"responsiveMedia.addEventListener('change',(event)=>{responsiveChanges++;responsiveMatch=String(event.matches);});",
+        nullptr,&error),error.c_str());
+    semanticsJs.SetViewportSize(800,720);
+    Check(semanticsJs.Execute(
+        L"return responsiveMedia.matches+'|'+responsiveChanges+'|'+responsiveMatch;",
+        &semanticsResult,&error)&&semanticsResult==L"true|1|true",
+        L"MediaQueryList updates and emits change when the CSS viewport crosses a boundary");
+    semanticsJs.SetViewportSize(800,720);
+    Check(semanticsJs.Execute(L"return responsiveChanges;",&semanticsResult,&error)&&semanticsResult==L"1",
+          L"MediaQueryList does not emit duplicate events while the result is unchanged");
+    semanticsJs.SetViewportSize(1280,720);
     semanticsJs.SetLocation(L"https://app.examples/index.html?mode=dark&lang=ko-KR#settings");
     std::wstring requestedNavigation;
     semanticsJs.SetNavigationSink([&](const std::wstring& target){requestedNavigation=target;});
@@ -891,6 +1004,25 @@ int wmain(int argc,wchar_t** argv) {
     Check(modernDomJs.Execute(L"return opened+'|'+dialog.open+'|'+dialog.returnValue+'|'+submitted+'|'+closed+'|'+direct;",&modernDomResult,&error),error.c_str());
     Check(modernDomResult==L"true|false|accepted|true|true|1",
           L"dialog, form submission and scoped selectors use reusable DOM behavior");
+    Document compatibilityDomDoc;
+    Check(compatibilityDomDoc.Parse(
+        L"<body><form name='search'><input name='query' class='field primary'><span class='field'></span></form></body>",
+        &error),L"browser compatibility DOM fixture parses");
+    JavaScriptRuntime compatibilityDomJs(compatibilityDomDoc);std::wstring compatibilityDomResult;
+    Check(compatibilityDomJs.Execute(
+        L"const form=document.getElementsByTagName('form')[0];const input=form.query;"
+        L"const marker=document.createEvent('Event');marker.initEvent('ready',true,true);"
+        L"const attribute=input.getAttributeNode('name');"
+        L"return [window.document===document,document.search===form,"
+        L"document.getElementsByTagName('input').length,document.getElementsByClassName('field').length,"
+        L"form.getElementsByTagName('*').length,form.getElementsByClassName('field').length,"
+        L"input.ownerDocument===document,input.getAttribute('missing')===null,"
+        L"attribute.name,attribute.value,attribute.nodeValue,attribute.nodeType,attribute.ownerElement===input,"
+        L"attribute.specified,marker.type,marker.bubbles,marker.cancelable,"
+        L"form.children[1].previousElementSibling===input].join('|');",
+        &compatibilityDomResult,&error)&&
+        compatibilityDomResult==L"true|true|1|2|2|2|true|true|name|query|query|2|true|true|ready|true|true|true",
+        L"legacy document collections, named form access and event initialization compose through the common DOM bridge");
     Document appDomDoc;Check(appDomDoc.Parse(
         L"<div id='root'><span id='replace' class='alpha beta'>ab</span><em>cd</em></div>"
         L"<input id='source' value='abcdef'><button id='activate'>go</button>"
@@ -1627,6 +1759,21 @@ int wmain(int argc,wchar_t** argv) {
           L"max-width media rule participates in the normal cascade below its breakpoint");
     Check(mediaCss.Version()!=wideMediaVersion,L"crossing a media-query breakpoint invalidates computed-style caches");
 
+    Document deviceMediaDoc;
+    Check(deviceMediaDoc.Parse(
+        L"<style>.panel{display:none;height:10px}"
+        L"@media screen and (max-device-width:900px) and (min-device-height:600px){.panel{display:block;height:20px}}"
+        L"</style><div class='panel'></div>",&error),L"device media query fixture parses");
+    StyleSheet deviceMediaCss;
+    Check(deviceMediaCss.Parse(deviceMediaDoc.StyleText(),&error),L"device media query CSS parses");
+    deviceMediaCss.SetViewport(1200,720);
+    Check(deviceMediaCss.Compute(deviceMediaDoc.QuerySelector(L".panel")).Get(L"display")==L"none",
+          L"device-width media rules stay inactive above their CSS pixel boundary");
+    deviceMediaCss.SetViewport(800,720);
+    const auto narrowDeviceStyle=deviceMediaCss.Compute(deviceMediaDoc.QuerySelector(L".panel"));
+    Check(narrowDeviceStyle.Get(L"display")==L"block"&&narrowDeviceStyle.Get(L"height")==L"20px",
+          L"device media dimensions use the common CSS pixel viewport");
+
     Document relayoutDoc;
     Check(relayoutDoc.Parse(L"<style>*{box-sizing:border-box;margin:0;padding:0}.panel{width:50vw;height:20px}@media (max-width:700px){.panel{width:25vw}}</style><div id='relayout-panel' class='panel'></div>",&error),
           L"viewport relayout fixture parses");
@@ -2010,6 +2157,89 @@ int wmain(int argc,wchar_t** argv) {
                 L"return document.querySelector('#hover-row:hover')===null&&document.getElementById('hover-row').getBoundingClientRect().width===200;",
                 &hoverResult,&hoverError)&&hoverResult==L"true",
                 L"leaving the view clears hover styles from the complete ancestor path");
+            Check(resizeView->NavigateToString(LR"HTML(
+                <style>
+                    *{box-sizing:border-box;margin:0;padding:0}
+                    .menu-bar{position:relative;width:320px;height:38px;overflow:visible}
+                    .menu-entry{position:relative;width:100px;height:38px}
+                    .menu-entry>a{display:block;width:100%;height:38px}
+                    .dropdown-panel{display:none;position:absolute;left:0;top:38px;width:220px;height:90px;z-index:20;background:#fff}
+                    .menu-entry:hover .dropdown-panel{display:block}
+                    .dropdown-panel ul{display:block;width:100px}
+                    .dropdown-panel li{display:block;height:24px}
+                </style>
+                <nav class="menu-bar"><div class="menu-entry"><a href="#">Menu</a><div class="dropdown-panel"></div></div></nav>
+                <script>
+                    initializeMenu(function () { populateMenu(); });
+                    function initializeMenu(callback) {
+                        if (document.readyState !== 'loading') callback();
+                        else document.addEventListener('DOMContentLoaded', callback);
+                    }
+                    function populateMenu() {
+                        document.querySelector('.dropdown-panel').innerHTML = '<ul><li>First</li><li>Second</li></ul>';
+                    }
+                </script>
+            )HTML"),L"script-populated hover popup fixture loads");
+            Check(resizeView->ExecuteScript(
+                L"return document.querySelectorAll('.dropdown-panel li').length;",
+                &hoverResult,&hoverError)&&hoverResult==L"2",
+                L"a ready callback can call later function declarations and populate a generic menu");
+            const float popupDpiScale=static_cast<float>(GetDpiForWindow(resizeView->Window()))/
+                                      static_cast<float>(USER_DEFAULT_SCREEN_DPI);
+            const auto popupPhysical=[popupDpiScale](float dip){return static_cast<int>(std::lround(dip*popupDpiScale));};
+            SendMessageW(resizeView->Window(),WM_MOUSEMOVE,0,
+                MAKELPARAM(popupPhysical(40),popupPhysical(19)));
+            Check(resizeView->ExecuteScript(
+                L"const popup=document.querySelector('.dropdown-panel');const bounds=popup.getBoundingClientRect();return getComputedStyle(popup).display==='block'&&Math.round(bounds.top)===38&&Math.round(bounds.width)===220;",
+                &hoverResult,&hoverError)&&hoverResult==L"true",
+                L"ancestor hover reveals a script-populated absolute popup at CSS-pixel geometry");
+            SendMessageW(resizeView->Window(),WM_MOUSEMOVE,0,
+                MAKELPARAM(popupPhysical(40),popupPhysical(60)));
+            Check(resizeView->ExecuteScript(
+                L"return document.querySelector('.menu-entry:hover')!==null&&getComputedStyle(document.querySelector('.dropdown-panel')).display==='block';",
+                &hoverResult,&hoverError)&&hoverResult==L"true",
+                L"moving into an overflow-visible popup preserves its ancestor hover chain at monitor DPI");
+            SendMessageW(resizeView->Window(),WM_MOUSELEAVE,0,0);
+            Check(resizeView->ExecuteScript(
+                L"return getComputedStyle(document.querySelector('.dropdown-panel')).display;",
+                &hoverResult,&hoverError)&&hoverResult==L"none",
+                L"leaving a hover popup restores the common display-none rule");
+            resizeView->SetResourceLoader([](const std::wstring& resource,std::wstring& body){
+                if(resource.find(L"unavailable-analytics.js")!=std::wstring::npos)return false;
+                if(resource.find(L"invalid-widget.js")!=std::wstring::npos){body=L"function broken( {";return true;}
+                if(resource.find(L"navigation-menu.js")!=std::wstring::npos){
+                    body=LR"JS(
+                        onReady(function () { populateNavigation(); });
+                        function onReady(callback) { callback(); }
+                        function populateNavigation() {
+                            var configs = [['menu-panel', buildNavigation]];
+                            for (var i = 0; i < configs.length; i++) {
+                                var panel = document.getElementById(configs[i][0]);
+                                var builder = configs[i][1];
+                                if (panel && !panel.querySelector('ul') && typeof builder === 'function')
+                                    panel.innerHTML = builder();
+                            }
+                        }
+                        function buildNavigation() { return '<ul><li>First</li><li>Last</li></ul>'; }
+                    )JS";
+                    return true;
+                }
+                return false;
+            });
+            Check(resizeView->NavigateToString(LR"HTML(
+                <div id="menu-panel"></div>
+                <script async src="unavailable-analytics.js"></script>
+                <script src="invalid-widget.js"></script>
+                <script type="application/ld+json">{"not":"javascript"}</script>
+                <script defer src="navigation-menu.js"></script>
+                <iframe src="unavailable-ad-frame.html"></iframe>
+            )HTML",L"https://scripts.test/page.html"),
+                L"independent scripts and frames tolerate unrelated resource and syntax failures");
+            Check(resizeView->ExecuteScript(
+                L"return document.querySelectorAll('#menu-panel li').length;",
+                &hoverResult,&hoverError)&&hoverResult==L"2",
+                L"a later DOM-populating script still runs and hoists its own declarations");
+            resizeView->SetResourceLoader({});
             Check(resizeView->NavigateToString(
                 L"<style>*{box-sizing:border-box;margin:0}body{background:#1b241e}.field{display:flex;width:200px;height:34px;background:rgba(0,0,0,.13)}.field:focus-within{background:rgba(0,0,0,.2)}.field input{width:100%;height:100%;border:0;background:transparent;color:#e9ecea}</style><body><label class='field'><input type='search' placeholder='Search'></label></body>"),
                 L"transparent custom editor fixture loads");
@@ -2133,6 +2363,104 @@ int wmain(int argc,wchar_t** argv) {
           std::abs(closedTriggerHeight-openTrigger->rect.height)<0.01f&&
           std::abs(openTrigger->rect.height-openMenu->content.height)<0.01f,
           L"opening an absolute popup keeps its full-height menu trigger in place");
+
+    Document hoverPopupDoc;
+    Check(hoverPopupDoc.Parse(
+          L"<style>*{box-sizing:border-box;margin:0;padding:0}.menu{position:relative;width:320px;height:38px;overflow:visible}.entry{position:relative;width:100px;height:38px}.panel{display:none;position:absolute;left:0;top:38px;width:220px;height:90px;z-index:20}.entry:hover .panel{display:block}.panel ul{display:block;width:220px}.panel li,.panel a{display:block;width:220px;height:30px}</style>"
+          L"<nav class='menu'><div id='hover-popup-entry' class='entry'><a>Menu</a><div id='hover-popup-panel' class='panel'><ul><li><a id='hover-popup-link'>First</a></li><li><a>Second</a></li></ul></div></div></nav>",&error),
+          L"hover popup DPI fixture parses");
+    StyleSheet hoverPopupCss;Check(hoverPopupCss.Parse(hoverPopupDoc.StyleText(),&error),L"hover popup DPI CSS parses");
+    LayoutEngine hoverPopupLayout(hoverPopupDoc,hoverPopupCss);
+    const auto hoverPopupEntry=hoverPopupDoc.GetElementById(L"hover-popup-entry");
+    const auto hoverPopupPanel=hoverPopupDoc.GetElementById(L"hover-popup-panel");
+    const auto hoverPopupLink=hoverPopupDoc.GetElementById(L"hover-popup-link");
+    bool hoverPopupDpiValid=hoverPopupEntry&&hoverPopupPanel&&hoverPopupLink;
+    for(const float scale:{1.0f,1.5f})if(hoverPopupDpiValid){
+        hoverPopupEntry->hovered=false;hoverPopupLayout.Layout(400,180,scale);
+        const auto* hiddenPanel=hoverPopupLayout.BoxFor(hoverPopupPanel);
+        hoverPopupDpiValid=hoverPopupDpiValid&&hiddenPanel&&!hiddenPanel->visible;
+        hoverPopupEntry->hovered=true;hoverPopupLayout.Layout(400,180,scale);
+        const auto* entryBox=hoverPopupLayout.BoxFor(hoverPopupEntry);
+        const auto* panelBox=hoverPopupLayout.BoxFor(hoverPopupPanel);
+        const auto* linkBox=hoverPopupLayout.BoxFor(hoverPopupLink);
+        const auto hit=linkBox?hoverPopupLayout.HitTest(
+            linkBox->rect.x+linkBox->rect.width-2,linkBox->rect.y+linkBox->rect.height/2):std::shared_ptr<Node>{};
+        hoverPopupDpiValid=hoverPopupDpiValid&&entryBox&&panelBox&&panelBox->visible&&linkBox&&
+            std::abs(panelBox->rect.y-entryBox->rect.y-entryBox->rect.height)<0.01f&&
+            std::abs(panelBox->rect.width-220.0f)<0.01f&&
+            std::abs(panelBox->style.deviceScale-scale)<0.01f&&
+            (hit==hoverPopupLink||(hit&&hit->parent.lock()==hoverPopupLink));
+    }
+    Check(hoverPopupDpiValid,
+          L"descendant hover popups remain visible, positioned and hit-testable at 100 and 150 percent DPI");
+
+    Document floatedMenuDoc;
+    Check(floatedMenuDoc.Parse(
+          L"<style>*{box-sizing:border-box;margin:0;padding:0}.popup{position:absolute;width:680px;height:auto;padding:3px 2px;border:2px solid;overflow:visible}.row{height:275px;clear:left}.column{float:left;width:95px;height:100%}.column span{display:block;height:20px}</style>"
+          L"<div id='float-popup' class='popup'><div id='float-row' class='row'>"
+          L"<ul id='float-first' class='column'><li><span>one</span></li></ul>"
+          L"<ul class='column'></ul><ul class='column'></ul><ul class='column'></ul>"
+          L"<ul class='column'></ul><ul class='column'></ul><ul id='float-last' class='column'></ul>"
+          L"</div></div>",&error),L"multi-column floated menu fixture parses");
+    StyleSheet floatedMenuCss;Check(floatedMenuCss.Parse(floatedMenuDoc.StyleText(),&error),
+          L"multi-column floated menu CSS parses");
+    LayoutEngine floatedMenuLayout(floatedMenuDoc,floatedMenuCss);
+    bool floatedMenuDpiValid=true;
+    for(const float scale:{1.0f,1.5f}){
+        floatedMenuLayout.Layout(760,340,scale);
+        const auto* popup=floatedMenuLayout.BoxFor(floatedMenuDoc.GetElementById(L"float-popup"));
+        const auto* row=floatedMenuLayout.BoxFor(floatedMenuDoc.GetElementById(L"float-row"));
+        const auto* first=floatedMenuLayout.BoxFor(floatedMenuDoc.GetElementById(L"float-first"));
+        const auto* last=floatedMenuLayout.BoxFor(floatedMenuDoc.GetElementById(L"float-last"));
+        floatedMenuDpiValid=floatedMenuDpiValid&&popup&&row&&first&&last&&
+            std::fabs(popup->rect.width-680.0f)<0.01f&&
+            std::fabs(popup->rect.height-285.0f)<0.01f&&
+            std::fabs(first->rect.y-last->rect.y)<0.01f&&
+            std::fabs(last->rect.x-first->rect.x-570.0f)<0.01f&&
+            last->rect.x+last->rect.width<=row->content.x+row->content.width+0.01f&&
+            std::fabs(first->rect.height-row->content.height)<0.01f;
+    }
+    Check(floatedMenuDpiValid,
+          L"fixed-height popup rows arrange floated percentage-height columns at 100 and 150 percent DPI");
+
+    Document floatedVoteDoc;
+    Check(floatedVoteDoc.Parse(
+          L"<style>*{box-sizing:border-box;margin:0;padding:0}table{width:500px;table-layout:fixed}"
+          L"td.avatar{width:100px}.comment{padding:2px 4px 4px 10px}.vote{float:right;padding:0 5px;margin-left:3px;border:1px solid #ddd}"
+          L".memo{position:relative;overflow:hidden;width:100%;padding-top:4px;min-height:40px;line-height:1.5}</style>"
+          L"<table><tr><td class='avatar'>avatar</td><td id='comment-cell' class='comment'>"
+          L"<span id='anti-vote' class='vote'>0</span><span id='up-vote' class='vote'>0</span>"
+          L"<b id='comment-name'>name</b><div id='comment-memo' class='memo'>comment text</div>"
+          L"</td></tr></table>",&error),L"floated comment vote fixture parses");
+    StyleSheet floatedVoteCss;Check(floatedVoteCss.Parse(floatedVoteDoc.StyleText(),&error),
+          L"floated comment vote CSS parses");
+    LayoutEngine floatedVoteLayout(floatedVoteDoc,floatedVoteCss);
+    bool floatedVoteDpiValid=true;
+    float voteWidth100=0,cellWidth100=0;
+    for(const float scale:{1.0f,1.5f}){
+        floatedVoteLayout.Layout(560,140,scale);
+        const auto* cell=floatedVoteLayout.BoxFor(floatedVoteDoc.GetElementById(L"comment-cell"));
+        const auto* antiVote=floatedVoteLayout.BoxFor(floatedVoteDoc.GetElementById(L"anti-vote"));
+        const auto* upVote=floatedVoteLayout.BoxFor(floatedVoteDoc.GetElementById(L"up-vote"));
+        const auto* name=floatedVoteLayout.BoxFor(floatedVoteDoc.GetElementById(L"comment-name"));
+        const auto* memo=floatedVoteLayout.BoxFor(floatedVoteDoc.GetElementById(L"comment-memo"));
+        floatedVoteDpiValid=floatedVoteDpiValid&&cell&&antiVote&&upVote&&name&&memo;
+        if(!cell||!antiVote||!upVote||!name||!memo)continue;
+        if(scale==1.0f){voteWidth100=antiVote->rect.width;cellWidth100=cell->rect.width;}
+        floatedVoteDpiValid=floatedVoteDpiValid&&
+            antiVote->rect.width<40.0f&&upVote->rect.width<40.0f&&
+            std::fabs(antiVote->rect.y-upVote->rect.y)<0.01f&&
+            upVote->rect.x+upVote->rect.width<=antiVote->rect.x+0.01f&&
+            antiVote->rect.x+antiVote->rect.width<=cell->content.x+cell->content.width+0.01f&&
+            std::fabs(name->rect.y-antiVote->rect.y)<1.0f&&
+            memo->rect.y<antiVote->rect.y+antiVote->rect.height+20.0f&&
+            // A one-physical-pixel border is 1 CSS px at 100% and 2/3 CSS px
+            // at 150%; the control must otherwise preserve its CSS geometry.
+            std::fabs(antiVote->rect.width-voteWidth100)<1.0f&&
+            std::fabs(cell->rect.width-cellWidth100)<0.01f;
+    }
+    Check(floatedVoteDpiValid,
+          L"auto-width right-floated inline vote controls shrink to content inside table cells at 100 and 150 percent DPI");
 
     Document pointerHitDoc;
     Check(pointerHitDoc.Parse(
@@ -2317,6 +2645,63 @@ int wmain(int argc,wchar_t** argv) {
           std::lround(checkLabel->rect.x)==29,
           L"checkbox margins and flex gap place following label text like Chromium");
 
+    Document hiddenInputDoc;
+    Check(hiddenInputDoc.Parse(
+        L"<style>*{box-sizing:border-box;margin:0;padding:0}input{display:block!important}"
+        L"table{width:900px;table-layout:fixed}td{padding:0}textarea{display:inline-block}</style>"
+        L"<form><input id='hidden-page' type='hidden' value='1'>"
+        L"<input type='HIDDEN' value='freeboard'><input type='hidden' value='10133266'>"
+        L"<table><tr><td><textarea id='comment-memo' style='width:99%;height:122px'>"
+        L"Login is required.</textarea></td></tr></table></form>",
+        &error),L"hidden comment-form input fixture parses");
+    StyleSheet hiddenInputCss;
+    Check(hiddenInputCss.Parse(hiddenInputDoc.StyleText(),&error),
+          L"hidden comment-form input CSS parses");
+    const auto hiddenInputStyle=hiddenInputCss.Compute(
+        hiddenInputDoc.GetElementById(L"hidden-page"));
+    Check(hiddenInputStyle.Is(L"display",L"none"),
+          L"input type hidden remains non-rendered despite a broad author display rule");
+    LayoutEngine hiddenInputLayout(hiddenInputDoc,hiddenInputCss);
+    bool hiddenCommentFormValid=true;
+    for(const float scale:{1.0f,1.5f}){
+        hiddenInputLayout.Layout(1000,300,scale);
+        const auto* hiddenInput=hiddenInputLayout.BoxFor(
+            hiddenInputDoc.GetElementById(L"hidden-page"));
+        const auto* commentMemo=hiddenInputLayout.BoxFor(
+            hiddenInputDoc.GetElementById(L"comment-memo"));
+        hiddenCommentFormValid=hiddenCommentFormValid&&hiddenInput&&commentMemo&&
+            !hiddenInput->visible&&commentMemo->rect.y<5.0f&&
+            commentMemo->rect.width>880.0f&&
+            std::abs(commentMemo->rect.height-122.0f)<0.75f;
+    }
+    Check(hiddenCommentFormValid,
+          L"hidden form values do not create rows and the comment textarea keeps its percentage width and fixed height at 100 and 150 percent DPI");
+
+    Document floatDoc;
+    Check(floatDoc.Parse(
+        L"<style>*{box-sizing:border-box;margin:0;padding:0}table{width:640px;table-layout:fixed}"
+        L"td{height:40px;padding:6px 10px;font:14px/22px Arial}.comment-btn-layout{float:right}"
+        L".vote{display:inline-block;height:22px;padding:1px 7px;border:1px solid #ccc}</style>"
+        L"<table><tr><td id='comment-cell'><span>author</span>"
+        L"<div id='comment-votes' class='comment-btn-layout'><span class='vote'>3</span>"
+        L"<span class='vote'>0</span></div></td></tr></table>",
+        &error),L"table-cell float fixture parses");
+    StyleSheet floatCss;Check(floatCss.Parse(floatDoc.StyleText(),&error),
+          L"table-cell float CSS parses");
+    LayoutEngine floatLayout(floatDoc,floatCss);
+    const auto verifyFloat=[&](float scale){
+        floatLayout.Layout(700,100,scale);
+        const auto* cell=floatLayout.BoxFor(floatDoc.GetElementById(L"comment-cell"));
+        const auto* votes=floatLayout.BoxFor(floatDoc.GetElementById(L"comment-votes"));
+        if(!cell||!votes)return false;
+        return votes->style.Is(L"float",L"right")&&votes->rect.width>20&&
+            votes->rect.width<160&&
+            std::abs((votes->rect.x+votes->rect.width)-
+                     (cell->content.x+cell->content.width))<0.75f;
+    };
+    Check(verifyFloat(1.0f)&&verifyFloat(1.5f),
+          L"an auto-width right float in a table cell shrink-wraps at the right edge at 100 and 150 percent DPI");
+
     Document fixedDoc;
     Check(fixedDoc.Parse(L"<style>*{margin:0;padding:0}table{width:300px;table-layout:fixed}th:first-child{width:50px}th:last-child{width:100px}td:first-child{width:250px}</style><table><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td>Long second-row content</td><td>C</td></tr></tbody></table>",&error),
           L"fixed table fixture parses");
@@ -2327,6 +2712,32 @@ int wmain(int argc,wchar_t** argv) {
     Check(firstFixedColumn&&secondFixedColumn&&std::lround(firstFixedColumn->rect.width)==100&&
           std::lround(secondFixedColumn->rect.width)==200,
           L"fixed table columns use the first row instead of later content widths");
+
+    Document presentationalTableDoc;
+    Check(presentationalTableDoc.Parse(
+          L"<style>*{margin:0;padding:0}table{width:900px;table-layout:fixed}</style>"
+          L"<table><tbody><tr><td id='avatar-column' width='100px'><img width='80'></td>"
+          L"<td id='comment-column'>Comment body</td></tr></tbody></table>",&error),
+          L"presentational table-cell width fixture parses");
+    StyleSheet presentationalTableCss;
+    Check(presentationalTableCss.Parse(presentationalTableDoc.StyleText(),&error),
+          L"presentational table-cell width CSS parses");
+    bool presentationalWidthsValid=true;
+    LayoutEngine presentationalTableLayout(presentationalTableDoc,presentationalTableCss);
+    for(const float scale:{1.0f,1.5f}){
+        presentationalTableLayout.Layout(1000,200,scale);
+        const auto* avatar=presentationalTableLayout.BoxFor(
+            presentationalTableDoc.GetElementById(L"avatar-column"));
+        const auto* comment=presentationalTableLayout.BoxFor(
+            presentationalTableDoc.GetElementById(L"comment-column"));
+        presentationalWidthsValid=presentationalWidthsValid&&avatar&&comment&&
+            std::abs(avatar->rect.width-100.0f)<0.01f&&
+            std::abs(comment->rect.width-800.0f)<0.01f&&
+            std::lround((avatar->rect.x+avatar->rect.width)*scale)==
+                std::lround(comment->rect.x*scale);
+    }
+    Check(presentationalWidthsValid,
+          L"fixed tables honor HTML cell widths with contiguous columns at 100 and 150 percent DPI");
 
     Document doc; error.clear();
     Check(doc.Parse(L"<html><head><style>#x{color:red}.on{display:flex}</style></head><body><div id='x' class='on'>hello <span>world</span></div></body></html>", &error), L"HTML parses");
@@ -2451,6 +2862,41 @@ int wmain(int argc,wchar_t** argv) {
     Check(doc.GetElementById(L"x")->InnerText()==L"pending",L"animation callbacks wait until the next frame");
     js.RunAnimationFrame();
     Check(doc.GetElementById(L"x")->InnerText()==L"done",L"animation frame runs active callbacks and skips canceled callbacks");
+
+    Document hoistedFunctionDoc;
+    Check(hoistedFunctionDoc.Parse(
+          L"<nav><div class='dropdown-panel'></div><div class='dropdown-panel'></div></nav>",&error),
+          L"function declaration hoisting fixture parses");
+    JavaScriptRuntime hoistedFunctionJs(hoistedFunctionDoc);
+    const wchar_t* hoistedFunctionSource=LR"JS(
+        runWhenReady(function () {
+            populatePanels();
+            window.nestedHoistResult = callNestedDeclaration();
+        });
+
+        function runWhenReady(callback) {
+            if (document.readyState !== 'loading') callback();
+            else document.addEventListener('DOMContentLoaded', callback);
+        }
+        function populatePanels() {
+            document.querySelectorAll('.dropdown-panel').forEach(function (panel, index) {
+                panel.innerHTML = buildList(index + 1);
+            });
+        }
+        function buildList(number) {
+            return '<ul><li>Menu ' + number + '</li></ul>';
+        }
+        function callNestedDeclaration() {
+            return declaredAfterReturnSite();
+            function declaredAfterReturnSite() { return 'nested-ok'; }
+        }
+    )JS";
+    Check(hoistedFunctionJs.Load(hoistedFunctionSource,&error),error.c_str());
+    std::wstring hoistedFunctionResult;
+    Check(hoistedFunctionJs.Execute(
+              L"return document.querySelectorAll('.dropdown-panel ul').length+'|'+window.nestedHoistResult+'|'+typeof populatePanels;",
+              &hoistedFunctionResult,&error)&&hoistedFunctionResult==L"2|nested-ok|function",
+          L"function declarations are instantiated before top-level and nested scope execution");
 
     Document modernJsDoc;
     Check(modernJsDoc.Parse(L"<div class='card' data-table-id='alpha'></div>",&error),L"modern JavaScript DOM fixture parses");
@@ -2887,6 +3333,25 @@ int wmain(int argc,wchar_t** argv) {
                 L"return document.getElementById('language-view').textContent+'|'+location.search;",
                 &selectionResult,&selectionError)&&selectionResult==L"ja-JP|?lang=ja-JP",
                 L"location.replace reloads the current resource with updated URL search parameters");
+            std::wstring submittedUrl;
+            inputView->SetBrowserMode(true);
+            inputView->SetNavigationHandler([&](const std::wstring& url,bool){submittedUrl=url;});
+            Check(inputView->NavigateToString(
+                L"<meta charset='euc-kr'><form method='get' action='/find'>"
+                L"<input id='query' name='q' value='\xD55C\xAE00'>"
+                L"<input type='hidden' name='id' value='freeboard'></form>",
+                L"https://app.examples/search?existing=1"),
+                L"browser-mode GET form fixture loads");
+            Check(inputView->ExecuteScript(L"document.getElementById('query').focus()",
+                                           nullptr,&selectionError),selectionError.c_str());
+            SendMessageW(inputView->Window(),WM_KEYDOWN,VK_RETURN,0);
+            while(PeekMessageW(&navigationMessage,nullptr,0,0,PM_REMOVE)){
+                TranslateMessage(&navigationMessage);DispatchMessageW(&navigationMessage);
+            }
+            Check(submittedUrl.find(L"https://app.examples/find?")==0&&
+                  submittedUrl.find(L"q=%C7%D1%B1%DB")!=std::wstring::npos&&
+                  submittedUrl.find(L"id=freeboard")!=std::wstring::npos,
+                  L"browser-mode GET form submits named controls using the page charset");
         }
         DestroyWindow(inputHost);
     }

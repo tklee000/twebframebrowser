@@ -19,6 +19,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <memory_resource>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -188,6 +189,36 @@ bool TranslateUnicodePropertyEscapes(const std::wstring& pattern,const std::wstr
         else if(character==L']'&&characterClass)characterClass=false;
     }
     return true;
+}
+
+std::wstring NormalizeLegacyRegexBraces(const std::wstring& pattern) {
+    // Web JavaScript treats braces that do not form a numeric quantifier as
+    // literals in non-Unicode legacy patterns. MSVC's ECMAScript wregex rejects
+    // them, so escape only those literal braces before compiling the pattern.
+    std::wstring output;output.reserve(pattern.size()+4);bool characterClass=false;
+    for(size_t position=0;position<pattern.size();++position){
+        const auto character=pattern[position];
+        if(character==L'\\'){
+            output+=character;if(position+1<pattern.size())output+=pattern[++position];continue;
+        }
+        if(character==L'['&&!characterClass){characterClass=true;output+=character;continue;}
+        if(character==L']'&&characterClass){characterClass=false;output+=character;continue;}
+        if(!characterClass&&character==L'{'){
+            size_t cursor=position+1;
+            while(cursor<pattern.size()&&std::iswdigit(pattern[cursor]))++cursor;
+            const bool hasMinimum=cursor>position+1;
+            if(hasMinimum&&cursor<pattern.size()&&pattern[cursor]==L','){
+                ++cursor;while(cursor<pattern.size()&&std::iswdigit(pattern[cursor]))++cursor;
+            }
+            if(hasMinimum&&cursor<pattern.size()&&pattern[cursor]==L'}'){
+                output.append(pattern,position,cursor-position+1);position=cursor;continue;
+            }
+            output+=L"\\{";continue;
+        }
+        if(!characterClass&&character==L'}'){output+=L"\\}";continue;}
+        output+=character;
+    }
+    return output;
 }
 
 // A large share of split separators are finite regular expressions made from
@@ -390,8 +421,13 @@ struct Object {
 struct Environment {
     FastMap<std::wstring, Value> values;
     std::shared_ptr<Environment> parent;
+    Value* FindValue(const std::wstring& name) {
+        const auto found=values.find(name);
+        if(found!=values.end())return &found->second;
+        return parent ? parent->FindValue(name) : nullptr;
+    }
     Environment* Find(const std::wstring& name) {
-        if (values.count(name)) return this;
+        if (values.find(name)!=values.end()) return this;
         return parent ? parent->Find(name) : nullptr;
     }
 };
@@ -409,7 +445,7 @@ enum class Op {
     NewArray, ArrayPush, ArraySpread, NewObject, ObjectSet, ObjectSpread, EnumerableKeys, MakeFunction,
     Call, CallArray, Construct, ConstructArray, DeleteValue, ThrowValue, Await, LeaveCatch, EndFinally, Pop, Duplicate, PostIncrement, PostDecrement, PreIncrement, PreDecrement,
     Add, Subtract, Multiply, Divide, Modulo, Power,
-    BitwiseAnd, BitwiseOr, BitwiseXor, ShiftLeft, ShiftRight, UnsignedShiftRight, InValue,
+    BitwiseAnd, BitwiseOr, BitwiseXor, ShiftLeft, ShiftRight, UnsignedShiftRight, InValue, InstanceOf,
     Equal, NotEqual, StrictEqual, StrictNotEqual, Less, LessEqual, Greater, GreaterEqual,
     Not, BitwiseNot, Negate, Positive, VoidValue, TypeOf,
     Jump, JumpFalse, JumpFalseKeep, JumpTrueKeep, JumpNotNullishKeep,
@@ -423,6 +459,10 @@ struct Instruction {
 };
 
 struct Chunk {
+    struct FunctionDeclaration {
+        std::wstring name;
+        int prototype = -1;
+    };
     struct ExceptionHandler {
         size_t tryStart=0,tryEnd=0;
         size_t catchStart=0,catchEnd=0;
@@ -434,6 +474,10 @@ struct Chunk {
     std::vector<Instruction> code;
     std::vector<Value> constants;
     std::vector<ExceptionHandler> handlers;
+    // Function declarations are instantiated when their script or function
+    // scope is entered. Keeping them outside the instruction stream implements
+    // JavaScript declaration hoisting without shifting jumps/exception ranges.
+    std::vector<FunctionDeclaration> functionDeclarations;
 };
 
 constexpr size_t kBaselineJitMaxLocals=64;
@@ -766,11 +810,15 @@ struct Module {
 struct Function {
     std::shared_ptr<Prototype> prototype;
     std::shared_ptr<Environment> closure;
+    FastMap<std::wstring, Value> props;
 };
 
 struct RuntimeCore;
 using NativeCallback = std::function<Value(RuntimeCore&, const Value&, const std::vector<Value>&)>;
-struct NativeFunction { NativeCallback callback; };
+struct NativeFunction {
+    NativeCallback callback;
+    FastMap<std::wstring, Value> props;
+};
 
 enum class CompletionKind { Return, Jump, Throw };
 struct PendingCompletion {
@@ -867,7 +915,10 @@ public:
             case L':':push(TokenKind::Colon);break; case L';':push(TokenKind::Semicolon);break;
             case L'?':
                 if(Match(L'?')){const bool assign=Match(L'=');token.kind=assign?TokenKind::NullishAssign:TokenKind::Nullish;token.text=assign?L"??=":L"??";tokens.push_back(token);}
-                else if(Match(L'.')){token.kind=TokenKind::OptionalChain;token.text=L"?.";tokens.push_back(token);}
+                else if(position_<source_.size()&&source_[position_]==L'.'&&
+                        (position_+1>=source_.size()||!std::iswdigit(source_[position_+1]))){
+                    ++position_;token.kind=TokenKind::OptionalChain;token.text=L"?.";tokens.push_back(token);
+                }
                 else push(TokenKind::Question);
                 break;
             case L'+':if(Match(L'+'))push(TokenKind::PlusPlus);else if(Match(L'='))push(TokenKind::PlusAssign);else push(TokenKind::Plus);break;
@@ -1024,7 +1075,7 @@ private:
 
     void Statement(){
         if(Match(TokenKind::Semicolon))return;
-        if(Match(TokenKind::LeftBrace)){while(!Check(TokenKind::RightBrace)&&!AtEnd())Statement();Consume(TokenKind::RightBrace,L"Expected '}'");return;}
+        if(Match(TokenKind::LeftBrace)){++blockDepth_;while(!Check(TokenKind::RightBrace)&&!AtEnd())Statement();Consume(TokenKind::RightBrace,L"Expected '}'");--blockDepth_;return;}
         if(CheckWord(L"async")&&Peek(1).kind==TokenKind::Identifier&&Peek(1).text==L"function"){Advance();Advance();FunctionDeclaration(true);return;}
         if(MatchWord(L"class")){ClassDeclaration();return;}
         if(MatchWord(L"function")){FunctionDeclaration();return;}
@@ -1080,10 +1131,21 @@ private:
     }
     void FunctionDeclaration(bool isAsync=false){
         const auto name=ConsumeIdentifier(L"Expected function name").text;
-        const int index=ParseFunction(false,L"",isAsync); Emit(Op::MakeFunction,index);Emit(Op::Declare,0,name);
+        const int index=ParseFunction(false,L"",isAsync);
+        if(blockDepth_==0)chunk_->functionDeclarations.push_back({name,index});
+        else{Emit(Op::MakeFunction,index);Emit(Op::Declare,0,name);}
     }
     void ClassDeclaration(){
         const auto name=ConsumeIdentifier(L"Expected class name").text;
+        ClassExpression();
+        Emit(Op::Declare,0,name);
+    }
+    void ClassExpression(){
+        // A class expression may be anonymous (`new class { ... }`) or carry
+        // a local name.  Its method bodies are compiled into prototypes just
+        // like a declaration; they must never be interpreted as an enclosing
+        // statement block during construction.
+        if(Check(TokenKind::Identifier)&&Peek(1).kind==TokenKind::LeftBrace)Advance();
         Consume(TokenKind::LeftBrace,L"Expected '{' after class name");
         Emit(Op::NewObject);
         while(!Check(TokenKind::RightBrace)&&!AtEnd()){
@@ -1102,7 +1164,6 @@ private:
             }
         }
         Consume(TokenKind::RightBrace,L"Expected '}' after class body");
-        Emit(Op::Declare,0,name);
     }
     void VariableDeclaration(){
         do{
@@ -1315,10 +1376,11 @@ private:
             if(!arrow)Consume(TokenKind::LeftParen,L"Expected '('");
             ParseParameters(prototype);
         }
-        Chunk* outer=chunk_;const bool outerAsync=compilingAsync_;chunk_=&prototype->chunk;compilingAsync_=isAsync;
+        Chunk* outer=chunk_;const bool outerAsync=compilingAsync_;const size_t outerBlockDepth=blockDepth_;
+        chunk_=&prototype->chunk;compilingAsync_=isAsync;blockDepth_=0;
         if(arrow&& !Check(TokenKind::LeftBrace)){Assignment();Emit(Op::Return);}
         else{Consume(TokenKind::LeftBrace,L"Expected function body");while(!Check(TokenKind::RightBrace)&&!AtEnd())Statement();Consume(TokenKind::RightBrace,L"Expected '}'");Emit(Op::Undefined);Emit(Op::Return);}
-        chunk_=outer;compilingAsync_=outerAsync;module_->prototypes.push_back(prototype);return static_cast<int>(module_->prototypes.size()-1);
+        chunk_=outer;compilingAsync_=outerAsync;blockDepth_=outerBlockDepth;module_->prototypes.push_back(prototype);return static_cast<int>(module_->prototypes.size()-1);
     }
     bool IsParenArrow()const{
         size_t i=position_;if(i>=tokens_.size()||tokens_[i].kind!=TokenKind::LeftParen)return false;
@@ -1374,8 +1436,9 @@ private:
     void Equality(){Comparison();while(Check(TokenKind::Equal)||Check(TokenKind::NotEqual)||Check(TokenKind::StrictEqual)||Check(TokenKind::StrictNotEqual)){const auto op=Advance().kind;Comparison();Emit(op==TokenKind::Equal?Op::Equal:op==TokenKind::NotEqual?Op::NotEqual:op==TokenKind::StrictEqual?Op::StrictEqual:Op::StrictNotEqual);}}
     void Comparison(){
         Shift();
-        while(Check(TokenKind::Less)||Check(TokenKind::LessEqual)||Check(TokenKind::Greater)||Check(TokenKind::GreaterEqual)||CheckWord(L"in")){
+        while(Check(TokenKind::Less)||Check(TokenKind::LessEqual)||Check(TokenKind::Greater)||Check(TokenKind::GreaterEqual)||CheckWord(L"in")||CheckWord(L"instanceof")){
             if(MatchWord(L"in")){Shift();Emit(Op::InValue);continue;}
+            if(MatchWord(L"instanceof")){Shift();Emit(Op::InstanceOf);continue;}
             const auto op=Advance().kind;Shift();Emit(op==TokenKind::Less?Op::Less:op==TokenKind::LessEqual?Op::LessEqual:op==TokenKind::Greater?Op::Greater:Op::GreaterEqual);
         }
     }
@@ -1443,6 +1506,7 @@ private:
         if(Match(TokenKind::RegExp)){auto expression=std::make_shared<Object>();expression->kind=ObjectKind::RegExp;expression->props[L"$pattern"]=Value::String(Previous().text);expression->props[L"$flags"]=Value::String(Previous().extra);Emit(Op::Constant,Constant(Value::FromObject(expression)));return;}
         if(MatchWord(L"true")){Emit(Op::TrueValue);return;}if(MatchWord(L"false")){Emit(Op::FalseValue);return;}
         if(MatchWord(L"null")){Emit(Op::Null);return;}if(MatchWord(L"undefined")){Emit(Op::Undefined);return;}
+        if(MatchWord(L"class")){ClassExpression();return;}
         if(MatchWord(L"async")){
             if(MatchWord(L"function")){const auto name=Check(TokenKind::Identifier)?Advance().text:L"";Emit(Op::MakeFunction,ParseFunction(false,L"",true,name));return;}
             if(Check(TokenKind::Identifier)&&Peek(1).kind==TokenKind::Arrow){const auto name=Advance().text;Advance();Emit(Op::MakeFunction,ParseArrowSingle(name,true));return;}
@@ -1490,17 +1554,17 @@ private:
         throw Error(L"Expected expression");
     }
     int ParseArrowSingle(const std::wstring& name,bool isAsync){
-        auto prototype=std::make_shared<Prototype>();prototype->parameters.push_back(name);prototype->parameterDefaults.push_back({});prototype->lexicalThis=true;prototype->isAsync=isAsync;Chunk* outer=chunk_;const bool outerAsync=compilingAsync_;chunk_=&prototype->chunk;compilingAsync_=isAsync;
+        auto prototype=std::make_shared<Prototype>();prototype->parameters.push_back(name);prototype->parameterDefaults.push_back({});prototype->lexicalThis=true;prototype->isAsync=isAsync;Chunk* outer=chunk_;const bool outerAsync=compilingAsync_;const size_t outerBlockDepth=blockDepth_;chunk_=&prototype->chunk;compilingAsync_=isAsync;blockDepth_=0;
         if(Match(TokenKind::LeftBrace)){while(!Check(TokenKind::RightBrace)&&!AtEnd())Statement();Consume(TokenKind::RightBrace,L"Expected '}'");Emit(Op::Undefined);Emit(Op::Return);}else{Assignment();Emit(Op::Return);}
-        chunk_=outer;compilingAsync_=outerAsync;module_->prototypes.push_back(prototype);return static_cast<int>(module_->prototypes.size()-1);
+        chunk_=outer;compilingAsync_=outerAsync;blockDepth_=outerBlockDepth;module_->prototypes.push_back(prototype);return static_cast<int>(module_->prototypes.size()-1);
     }
     int ParseParenArrow(bool isAsync){
         Consume(TokenKind::LeftParen,L"");auto prototype=std::make_shared<Prototype>();ParseParameters(prototype);Consume(TokenKind::Arrow,L"Expected =>");
-        prototype->lexicalThis=true;prototype->isAsync=isAsync;Chunk* outer=chunk_;const bool outerAsync=compilingAsync_;chunk_=&prototype->chunk;compilingAsync_=isAsync;
+        prototype->lexicalThis=true;prototype->isAsync=isAsync;Chunk* outer=chunk_;const bool outerAsync=compilingAsync_;const size_t outerBlockDepth=blockDepth_;chunk_=&prototype->chunk;compilingAsync_=isAsync;blockDepth_=0;
         if(Match(TokenKind::LeftBrace)){while(!Check(TokenKind::RightBrace)&&!AtEnd())Statement();Consume(TokenKind::RightBrace,L"Expected '}'");Emit(Op::Undefined);Emit(Op::Return);}else{Assignment();Emit(Op::Return);}
-        chunk_=outer;compilingAsync_=outerAsync;module_->prototypes.push_back(prototype);return static_cast<int>(module_->prototypes.size()-1);
+        chunk_=outer;compilingAsync_=outerAsync;blockDepth_=outerBlockDepth;module_->prototypes.push_back(prototype);return static_cast<int>(module_->prototypes.size()-1);
     }
-    std::shared_ptr<Module> module_;std::vector<Token> tokens_;size_t position_=0;Chunk* chunk_=nullptr;std::vector<ControlContext> controls_;size_t hiddenVariable_=0;bool compilingAsync_=false;
+    std::shared_ptr<Module> module_;std::vector<Token> tokens_;size_t position_=0;Chunk* chunk_=nullptr;std::vector<ControlContext> controls_;size_t hiddenVariable_=0;size_t blockDepth_=0;bool compilingAsync_=false;
 };
 
 std::wstring NumberString(double number) {
@@ -1611,6 +1675,10 @@ struct RuntimeCore {
         ~MutationBatch(){runtime.EndMutationBatch();}
     };
     Document& document;
+    // Variable/property references are extremely short-lived VM values. Keep
+    // their shared ownership semantics, but recycle their allocation blocks
+    // instead of going through the process heap for every bytecode access.
+    std::pmr::unsynchronized_pool_resource referencePool;
     EditingCommandExecutor editingCommands;
     JavaScriptRuntime::MessageSink messageSink;
     JavaScriptRuntime::MutationSink mutationSink;
@@ -1631,6 +1699,7 @@ struct RuntimeCore {
     JavaScriptRuntime::DomSelectionProvider domSelectionProvider;
     JavaScriptRuntime::DomSelectionSetter domSelectionSetter;
     std::wstring location;
+    std::wstring documentReadyState=L"complete";
     std::shared_ptr<Environment> global;
     std::shared_ptr<Module> module=std::make_shared<Module>();
     std::unordered_map<const Object*,std::weak_ptr<Object>> managedObjects;
@@ -1648,6 +1717,7 @@ struct RuntimeCore {
     EventListenerMap windowListeners;
     EventListenerMap webViewListeners;
     FastMap<Object*,EventListenerMap> objectListeners;
+    std::vector<std::weak_ptr<Object>> mediaQueries;
     FastMap<Node*,std::weak_ptr<Object>> nodeObjects;
     FastMap<Node*,std::weak_ptr<Object>> canvasContexts;
     FastMap<Node*,std::weak_ptr<Object>> frameWindows;
@@ -1710,6 +1780,11 @@ struct RuntimeCore {
         global=CreateEnvironment();InstallGlobals();
     }
     ~RuntimeCore(){ReleaseManagedGraph();}
+
+    std::shared_ptr<Reference> CreateReference(){
+        return std::allocate_shared<Reference>(
+            std::pmr::polymorphic_allocator<Reference>(&referencePool));
+    }
 
     template<class Map>
     static void PruneExpiredManagedEntries(Map& entries){
@@ -1782,9 +1857,11 @@ struct RuntimeCore {
         // window, closures point back to their environment, and user objects may
         // point to themselves). shared_ptr cannot collect those graphs, so sever
         // every engine-owned edge before dropping a page or the runtime itself.
-        for(auto& entry:managedNativeFunctions)if(auto native=entry.second.lock())native->callback={};
+        for(auto& entry:managedNativeFunctions)if(auto native=entry.second.lock()){
+            native->callback={};native->props.clear();
+        }
         for(auto& entry:managedFunctions)if(auto function=entry.second.lock()){
-            function->closure.reset();function->prototype.reset();
+            function->closure.reset();function->prototype.reset();function->props.clear();
         }
         for(auto& entry:managedEnvironments)if(auto environment=entry.second.lock()){
             environment->values.clear();environment->parent.reset();
@@ -1803,7 +1880,7 @@ struct RuntimeCore {
         if(notifyTimerScheduler&&timerScheduler)timerScheduler(0);
         ReleaseManagedGraph();
         listeners.clear();documentListeners.clear();windowListeners.clear();webViewListeners.clear();
-        objectListeners.clear();pointerCaptureNode.reset();
+        objectListeners.clear();mediaQueries.clear();pointerCaptureNode.reset();
         if(pointerCaptureSink)pointerCaptureSink(false);
         nodeObjects.clear();canvasContexts.clear();frameWindows.clear();inlineHandlerCache.clear();
         frameCallbacks.clear();frameScheduled=false;timers.clear();timerScheduled=false;
@@ -1823,6 +1900,8 @@ struct RuntimeCore {
         std::wregex::flag_type options=std::regex_constants::ECMAScript;
         if(flags.find(L'i')!=std::wstring::npos)options|=std::regex_constants::icase;
         try{
+            if(flags.find(L'u')==std::wstring::npos&&flags.find(L'v')==std::wstring::npos)
+                compatiblePattern=NormalizeLegacyRegexBraces(compatiblePattern);
             auto expression=std::make_shared<const std::wregex>(compatiblePattern,options);
             if(regularExpressions.size()>=256)regularExpressions.clear();
             regularExpressions.emplace(key,expression);
@@ -1857,7 +1936,14 @@ struct RuntimeCore {
         if(input.type!=Value::Type::Reference)return input;
         const auto& ref=*input.reference;
         if(ref.kind==Reference::Kind::Variable){
-            auto* env=ref.env?ref.env->Find(ref.name):nullptr;return env?env->values[ref.name]:Value::Undefined();
+            auto* value=ref.env?ref.env->FindValue(ref.name):nullptr;
+            if(value)return *value;
+            // Browser scripts use the Window object as their global object. A
+            // library export written through window.name must therefore be
+            // visible to a later script as the unqualified identifier name.
+            if(global){const auto window=global->values.find(L"window");
+                if(window!=global->values.end())return GetProperty(window->second,ref.name);}
+            return Value::Undefined();
         }
         return GetProperty(Deref(ref.base),ref.name);
     }
@@ -1879,6 +1965,11 @@ struct RuntimeCore {
     std::int32_t Int32(const Value& value){return static_cast<std::int32_t>(Uint32(value));}
     bool HasProperty(const Value& input,const std::wstring& key){
         const auto value=Deref(input);
+        if(value.type==Value::Type::Function&&value.function)
+            return key==L"prototype"||key==L"bind"||key==L"call"||key==L"apply"||
+                   value.function->props.count(key)!=0;
+        if(value.type==Value::Type::Native&&value.native)
+            return key==L"bind"||key==L"call"||key==L"apply"||value.native->props.count(key)!=0;
         if(value.type==Value::Type::String){
             if(key==L"length")return true;
             size_t index=0;return TryParseDecimalIndex(key,index)&&index<value.string.size();
@@ -1886,16 +1977,45 @@ struct RuntimeCore {
         if(value.type!=Value::Type::Object||!value.object)return false;
         const auto object=value.object;
         if(object->props.count(key)||object->props.count(L"$get:"+key))return true;
+        if(object->kind==ObjectKind::Window&&global&&global->values.count(key))return true;
         if(object->kind==ObjectKind::Array){
             if(key==L"length")return true;
             size_t index=0;if(TryParseDecimalIndex(key,index)&&index<object->items.size())return true;
         }
+        if(object->kind==ObjectKind::Plain&&
+           (key==L"toString"||key==L"hasOwnProperty"||key==L"isPrototypeOf"))return true;
         for(auto prototype=object->prototype;prototype;prototype=prototype->prototype)
             if(prototype->props.count(key)||prototype->props.count(L"$get:"+key)||prototype->props.count(L"$method:"+key))return true;
         return false;
     }
     std::wstring String(const Value& value){
         const auto v=Deref(value);switch(v.type){case Value::Type::Undefined:return L"undefined";case Value::Type::Null:return L"null";case Value::Type::Boolean:return v.boolean?L"true":L"false";case Value::Type::Number:return NumberString(v.number);case Value::Type::String:return v.string;case Value::Type::Function:case Value::Type::Native:return L"function";case Value::Type::Object:if(v.object&&v.object->kind==ObjectKind::Array)return L"[object Array]";if(v.object&&v.object->kind==ObjectKind::Promise)return L"[object Promise]";if(v.object&&v.object->kind==ObjectKind::Url){const auto href=v.object->props.find(L"href");return href==v.object->props.end()?L"":String(href->second);}if(v.object&&v.object->kind==ObjectKind::Error){const auto name=v.object->props.find(L"name"),message=v.object->props.find(L"message");const auto n=name==v.object->props.end()?L"Error":String(name->second);const auto m=message==v.object->props.end()?L"":String(message->second);return m.empty()?n:n+L": "+m;}return L"[object Object]";default:return L"undefined";}
+    }
+    std::wstring ObjectTag(const Value& input){
+        const auto value=Deref(input);
+        switch(value.type){
+        case Value::Type::Undefined:return L"[object Undefined]";
+        case Value::Type::Null:return L"[object Null]";
+        case Value::Type::Boolean:return L"[object Boolean]";
+        case Value::Type::Number:return L"[object Number]";
+        case Value::Type::String:return L"[object String]";
+        case Value::Type::Function:case Value::Type::Native:return L"[object Function]";
+        case Value::Type::Object:
+            if(!value.object)return L"[object Object]";
+            switch(value.object->kind){
+            case ObjectKind::Array:return L"[object Array]";
+            case ObjectKind::Date:return L"[object Date]";
+            case ObjectKind::RegExp:return L"[object RegExp]";
+            case ObjectKind::Error:return L"[object Error]";
+            case ObjectKind::Promise:return L"[object Promise]";
+            case ObjectKind::ObjectConstructor:case ObjectKind::ArrayConstructor:
+            case ObjectKind::StringConstructor:case ObjectKind::NumberConstructor:
+            case ObjectKind::DateConstructor:case ObjectKind::PromiseConstructor:
+            case ObjectKind::ErrorConstructor:return L"[object Function]";
+            default:return L"[object Object]";
+            }
+        default:return L"[object Object]";
+        }
     }
     static std::wstring DecodeUrlParameter(const std::wstring& input){
         std::wstring output;std::string bytes;
@@ -2264,7 +2384,138 @@ struct RuntimeCore {
     }
     Value Native(NativeCallback callback){auto n=std::make_shared<NativeFunction>();n->callback=std::move(callback);TrackManaged(managedNativeFunctions,n);return Value::FromNative(n);}
     Value ObjectValue(ObjectKind kind){return Value::FromObject(CreateObject(kind));}
-    bool IsCallable(const Value& input){const auto value=Deref(input);return value.type==Value::Type::Function||value.type==Value::Type::Native;}
+    Value FunctionPrototype(const std::shared_ptr<Function>& function){
+        const auto found=function->props.find(L"prototype");
+        if(found!=function->props.end())return Deref(found->second);
+        auto prototype=ObjectValue(ObjectKind::Plain);
+        prototype.object->props[L"constructor"]=Value::FromFunction(function);
+        function->props[L"prototype"]=prototype;
+        return prototype;
+    }
+    double MediaLength(std::wstring value,double widthReference,double heightReference)const{
+        value=ToLower(Trim(value));size_t used=0;float number=0;
+        if(!TryParseFloat(value,number,&used))return std::numeric_limits<double>::quiet_NaN();
+        const auto unit=Trim(value.substr(used));
+        if(unit.empty()||unit==L"px")return number;
+        if(unit==L"em"||unit==L"rem")return number*16.0;
+        if(unit==L"vw")return number*widthReference/100.0;
+        if(unit==L"vh")return number*heightReference/100.0;
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    bool EvaluateMediaFeature(std::wstring expression)const{
+        expression=ToLower(Trim(expression));
+        const auto colon=expression.find(L':');
+        auto name=Trim(expression.substr(0,colon));
+        const auto value=colon==std::wstring::npos?L"":Trim(expression.substr(colon+1));
+        auto compareLength=[&](const std::wstring& base,double actual){
+            const double expected=MediaLength(value,viewportWidth,viewportHeight);
+            if(!std::isfinite(expected))return false;
+            if(name==L"min-"+base)return actual+0.001>=expected;
+            if(name==L"max-"+base)return actual<=expected+0.001;
+            return name==base&&std::abs(actual-expected)<0.001;
+        };
+        if(name==L"width"||name==L"min-width"||name==L"max-width"||
+           name==L"device-width"||name==L"min-device-width"||name==L"max-device-width"){
+            const std::wstring base=name.find(L"device-")!=std::wstring::npos?L"device-width":L"width";
+            return compareLength(base,viewportWidth);
+        }
+        if(name==L"height"||name==L"min-height"||name==L"max-height"||
+           name==L"device-height"||name==L"min-device-height"||name==L"max-device-height"){
+            const std::wstring base=name.find(L"device-")!=std::wstring::npos?L"device-height":L"height";
+            return compareLength(base,viewportHeight);
+        }
+        if(name==L"orientation")return value==(viewportWidth>=viewportHeight?L"landscape":L"portrait");
+        if(name==L"prefers-reduced-motion")return value.empty()||value==L"no-preference";
+        if(name==L"prefers-color-scheme")return value.empty()||value==L"light";
+        if(name==L"hover")return value.empty()||value==L"hover";
+        if(name==L"any-hover")return value.empty()||value==L"hover";
+        if(name==L"pointer"||name==L"any-pointer")return value.empty()||value==L"fine";
+        if(name==L"color")return value.empty()||value==L"8";
+        if(name==L"resolution"||name==L"min-resolution"||name==L"max-resolution"){
+            size_t used=0;float number=0;if(!TryParseFloat(value,number,&used))return false;
+            const auto unit=Trim(ToLower(value.substr(used)));
+            const double expected=unit==L"dpi"?number/96.0:unit==L"dpcm"?number*2.54/96.0:
+                (unit==L"dppx"||unit==L"x"||unit.empty()?number:std::numeric_limits<double>::quiet_NaN());
+            if(!std::isfinite(expected))return false;
+            if(name==L"min-resolution")return devicePixelRatio+0.0001>=expected;
+            if(name==L"max-resolution")return devicePixelRatio<=expected+0.0001;
+            return std::abs(devicePixelRatio-expected)<0.0001;
+        }
+        if(name==L"-webkit-min-device-pixel-ratio"||name==L"-webkit-max-device-pixel-ratio"){
+            size_t used=0;float expected=0;if(!TryParseFloat(value,expected,&used))return false;
+            return name.find(L"min-")!=std::wstring::npos?
+                devicePixelRatio+0.0001>=expected:devicePixelRatio<=expected+0.0001;
+        }
+        return false;
+    }
+    bool EvaluateMediaQuery(const std::wstring& source)const{
+        size_t clauseStart=0;int nesting=0;
+        for(size_t index=0;index<=source.size();++index){
+            const wchar_t character=index<source.size()?source[index]:L',';
+            if(character==L'(')++nesting;else if(character==L')')--nesting;
+            if(character!=L','||nesting!=0)continue;
+            auto clause=ToLower(Trim(source.substr(clauseStart,index-clauseStart)));clauseStart=index+1;
+            bool negate=false;
+            if(clause.rfind(L"not ",0)==0){negate=true;clause=Trim(clause.substr(4));}
+            if(clause.rfind(L"only ",0)==0)clause=Trim(clause.substr(5));
+            const auto firstFeature=clause.find(L'(');
+            auto mediaType=Trim(clause.substr(0,firstFeature));
+            while(mediaType.size()>=3&&mediaType.rfind(L"and")==mediaType.size()-3)
+                mediaType=Trim(mediaType.substr(0,mediaType.size()-3));
+            bool matches=mediaType.empty()||mediaType==L"all"||mediaType==L"screen";
+            size_t position=firstFeature;
+            while(matches&&position!=std::wstring::npos&&position<clause.size()){
+                int depth=1;size_t end=position+1;
+                for(;end<clause.size()&&depth;++end){if(clause[end]==L'(')++depth;else if(clause[end]==L')')--depth;}
+                if(depth!=0){matches=false;break;}
+                matches=EvaluateMediaFeature(clause.substr(position+1,end-position-2));
+                position=clause.find(L'(',end);
+            }
+            if(negate)matches=!matches;
+            if(matches)return true;
+        }
+        return false;
+    }
+    Value MediaQueryValue(const std::wstring& query){
+        auto media=CreateObject(ObjectKind::MediaQuery);
+        media->props[L"media"]=Value::String(query);
+        media->props[L"$query"]=Value::String(query);
+        media->props[L"$matches"]=Value::Bool(EvaluateMediaQuery(query));
+        mediaQueries.push_back(media);
+        return Value::FromObject(media);
+    }
+    void UpdateMediaQueries(){
+        mediaQueries.erase(std::remove_if(mediaQueries.begin(),mediaQueries.end(),
+            [](const auto& item){return item.expired();}),mediaQueries.end());
+        for(const auto& weak:mediaQueries)if(const auto media=weak.lock()){
+            const auto query=String(media->props[L"$query"]);
+            const bool previous=Truth(media->props[L"$matches"]);
+            const bool matches=EvaluateMediaQuery(query);media->props[L"$matches"]=Value::Bool(matches);
+            if(previous==matches)continue;
+            auto event=CreateObject(ObjectKind::Event);event->props[L"type"]=Value::String(L"change");
+            event->props[L"matches"]=Value::Bool(matches);event->props[L"media"]=Value::String(query);
+            event->props[L"target"]=Value::FromObject(media);event->props[L"currentTarget"]=Value::FromObject(media);
+            event->props[L"defaultPrevented"]=Value::Bool(false);event->props[L"isTrusted"]=Value::Bool(true);
+            const auto found=objectListeners.find(media.get());
+            if(found!=objectListeners.end())InvokeEventListeners(found->second,L"change",false,
+                Value::FromObject(media),Value::FromObject(event),event);
+            const auto onchange=media->props.find(L"onchange");
+            if(onchange!=media->props.end()&&IsCallable(onchange->second))
+                CallEventCallback(onchange->second,Value::FromObject(media),Value::FromObject(event));
+        }
+    }
+    bool IsCallable(const Value& input){
+        const auto value=Deref(input);
+        if(value.type==Value::Type::Function||value.type==Value::Type::Native)return true;
+        if(value.type!=Value::Type::Object||!value.object)return false;
+        switch(value.object->kind){
+        case ObjectKind::ObjectConstructor:case ObjectKind::ArrayConstructor:
+        case ObjectKind::StringConstructor:case ObjectKind::NumberConstructor:
+        case ObjectKind::DateConstructor:case ObjectKind::PromiseConstructor:
+        case ObjectKind::ErrorConstructor:return true;
+        default:return false;
+        }
+    }
     Value ErrorValue(const std::wstring& name,const std::wstring& message){
         auto error=ObjectValue(ObjectKind::Error);error.object->props[L"name"]=Value::String(name);error.object->props[L"message"]=Value::String(message);error.object->props[L"stack"]=Value::String(message.empty()?name:name+L": "+message);return error;
     }
@@ -2459,18 +2710,47 @@ struct RuntimeCore {
     }
     Value GetProperty(const Value& input,const std::wstring& key){
         const auto base=Deref(input);
+        if(base.type==Value::Type::Function&&base.function){
+            const auto found=base.function->props.find(key);
+            if(found!=base.function->props.end())return Deref(found->second);
+            if(key==L"prototype")return FunctionPrototype(base.function);
+        }
+        if(base.type==Value::Type::Native&&base.native){
+            const auto found=base.native->props.find(key);
+            if(found!=base.native->props.end())return Deref(found->second);
+        }
         if(base.type==Value::Type::Number&&key==L"toFixed")return Native([value=base.number](RuntimeCore& r,const Value&,const std::vector<Value>& a){
             const int digits=a.empty()?0:std::max(0,std::min(100,static_cast<int>(r.Number(a[0]))));
             if(!std::isfinite(value))return Value::String(NumberString(value));
             std::wostringstream out;out<<std::fixed<<std::setprecision(digits)<<value;
             return Value::String(out.str());
         });
-        if((base.type==Value::Type::Function||base.type==Value::Type::Native)&&(key==L"bind"||key==L"call")){
+        if((base.type==Value::Type::Function||base.type==Value::Type::Native)&&
+           (key==L"bind"||key==L"call"||key==L"apply")){
             return Native([callable=base,key](RuntimeCore& r,const Value&,const std::vector<Value>& a){
                 const auto boundThis=a.empty()?Value::Undefined():r.Deref(a[0]);
                 if(key==L"call"){std::vector<Value> forwarded;if(a.size()>1)forwarded.assign(a.begin()+1,a.end());return r.Call(callable,boundThis,forwarded);}
-                return r.Native([callable,boundThis](RuntimeCore& inner,const Value&,const std::vector<Value>& args){
-                    return inner.Call(callable,boundThis,args);
+                if(key==L"apply"){
+                    std::vector<Value> forwarded;
+                    if(a.size()>1){
+                        const auto values=r.Deref(a[1]);
+                        if(values.type==Value::Type::Object&&values.object){
+                            if(values.object->kind==ObjectKind::Array)forwarded=values.object->items;
+                            else{
+                                const auto length=static_cast<size_t>(std::max(0.0,r.Number(r.GetProperty(values,L"length"))));
+                                forwarded.reserve(length);
+                                for(size_t index=0;index<length;++index)
+                                    forwarded.push_back(r.GetProperty(values,std::to_wstring(index)));
+                            }
+                        }
+                    }
+                    return r.Call(callable,boundThis,forwarded);
+                }
+                std::vector<Value> leading;
+                if(a.size()>1)leading.assign(a.begin()+1,a.end());
+                return r.Native([callable,boundThis,leading=std::move(leading)](RuntimeCore& inner,const Value&,const std::vector<Value>& args){
+                    auto forwarded=leading;forwarded.insert(forwarded.end(),args.begin(),args.end());
+                    return inner.Call(callable,boundThis,forwarded);
                 });
             });
         }
@@ -2631,6 +2911,10 @@ struct RuntimeCore {
         const auto own=object->props.find(key);if(own!=object->props.end())return own->second;
         const auto getter=object->props.find(L"$get:"+key);if(getter!=object->props.end())return Call(getter->second,base,{});
         for(auto prototype=object->prototype;prototype;prototype=prototype->prototype){
+            const auto inherited=prototype->props.find(key);
+            if(inherited!=prototype->props.end())return inherited->second;
+            const auto inheritedGetter=prototype->props.find(L"$get:"+key);
+            if(inheritedGetter!=prototype->props.end())return Call(inheritedGetter->second,base,{});
             const auto method=prototype->props.find(L"$method:"+key);
             if(method!=prototype->props.end())return method->second;
         }
@@ -2688,11 +2972,39 @@ struct RuntimeCore {
         }
         if(object->kind==ObjectKind::Error&&key==L"toString")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>&){const auto name=object->props.count(L"name")?r.String(object->props[L"name"]):L"Error";const auto message=object->props.count(L"message")?r.String(object->props[L"message"]):L"";return Value::String(message.empty()?name:name+L": "+message);});
         if(object->kind==ObjectKind::Array){
-            if(key==L"push")return Native([object](RuntimeCore&,const Value&,const std::vector<Value>& args){for(auto& v:args)object->items.push_back(v);return Value::Number(static_cast<double>(object->items.size()));});
+            if(key==L"push")return Native([](RuntimeCore& r,const Value& thisValue,const std::vector<Value>& args){
+                const auto target=r.Deref(thisValue);
+                if(target.type!=Value::Type::Object||!target.object)return Value::Number(0);
+                size_t length=target.object->kind==ObjectKind::Array?target.object->items.size():
+                    static_cast<size_t>(std::max(0.0,r.Number(r.GetProperty(target,L"length"))));
+                for(const auto& value:args)r.SetProperty(target,std::to_wstring(length++),value);
+                r.SetProperty(target,L"length",Value::Number(static_cast<double>(length)));
+                return Value::Number(static_cast<double>(length));
+            });
             if(key==L"unshift")return Native([object](RuntimeCore&,const Value&,const std::vector<Value>& args){object->items.insert(object->items.begin(),args.begin(),args.end());return Value::Number(static_cast<double>(object->items.size()));});
             if(key==L"pop")return Native([object](RuntimeCore&,const Value&,const std::vector<Value>&){if(object->items.empty())return Value::Undefined();auto last=object->items.back();object->items.pop_back();return last;});
             if(key==L"shift")return Native([object](RuntimeCore&,const Value&,const std::vector<Value>&){if(object->items.empty())return Value::Undefined();auto first=object->items.front();object->items.erase(object->items.begin());return first;});
-            if(key==L"indexOf")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& args){if(args.empty())return Value::Number(-1);for(size_t i=0;i<object->items.size();++i)if(r.EqualValues(object->items[i],args[0]))return Value::Number(static_cast<double>(i));return Value::Number(-1);});
+            if(key==L"indexOf")return Native([](RuntimeCore& r,const Value& thisValue,const std::vector<Value>& args){
+                if(args.empty())return Value::Number(-1);
+                const auto target=r.Deref(thisValue);
+                const auto length=target.type==Value::Type::Object&&target.object&&target.object->kind==ObjectKind::Array?
+                    target.object->items.size():static_cast<size_t>(std::max(0.0,r.Number(r.GetProperty(target,L"length"))));
+                size_t start=0;if(args.size()>1){const auto offset=static_cast<long long>(r.Number(args[1]));start=offset<0?static_cast<size_t>(std::max(0ll,static_cast<long long>(length)+offset)):std::min(length,static_cast<size_t>(offset));}
+                for(size_t index=start;index<length;++index)
+                    if(r.EqualValues(r.GetProperty(target,std::to_wstring(index)),args[0]))return Value::Number(static_cast<double>(index));
+                return Value::Number(-1);
+            });
+            if(key==L"concat")return Native([](RuntimeCore& r,const Value& thisValue,const std::vector<Value>& args){
+                std::vector<Value> output;
+                const auto append=[&](const Value& input){
+                    const auto value=r.Deref(input);
+                    if(value.type==Value::Type::Object&&value.object&&value.object->kind==ObjectKind::Array)
+                        output.insert(output.end(),value.object->items.begin(),value.object->items.end());
+                    else output.push_back(value);
+                };
+                append(thisValue);for(const auto& argument:args)append(argument);
+                return r.ArrayValue(output);
+            });
             if(key==L"includes")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& args){if(args.empty())return Value::Bool(false);for(const auto& item:object->items)if(r.EqualValues(item,args[0]))return Value::Bool(true);return Value::Bool(false);});
             if(key==L"find")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& args){if(args.empty())return Value::Undefined();for(size_t i=0;i<object->items.size();++i)if(r.Truth(r.Call(args[0],Value::Undefined(),{object->items[i],Value::Number(static_cast<double>(i)),Value::FromObject(object)})))return object->items[i];return Value::Undefined();});
             if(key==L"findIndex")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& args){if(args.empty())return Value::Number(-1);for(size_t i=0;i<object->items.size();++i)if(r.Truth(r.Call(args[0],Value::Undefined(),{object->items[i],Value::Number(static_cast<double>(i)),Value::FromObject(object)})))return Value::Number(static_cast<double>(i));return Value::Number(-1);});
@@ -2701,8 +3013,11 @@ struct RuntimeCore {
             if(key==L"at")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& args){const auto size=static_cast<long long>(object->items.size());auto index=args.empty()?0ll:static_cast<long long>(r.Number(args[0]));if(index<0)index+=size;return index>=0&&index<size?object->items[static_cast<size_t>(index)]:Value::Undefined();});
             if(key==L"fill")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& args){const auto size=static_cast<long long>(object->items.size());auto index=[&](size_t argument,long long fallback){if(argument>=args.size())return fallback;auto value=static_cast<long long>(r.Number(args[argument]));return value<0?std::max(0ll,size+value):std::min(size,value);};const auto start=index(1,0),end=index(2,size);const auto value=args.empty()?Value::Undefined():r.Deref(args[0]);for(auto position=start;position<end;++position)object->items[static_cast<size_t>(position)]=value;return Value::FromObject(object);});
             if(key==L"sort")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& args){const auto compare=args.empty()?Value::Undefined():r.Deref(args[0]);std::stable_sort(object->items.begin(),object->items.end(),[&](const Value& left,const Value& right){if(r.IsCallable(compare)){const auto result=r.Number(r.Call(compare,Value::Undefined(),{left,right}));return std::isnan(result)?false:result<0;}return r.String(left)<r.String(right);});return Value::FromObject(object);});
-            if(key==L"slice")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& args){
-                const auto size=static_cast<long long>(object->items.size());
+            if(key==L"slice")return Native([](RuntimeCore& r,const Value& thisValue,const std::vector<Value>& args){
+                const auto target=r.Deref(thisValue);
+                const auto size=target.type==Value::Type::Object&&target.object&&target.object->kind==ObjectKind::Array?
+                    static_cast<long long>(target.object->items.size()):
+                    static_cast<long long>(std::max(0.0,r.Number(r.GetProperty(target,L"length"))));
                 auto offset=[&](size_t index,long long fallback){
                     if(index>=args.size())return fallback;
                     const double number=r.Number(args[index]);
@@ -2712,9 +3027,10 @@ struct RuntimeCore {
                 };
                 const auto begin=offset(0,0),end=offset(1,size);
                 if(end<=begin)return r.ArrayValue({});
-                return r.ArrayValue(std::vector<Value>(
-                    object->items.begin()+static_cast<std::ptrdiff_t>(begin),
-                    object->items.begin()+static_cast<std::ptrdiff_t>(end)));
+                std::vector<Value> output;output.reserve(static_cast<size_t>(end-begin));
+                for(auto index=begin;index<end;++index)
+                    output.push_back(r.GetProperty(target,std::to_wstring(index)));
+                return r.ArrayValue(output);
             });
             if(key==L"splice")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& args){
                 const auto size=static_cast<std::ptrdiff_t>(object->items.size());
@@ -2936,6 +3252,11 @@ struct RuntimeCore {
             });
         }
         if(object->kind==ObjectKind::Document){
+            if(key==L"nodeType")return Value::Number(9);
+            if(key==L"compatMode")return Value::String(L"CSS1Compat");
+            if(key==L"readyState")return Value::String(documentReadyState);
+            if(key==L"defaultView"||key==L"parentWindow")return global->values[L"window"];
+            if(key==L"location")return global->values[L"location"];
             if(key==L"documentElement")return NodeValue(document.QuerySelector(L"html"));
             if(key==L"body")return NodeValue(document.Body());
             if(key==L"activeElement"){
@@ -2948,10 +3269,32 @@ struct RuntimeCore {
             }
             if(key==L"getElementById")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){r.EnsureIndex();return r.NodeValue(r.document.GetElementById(a.empty()?L"":r.String(a[0])));});
             if(key==L"getElementsByName")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){std::vector<Value> out;for(auto& n:r.document.GetElementsByName(a.empty()?L"":r.String(a[0])))out.push_back(r.NodeValue(n));return r.ArrayValue(out);});
+            if(key==L"getElementsByTagName")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
+                const auto tag=ToLower(a.empty()?L"*":r.String(a[0]));std::vector<Value> out;
+                std::function<void(const std::shared_ptr<Node>&)> collect=[&](const std::shared_ptr<Node>& current){
+                    if(!current)return;if(current->type==NodeType::Element&&(tag==L"*"||current->tag==tag))out.push_back(r.NodeValue(current));
+                    for(const auto& child:current->children)collect(child);
+                };collect(r.document.Root());return r.ArrayValue(out);
+            });
+            if(key==L"getElementsByClassName")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
+                std::vector<std::wstring> classes;std::wistringstream input(a.empty()?L"":r.String(a[0]));std::wstring token;
+                while(input>>token)classes.push_back(token);std::vector<Value> out;
+                std::function<void(const std::shared_ptr<Node>&)> collect=[&](const std::shared_ptr<Node>& current){
+                    if(!current)return;if(current->type==NodeType::Element&&!classes.empty()&&
+                        std::all_of(classes.begin(),classes.end(),[&](const auto& name){return current->HasClass(name);}))out.push_back(r.NodeValue(current));
+                    for(const auto& child:current->children)collect(child);
+                };collect(r.document.Root());return r.ArrayValue(out);
+            });
             if(key==L"querySelector"||key==L"querySelectorAll")return Native([key](RuntimeCore& r,const Value&,const std::vector<Value>& a){r.EnsureIndex();auto selector=a.empty()?L"":r.String(a[0]);if(key==L"querySelector")return r.NodeValue(r.document.QuerySelector(selector));std::vector<Value> out;for(auto& n:r.document.QuerySelectorAll(selector))out.push_back(r.NodeValue(n));return r.ArrayValue(out);});
             if(key==L"createElement")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){return r.NodeValue(r.document.CreateElement(a.empty()?L"div":r.String(a[0])));});
             if(key==L"createTextNode")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){auto node=std::make_shared<Node>();node->type=NodeType::Text;node->tag=L"#text";node->text=a.empty()?L"":r.String(a[0]);node->ownerDocument=&r.document;return r.NodeValue(node);});
             if(key==L"createDocumentFragment")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>&){auto node=std::make_shared<Node>();node->type=NodeType::Element;node->tag=L"#document-fragment";node->ownerDocument=&r.document;return r.NodeValue(node);});
+            if(key==L"createEvent")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>&){
+                auto event=r.CreateObject(ObjectKind::Event);event->props[L"type"]=Value::String(L"");
+                event->props[L"bubbles"]=Value::Bool(false);event->props[L"cancelable"]=Value::Bool(false);
+                event->props[L"defaultPrevented"]=Value::Bool(false);event->props[L"isTrusted"]=Value::Bool(false);
+                return Value::FromObject(event);
+            });
             if(key==L"createTreeWalker")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
                 if(a.empty())return Value::Null();const auto root=r.Deref(a[0]);
                 if(root.type!=Value::Type::Object||!root.object||root.object->kind!=ObjectKind::Node)return Value::Null();
@@ -2977,6 +3320,9 @@ struct RuntimeCore {
             });
             if(key==L"addEventListener")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){r.AddEventListener(r.documentListeners,a);return Value::Undefined();});
             if(key==L"removeEventListener")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){r.RemoveEventListener(r.documentListeners,a);return Value::Undefined();});
+            EnsureIndex();
+            if(const auto named=document.GetElementById(key))return NodeValue(named);
+            const auto named=document.GetElementsByName(key);if(!named.empty())return NodeValue(named.front());
         }
         if(object->kind==ObjectKind::Range){
             if(key==L"startContainer")return NodeValue(object->rangeStart);
@@ -3092,6 +3438,7 @@ struct RuntimeCore {
             if(key==L"className")return Value::String(node->Attribute(L"class"));
             if(key==L"value")return Value::String(node->Attribute(L"value"));
             if(key==L"nodeType")return Value::Number(IsDocumentFragment(node)?11:node->type==NodeType::Element?1:node->type==NodeType::Text?3:9);
+            if(key==L"ownerDocument")return global->values[L"document"];
             if(key==L"length"&&node->type==NodeType::Text)return Value::Number(static_cast<double>(node->text.size()));
             if(key==L"nodeValue")return node->type==NodeType::Text?Value::String(node->text):Value::Null();
             if(key==L"tagName"){auto tag=node->type==NodeType::Element?node->tag:L"";std::transform(tag.begin(),tag.end(),tag.begin(),[](wchar_t character){return static_cast<wchar_t>(std::towupper(character));});return Value::String(std::move(tag));}
@@ -3171,8 +3518,15 @@ struct RuntimeCore {
                 if(key==L"nextSibling")return NodeValue(found+1==parent->children.end()?std::shared_ptr<Node>{}:*(found+1));
                 return NodeValue(found==parent->children.begin()?std::shared_ptr<Node>{}:*(found-1));
             }
-            if(key==L"nextElementSibling"){
-                auto parent=node->parent.lock();if(!parent)return Value::Null();bool found=false;for(const auto& sibling:parent->children){if(sibling==node){found=true;continue;}if(found&&sibling->type==NodeType::Element)return NodeValue(sibling);}return Value::Null();
+            if(key==L"nextElementSibling"||key==L"previousElementSibling"){
+                auto parent=node->parent.lock();if(!parent)return Value::Null();
+                const auto found=std::find(parent->children.begin(),parent->children.end(),node);
+                if(found==parent->children.end())return Value::Null();
+                if(key==L"nextElementSibling")for(auto current=std::next(found);current!=parent->children.end();++current)
+                    if((*current)->type==NodeType::Element)return NodeValue(*current);
+                if(key==L"previousElementSibling")for(auto current=found;current!=parent->children.begin();){--current;
+                    if((*current)->type==NodeType::Element)return NodeValue(*current);}
+                return Value::Null();
             }
             if(key==L"appendChild")return Native([node](RuntimeCore& r,const Value&,const std::vector<Value>& a){
                 if(a.empty())return Value::Null();auto value=r.Deref(a[0]);
@@ -3243,7 +3597,18 @@ struct RuntimeCore {
                 }
                 return Value::Undefined();
             });
-            if(key==L"getAttribute")return Native([node](RuntimeCore& r,const Value&,const std::vector<Value>& a){return Value::String(a.empty()?L"":node->Attribute(r.String(a[0])));});
+            if(key==L"getAttribute")return Native([node](RuntimeCore& r,const Value&,const std::vector<Value>& a){
+                if(a.empty())return Value::Null();const auto name=ToLower(r.String(a[0]));
+                const auto found=node->attributes.find(name);return found==node->attributes.end()?Value::Null():Value::String(found->second);
+            });
+            if(key==L"getAttributeNode")return Native([node](RuntimeCore& r,const Value&,const std::vector<Value>& a){
+                if(a.empty())return Value::Null();const auto name=ToLower(r.String(a[0]));const auto found=node->attributes.find(name);
+                if(found==node->attributes.end())return Value::Null();auto attribute=r.ObjectValue(ObjectKind::Plain);
+                attribute.object->props[L"name"]=Value::String(name);attribute.object->props[L"localName"]=Value::String(name);
+                attribute.object->props[L"value"]=Value::String(found->second);attribute.object->props[L"nodeValue"]=Value::String(found->second);
+                attribute.object->props[L"nodeType"]=Value::Number(2);attribute.object->props[L"ownerElement"]=r.NodeValue(node);
+                attribute.object->props[L"specified"]=Value::Bool(true);return attribute;
+            });
             if(key==L"hasAttribute")return Native([node](RuntimeCore& r,const Value&,const std::vector<Value>& a){return Value::Bool(!a.empty()&&node->attributes.count(ToLower(r.String(a[0])))!=0);});
             if(key==L"removeAttribute")return Native([node](RuntimeCore& r,const Value&,const std::vector<Value>& a){
                 if(!a.empty()){
@@ -3371,8 +3736,32 @@ struct RuntimeCore {
             if(key==L"addEventListener")return Native([node](RuntimeCore& r,const Value&,const std::vector<Value>& a){auto& listeners=r.listeners[node.get()];if(listeners.node.lock()!=node)listeners.events.clear();listeners.node=node;r.AddEventListener(listeners.events,a);return Value::Undefined();});
             if(key==L"removeEventListener")return Native([node](RuntimeCore& r,const Value&,const std::vector<Value>& a){auto found=r.listeners.find(node.get());if(found!=r.listeners.end()){if(found->second.node.lock()!=node){r.listeners.erase(node.get());return Value::Undefined();}r.RemoveEventListener(found->second.events,a);if(found->second.events.empty())r.listeners.erase(node.get());}return Value::Undefined();});
             if(key==L"querySelector"||key==L"querySelectorAll")return Native([node,key](RuntimeCore& r,const Value&,const std::vector<Value>& a){r.EnsureIndex();auto selector=a.empty()?L"":r.String(a[0]);if(key==L"querySelector")return r.NodeValue(r.document.QuerySelector(selector,node));std::vector<Value> out;for(auto& n:r.document.QuerySelectorAll(selector,node))out.push_back(r.NodeValue(n));return r.ArrayValue(out);});
+            if(key==L"getElementsByTagName"||key==L"getElementsByClassName")return Native([node,key](RuntimeCore& r,const Value&,const std::vector<Value>& a){
+                const auto argument=a.empty()?L"":r.String(a[0]);const auto tag=ToLower(argument);
+                std::vector<std::wstring> classes;if(key==L"getElementsByClassName"){
+                    std::wistringstream input(argument);std::wstring token;while(input>>token)classes.push_back(token);
+                }
+                std::vector<Value> out;std::function<void(const std::shared_ptr<Node>&)> collect=[&](const std::shared_ptr<Node>& current){
+                    for(const auto& child:current->children){
+                        const bool matches=child->type==NodeType::Element&&
+                            (key==L"getElementsByTagName"?(tag==L"*"||child->tag==tag):
+                             (!classes.empty()&&std::all_of(
+                                 classes.begin(),classes.end(),
+                                 [&](const auto& name){return child->HasClass(name);}))
+                            );
+                        if(matches)out.push_back(r.NodeValue(child));collect(child);
+                    }
+                };collect(node);return r.ArrayValue(out);
+            });
             if(key==L"closest")return Native([node](RuntimeCore& r,const Value&,const std::vector<Value>& a){return r.NodeValue(node->Closest(a.empty()?L"":r.String(a[0])));});
             if(key==L"matches")return Native([node](RuntimeCore& r,const Value&,const std::vector<Value>& a){return Value::Bool(!a.empty()&&Document::MatchesSelector(node,r.String(a[0])));});
+            if(node->tag==L"form"){
+                std::shared_ptr<Node> named;std::function<void(const std::shared_ptr<Node>&)> find=[&](const std::shared_ptr<Node>& current){
+                    if(named)return;for(const auto& child:current->children){
+                        if(child->Attribute(L"name")==key||child->Attribute(L"id")==key){named=child;return;}find(child);
+                    }
+                };find(node);if(named)return NodeValue(named);
+            }
         }
         if(object->kind==ObjectKind::ClassList){
             auto node=object->node;
@@ -3414,12 +3803,37 @@ struct RuntimeCore {
         if(object->kind==ObjectKind::Window){
             if(key==L"addEventListener")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){r.AddEventListener(r.windowListeners,a);return Value::Undefined();});
             if(key==L"removeEventListener")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){r.RemoveEventListener(r.windowListeners,a);return Value::Undefined();});
+            if(key==L"focus"||key==L"close")return Native([](RuntimeCore&,const Value&,const std::vector<Value>&){return Value::Undefined();});
+            if(key==L"open")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
+                if(!a.empty())r.RequestNavigation(r.String(a[0]));return Value::Null();
+            });
+            if(key==L"scrollTo"||key==L"scroll"||key==L"scrollBy")return Native([key](RuntimeCore& r,const Value&,const std::vector<Value>& a){
+                const auto body=r.document.Body();if(!body)return Value::Undefined();const bool relative=key==L"scrollBy";
+                double left=relative?0:body->scrollLeft,top=relative?0:body->scrollTop;
+                if(!a.empty()){
+                    const auto first=r.Deref(a[0]);
+                    if(first.type==Value::Type::Object&&first.object){
+                        if(first.object->props.count(L"left"))left=r.Number(first.object->props[L"left"]);
+                        if(first.object->props.count(L"top"))top=r.Number(first.object->props[L"top"]);
+                    }else{left=r.Number(first);top=a.size()>1?r.Number(a[1]):0;}
+                }
+                body->scrollLeft=std::max(0.0f,static_cast<float>((relative?body->scrollLeft:0)+left));
+                body->scrollTop=std::max(0.0f,static_cast<float>((relative?body->scrollTop:0)+top));
+                const auto x=Value::Number(body->scrollLeft),y=Value::Number(body->scrollTop);
+                r.global->values[L"scrollX"]=r.global->values[L"pageXOffset"]=x;
+                r.global->values[L"scrollY"]=r.global->values[L"pageYOffset"]=y;
+                const auto window=r.global->values[L"window"].object;
+                if(window){window->props[L"scrollX"]=window->props[L"pageXOffset"]=x;window->props[L"scrollY"]=window->props[L"pageYOffset"]=y;}
+                r.Mutated(body,JavaScriptRuntime::MutationKind::Paint);return Value::Undefined();
+            });
             if(key==L"dispatchEvent")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
                 if(a.empty())return Value::Bool(false);const auto eventValue=r.Deref(a[0]);
                 if(eventValue.type!=Value::Type::Object||!eventValue.object||eventValue.object->kind!=ObjectKind::Event)
                     throw JavaScriptException{r.ErrorValue(L"TypeError",L"dispatchEvent requires an Event")};
                 return Value::Bool(r.DispatchWindowEventObject(eventValue.object));
             });
+            const auto globalProperty=global->values.find(key);
+            if(globalProperty!=global->values.end())return globalProperty->second;
         }
         if(object->kind==ObjectKind::FrameWindow&&key==L"postMessage")return Native([node=object->node](RuntimeCore& r,const Value&,const std::vector<Value>& a){
             if(!a.empty()){
@@ -3430,6 +3844,14 @@ struct RuntimeCore {
             return Value::Undefined();
         });
         if(object->kind==ObjectKind::Event){
+            if(key==L"initEvent"||key==L"initCustomEvent")return Native([object,key](RuntimeCore& r,const Value&,const std::vector<Value>& a){
+                object->props[L"type"]=Value::String(a.empty()?L"":r.String(a[0]));
+                object->props[L"bubbles"]=Value::Bool(a.size()>1&&r.Truth(a[1]));
+                object->props[L"cancelable"]=Value::Bool(a.size()>2&&r.Truth(a[2]));
+                object->props[L"defaultPrevented"]=Value::Bool(false);
+                if(key==L"initCustomEvent")object->props[L"detail"]=a.size()>3?r.Deref(a[3]):Value::Null();
+                return Value::Undefined();
+            });
             if(key==L"stopPropagation")return Native([object](RuntimeCore&,const Value&,const std::vector<Value>&){object->props[L"$propagationStopped"]=Value::Bool(true);return Value::Undefined();});
             if(key==L"stopImmediatePropagation")return Native([object](RuntimeCore&,const Value&,const std::vector<Value>&){object->props[L"$propagationStopped"]=Value::Bool(true);object->props[L"$immediateStopped"]=Value::Bool(true);return Value::Undefined();});
             if(key==L"preventDefault")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>&){const auto passive=object->props.find(L"$inPassiveListener");if(passive==object->props.end()||!r.Truth(passive->second))object->props[L"defaultPrevented"]=Value::Bool(true);return Value::Undefined();});
@@ -3450,6 +3872,13 @@ struct RuntimeCore {
             if(key==L"getItem")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& a){if(a.empty())return Value::Null();const auto found=object->props.find(r.String(a[0]));return found==object->props.end()?Value::Null():found->second;});
             if(key==L"setItem")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& a){if(a.size()>1)object->props[r.String(a[0])]=Value::String(r.String(a[1]));return Value::Undefined();});
             if(key==L"removeItem")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& a){if(!a.empty())object->props.erase(r.String(a[0]));return Value::Undefined();});
+        }
+        if(object->kind==ObjectKind::MediaQuery){
+            if(key==L"matches")return object->props[L"$matches"];
+            if(key==L"addEventListener")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& a){r.AddEventListener(r.objectListeners[object.get()],a);return Value::Undefined();});
+            if(key==L"removeEventListener")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& a){auto found=r.objectListeners.find(object.get());if(found!=r.objectListeners.end())r.RemoveEventListener(found->second,a);return Value::Undefined();});
+            if(key==L"addListener")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& a){if(!a.empty())r.AddEventListener(r.objectListeners[object.get()],{Value::String(L"change"),a[0]});return Value::Undefined();});
+            if(key==L"removeListener")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& a){auto found=r.objectListeners.find(object.get());if(found!=r.objectListeners.end()&&!a.empty())r.RemoveEventListener(found->second,{Value::String(L"change"),a[0]});return Value::Undefined();});
         }
         if(object->kind==ObjectKind::FileReader){
             if(key==L"addEventListener")return Native([object](RuntimeCore& r,const Value&,const std::vector<Value>& a){r.AddEventListener(r.objectListeners[object.get()],a);return Value::Undefined();});
@@ -3515,6 +3944,40 @@ struct RuntimeCore {
                 return Value::Bool(std::isfinite(value.number)&&
                                    std::trunc(value.number)==value.number);
             });
+        // Object literals inherit these methods from Object.prototype.  Keep
+        // the fallback limited to ordinary objects so Array#toString and other
+        // specialized built-ins retain their own behavior.  Libraries such as
+        // jQuery use a detached Object#toString with call() to classify values.
+        if(object->kind==ObjectKind::Plain&&key==L"toString")
+            return Native([](RuntimeCore& r,const Value& thisValue,const std::vector<Value>&){
+                return Value::String(r.ObjectTag(thisValue));
+            });
+        if(object->kind==ObjectKind::Plain&&key==L"hasOwnProperty")
+            return Native([](RuntimeCore& r,const Value& thisValue,const std::vector<Value>& arguments){
+                if(arguments.empty())return Value::Bool(false);
+                const auto value=r.Deref(thisValue);const auto name=r.String(arguments[0]);
+                if(value.type==Value::Type::Function&&value.function)
+                    return Value::Bool(value.function->props.count(name)!=0);
+                if(value.type==Value::Type::Native&&value.native)
+                    return Value::Bool(value.native->props.count(name)!=0);
+                if(value.type!=Value::Type::Object||!value.object)return Value::Bool(false);
+                if(value.object->kind==ObjectKind::Array){
+                    size_t index=0;if(name==L"length")return Value::Bool(true);
+                    if(TryParseDecimalIndex(name,index))return Value::Bool(index<value.object->items.size());
+                }
+                return Value::Bool(value.object->props.count(name)!=0);
+            });
+        if(object->kind==ObjectKind::Plain&&key==L"isPrototypeOf")
+            return Native([](RuntimeCore& r,const Value& thisValue,const std::vector<Value>& arguments){
+                const auto prototype=r.Deref(thisValue);
+                if(prototype.type!=Value::Type::Object||!prototype.object||arguments.empty())
+                    return Value::Bool(false);
+                const auto value=r.Deref(arguments[0]);
+                if(value.type!=Value::Type::Object||!value.object)return Value::Bool(false);
+                for(auto current=value.object->prototype;current;current=current->prototype)
+                    if(current==prototype.object)return Value::Bool(true);
+                return Value::Bool(false);
+            });
         return Value::Undefined();
     }
     struct ParsedEventListenerOptions { bool capture=false,once=false,passive=false; };
@@ -3575,7 +4038,10 @@ struct RuntimeCore {
         }
     }
     void SetProperty(const Value& input,const std::wstring& key,const Value& value){
-        auto base=Deref(input);if(base.type!=Value::Type::Object||!base.object)return;auto object=base.object;auto v=Deref(value);
+        auto base=Deref(input);auto v=Deref(value);
+        if(base.type==Value::Type::Function&&base.function){base.function->props[key]=v;return;}
+        if(base.type==Value::Type::Native&&base.native){base.native->props[key]=v;return;}
+        if(base.type!=Value::Type::Object||!base.object)return;auto object=base.object;
         if(object->kind==ObjectKind::Array){
             if(key==L"length"){
                 const double requested=Number(v);
@@ -3662,12 +4128,17 @@ struct RuntimeCore {
     }
     void Assign(const Value& reference,const Value& value){
         if(reference.type!=Value::Type::Reference)return;auto ref=reference.reference;
-        if(ref->kind==Reference::Kind::Variable){auto* env=ref->env->Find(ref->name);if(!env)env=ref->env.get();env->values[ref->name]=Deref(value);}else SetProperty(ref->base,ref->name,value);
+        if(ref->kind==Reference::Kind::Variable){auto* slot=ref->env?ref->env->FindValue(ref->name):nullptr;
+            if(slot)*slot=Deref(value);else if(global)global->values[ref->name]=Deref(value);
+        }else SetProperty(ref->base,ref->name,value);
     }
     bool Delete(const Value& reference){
         if(reference.type!=Value::Type::Reference)return true;const auto ref=reference.reference;
         if(ref->kind==Reference::Kind::Variable){if(ref->env){auto* env=ref->env->Find(ref->name);if(env)env->values.erase(ref->name);}return true;}
-        auto base=Deref(ref->base);if(base.type!=Value::Type::Object||!base.object)return true;
+        auto base=Deref(ref->base);
+        if(base.type==Value::Type::Function&&base.function){base.function->props.erase(ref->name);return true;}
+        if(base.type==Value::Type::Native&&base.native){base.native->props.erase(ref->name);return true;}
+        if(base.type!=Value::Type::Object||!base.object)return true;
         if(base.object->kind==ObjectKind::Dataset&&base.object->node){base.object->node->RemoveAttribute(DatasetAttributeName(ref->name));Mutated(base.object->node,JavaScriptRuntime::MutationKind::Style);return true;}
         base.object->props.erase(ref->name);return true;
     }
@@ -3675,6 +4146,13 @@ struct RuntimeCore {
         Value callee=Deref(callable),thisValue=explicitThis;
         if(callable.type==Value::Type::Reference&&callable.reference->kind==Reference::Kind::Property)thisValue=Deref(callable.reference->base);
         if(callee.type==Value::Type::Native)return callee.native->callback(*this,thisValue,args);
+        if(callee.type==Value::Type::Object&&callee.object&&callee.object->kind==ObjectKind::ObjectConstructor){
+            if(args.empty())return ObjectValue(ObjectKind::Plain);
+            const auto value=Deref(args[0]);
+            if(value.type==Value::Type::Undefined||value.type==Value::Type::Null)return ObjectValue(ObjectKind::Plain);
+            if(value.type==Value::Type::Object||value.type==Value::Type::Function||value.type==Value::Type::Native)return value;
+            auto wrapper=ObjectValue(ObjectKind::Plain);wrapper.object->props[L"$primitive"]=value;return wrapper;
+        }
         if(callee.type==Value::Type::Object&&callee.object&&callee.object->kind==ObjectKind::NumberConstructor)
             return Value::Number(args.empty()?0:Number(args[0]));
         if(callee.type==Value::Type::Object&&callee.object&&callee.object->kind==ObjectKind::ArrayConstructor){
@@ -3739,6 +4217,7 @@ struct RuntimeCore {
     Value Construct(const Value& constructor,const std::vector<Value>& args){
         const auto callee=Deref(constructor);
         if(callee.type==Value::Type::Native){const auto result=Call(callee,Value::Undefined(),args);return Deref(result);}
+        if(callee.type==Value::Type::Object&&callee.object&&callee.object->kind==ObjectKind::ObjectConstructor)return Call(callee,Value::Undefined(),args);
         if(callee.type==Value::Type::Object&&callee.object&&callee.object->kind==ObjectKind::DateConstructor)return DateValue(args);
         if(callee.type==Value::Type::Object&&callee.object&&callee.object->kind==ObjectKind::PromiseConstructor)return ConstructPromise(args.empty()?Value::Undefined():args[0]);
         if(callee.type==Value::Type::Object&&callee.object&&callee.object->kind==ObjectKind::ErrorConstructor){const auto name=callee.object->props.count(L"$name")?String(callee.object->props[L"$name"]):L"Error";return ErrorValue(name,args.empty()?L"":String(args[0]));}
@@ -3750,6 +4229,8 @@ struct RuntimeCore {
             return instance;
         }
         if(callee.type==Value::Type::Function){
+            const auto instancePrototype=FunctionPrototype(callee.function);
+            if(instancePrototype.type==Value::Type::Object)instance.object->prototype=instancePrototype.object;
             const auto result=Deref(Call(callee,instance,args));
             return result.type==Value::Type::Object?result:instance;
         }
@@ -3762,7 +4243,7 @@ struct RuntimeCore {
         if(v.type==Value::Type::String){std::wstring o=L"\"";for(wchar_t c:v.string){if(c==L'\\'||c==L'"')o+=L'\\';if(c==L'\n')o+=L"\\n";else o+=c;}return o+L"\"";}
         if(v.type==Value::Type::Object&&v.object){if(v.object->kind==ObjectKind::Array){std::wstring o=L"[";for(size_t i=0;i<v.object->items.size();++i){if(i)o+=L",";o+=Json(v.object->items[i]);}return o+L"]";}std::wstring o=L"{";bool first=true;for(auto& p:v.object->props){if(!first)o+=L",";first=false;o+=Json(Value::String(p.first))+L":"+Json(p.second);}return o+L"}";}return L"undefined";
     }
-    std::wstring TypeName(const Value& input){auto v=Deref(input);switch(v.type){case Value::Type::Undefined:return L"undefined";case Value::Type::Boolean:return L"boolean";case Value::Type::Number:return L"number";case Value::Type::String:return L"string";case Value::Type::Function:case Value::Type::Native:return L"function";case Value::Type::Object:if(v.object&&(v.object->kind==ObjectKind::PromiseConstructor||v.object->kind==ObjectKind::ErrorConstructor||v.object->kind==ObjectKind::NumberConstructor||v.object->kind==ObjectKind::DateConstructor))return L"function";return L"object";default:return L"object";}}
+    std::wstring TypeName(const Value& input){auto v=Deref(input);switch(v.type){case Value::Type::Undefined:return L"undefined";case Value::Type::Boolean:return L"boolean";case Value::Type::Number:return L"number";case Value::Type::String:return L"string";case Value::Type::Function:case Value::Type::Native:return L"function";case Value::Type::Object:if(v.object&&(v.object->kind==ObjectKind::ObjectConstructor||v.object->kind==ObjectKind::ArrayConstructor||v.object->kind==ObjectKind::StringConstructor||v.object->kind==ObjectKind::PromiseConstructor||v.object->kind==ObjectKind::ErrorConstructor||v.object->kind==ObjectKind::NumberConstructor||v.object->kind==ObjectKind::DateConstructor))return L"function";return L"object";default:return L"object";}}
     Value EvaluateTemplate(const std::wstring& raw,const std::shared_ptr<Environment>& env){
         auto found=templatePrograms.find(raw);
         if(found==templatePrograms.end()){
@@ -3834,10 +4315,10 @@ struct RuntimeCore {
             const size_t current=frame->ip++;const auto& ins=frame->chunk->code[current];
             try{switch(ins.op){
             case Op::Constant:stack.push_back(frame->chunk->constants[ins.argument]);break;case Op::Undefined:stack.push_back(Value::Undefined());break;case Op::Null:stack.push_back(Value::Null());break;case Op::TrueValue:stack.push_back(Value::Bool(true));break;case Op::FalseValue:stack.push_back(Value::Bool(false));break;
-            case Op::LoadReference:{auto reference=std::make_shared<Reference>();reference->env=frame->env;reference->name=ins.text;stack.push_back(Value::FromReference(reference));break;}
+            case Op::LoadReference:{auto reference=CreateReference();reference->env=frame->env;reference->name=ins.text;stack.push_back(Value::FromReference(reference));break;}
             case Op::Declare:{auto value=Deref(pop());frame->env->values[ins.text]=value;break;}
-            case Op::GetProperty:{auto base=pop();auto reference=std::make_shared<Reference>();reference->kind=Reference::Kind::Property;reference->base=base;reference->name=ins.text;stack.push_back(Value::FromReference(reference));break;}
-            case Op::GetIndex:{auto key=String(pop());auto base=pop();auto reference=std::make_shared<Reference>();reference->kind=Reference::Kind::Property;reference->base=base;reference->name=key;stack.push_back(Value::FromReference(reference));break;}
+            case Op::GetProperty:{auto base=pop();auto reference=CreateReference();reference->kind=Reference::Kind::Property;reference->base=base;reference->name=ins.text;stack.push_back(Value::FromReference(reference));break;}
+            case Op::GetIndex:{auto key=String(pop());auto base=pop();auto reference=CreateReference();reference->kind=Reference::Kind::Property;reference->base=base;reference->name=key;stack.push_back(Value::FromReference(reference));break;}
             case Op::Assign:{auto value=Deref(pop());auto reference=pop();Assign(reference,value);stack.push_back(value);break;}
             case Op::PostIncrement:case Op::PostDecrement:case Op::PreIncrement:case Op::PreDecrement:{auto reference=pop();const auto old=Deref(reference);const double delta=(ins.op==Op::PostIncrement||ins.op==Op::PreIncrement)?1.0:-1.0;const auto next=Value::Number(Number(old)+delta);Assign(reference,next);stack.push_back(ins.op==Op::PostIncrement||ins.op==Op::PostDecrement?old:next);break;}
             case Op::NewArray:stack.push_back(ArrayValue({}));break;case Op::ArrayPush:{auto value=Deref(pop());auto array=Deref(stack.back());array.object->items.push_back(value);break;}
@@ -3847,6 +4328,10 @@ struct RuntimeCore {
             case Op::EnumerableKeys:{
                 const auto source=Deref(pop());std::vector<Value> keys;
                 if(source.type==Value::Type::String){for(size_t index=0;index<source.string.size();++index)keys.push_back(Value::String(std::to_wstring(index)));}
+                else if(source.type==Value::Type::Function&&source.function)
+                    for(const auto& property:source.function->props)keys.push_back(Value::String(property.first));
+                else if(source.type==Value::Type::Native&&source.native)
+                    for(const auto& property:source.native->props)keys.push_back(Value::String(property.first));
                 else if(source.type==Value::Type::Object&&source.object){
                     if(source.object->kind==ObjectKind::Array)for(size_t index=0;index<source.object->items.size();++index)keys.push_back(Value::String(std::to_wstring(index)));
                     for(const auto& property:source.object->props)if(property.first.empty()||property.first.front()!=L'$')keys.push_back(Value::String(property.first));
@@ -3873,6 +4358,19 @@ struct RuntimeCore {
             case Op::ShiftRight:{auto b=pop(),a=pop();stack.push_back(Value::Number(Int32(a)>>(Uint32(b)&31u)));break;}
             case Op::UnsignedShiftRight:{auto b=pop(),a=pop();stack.push_back(Value::Number(Uint32(a)>>(Uint32(b)&31u)));break;}
             case Op::InValue:{auto object=pop(),key=pop();stack.push_back(Value::Bool(HasProperty(object,String(key))));break;}
+            case Op::InstanceOf:{
+                const auto constructor=Deref(pop()),value=Deref(pop());
+                bool matches=false;
+                if(value.type==Value::Type::Object&&value.object&&
+                   constructor.type==Value::Type::Function&&constructor.function){
+                    const auto prototype=FunctionPrototype(constructor.function);
+                    if(prototype.type==Value::Type::Object&&prototype.object)
+                        for(auto prototypeObject=value.object->prototype;prototypeObject;
+                            prototypeObject=prototypeObject->prototype)
+                            if(prototypeObject==prototype.object){matches=true;break;}
+                }
+                stack.push_back(Value::Bool(matches));break;
+            }
             case Op::Equal:{auto b=pop(),a=pop();stack.push_back(Value::Bool(LooseEqualValues(a,b)));break;}case Op::NotEqual:{auto b=pop(),a=pop();stack.push_back(Value::Bool(!LooseEqualValues(a,b)));break;}case Op::StrictEqual:{auto b=pop(),a=pop();stack.push_back(Value::Bool(EqualValues(a,b)));break;}case Op::StrictNotEqual:{auto b=pop(),a=pop();stack.push_back(Value::Bool(!EqualValues(a,b)));break;}
             case Op::Less:{auto b=pop(),a=pop();stack.push_back(Value::Bool(Number(a)<Number(b)));break;}case Op::LessEqual:{auto b=pop(),a=pop();stack.push_back(Value::Bool(Number(a)<=Number(b)));break;}case Op::Greater:{auto b=pop(),a=pop();stack.push_back(Value::Bool(Number(a)>Number(b)));break;}case Op::GreaterEqual:{auto b=pop(),a=pop();stack.push_back(Value::Bool(Number(a)>=Number(b)));break;}
             case Op::Not:stack.push_back(Value::Bool(!Truth(pop())));break;case Op::BitwiseNot:stack.push_back(Value::Number(static_cast<std::int32_t>(~Uint32(pop()))));break;case Op::Negate:stack.push_back(Value::Number(-Number(pop())));break;case Op::Positive:stack.push_back(Value::Number(Number(pop())));break;case Op::VoidValue:pop();stack.push_back(Value::Undefined());break;case Op::TypeOf:stack.push_back(Value::String(TypeName(pop())));break;
@@ -3887,8 +4385,16 @@ struct RuntimeCore {
         }
         return {false,Value::Undefined()};
     }
+    void InstantiateFunctionDeclarations(const Chunk& chunk,const std::shared_ptr<Environment>& env){
+        for(const auto& declaration:chunk.functionDeclarations){
+            if(declaration.prototype<0||static_cast<size_t>(declaration.prototype)>=module->prototypes.size())continue;
+            auto function=CreateFunction();function->prototype=module->prototypes[static_cast<size_t>(declaration.prototype)];
+            function->closure=env;env->values[declaration.name]=Value::FromFunction(function);
+        }
+    }
     Value StartAsyncFunction(const std::shared_ptr<Prototype>& prototype,const std::shared_ptr<Environment>& env){
         auto promise=PromiseValue();auto frame=std::make_shared<ExecutionFrame>();frame->chunk=&prototype->chunk;frame->prototype=prototype;frame->env=env;frame->asyncPromise=promise.object;
+        InstantiateFunctionDeclarations(*frame->chunk,frame->env);
         try{const auto result=RunFrame(frame);if(!result.suspended)ResolvePromise(promise.object,result.value);}
         catch(const JavaScriptException& exception){RejectPromise(promise.object,exception.value);}
         catch(const std::exception& exception){RejectPromise(promise.object,ErrorValue(L"Error",Utf8ToWide(exception.what())));}
@@ -3896,14 +4402,20 @@ struct RuntimeCore {
     }
     Value Run(const Chunk& chunk,const std::shared_ptr<Environment>& env){
         auto frame=std::make_shared<ExecutionFrame>();frame->chunk=&chunk;frame->env=env;
+        InstantiateFunctionDeclarations(chunk,env);
         frame->stack.reserve(std::min<size_t>(chunk.code.size(),64));
         const auto result=RunFrame(frame);if(result.suspended)throw std::runtime_error("await outside async execution frame");return result.value;
     }
     void InstallGlobals(){
-        global->values[L"document"]=ObjectValue(ObjectKind::Document);
+        auto documentValue=ObjectValue(ObjectKind::Document);
+        documentValue.object->props[L"cookie"]=Value::String(L"");
+        global->values[L"document"]=documentValue;
         global->values[L"Infinity"]=Value::Number(std::numeric_limits<double>::infinity());
         global->values[L"NaN"]=Value::Number(std::numeric_limits<double>::quiet_NaN());
         auto window=CreateObject(ObjectKind::Window);auto chrome=CreateObject(ObjectKind::Plain);const auto hostBridge=ObjectValue(ObjectKind::WebView);chrome->props[L"webview"]=hostBridge;window->props[L"chrome"]=Value::FromObject(chrome);window->props[L"twebframe"]=hostBridge;global->values[L"window"]=Value::FromObject(window);
+        window->props[L"window"]=Value::FromObject(window);window->props[L"self"]=Value::FromObject(window);
+        window->props[L"top"]=Value::FromObject(window);window->props[L"document"]=documentValue;
+        global->values[L"self"]=Value::FromObject(window);global->values[L"top"]=Value::FromObject(window);
         const auto getSelection=Native([](RuntimeCore& r,const Value&,const std::vector<Value>&){return r.SelectionValue();});
         global->values[L"getSelection"]=getSelection;window->props[L"getSelection"]=getSelection;
         auto nodeConstants=ObjectValue(ObjectKind::Plain);nodeConstants.object->props[L"ELEMENT_NODE"]=Value::Number(1);
@@ -3935,11 +4447,21 @@ struct RuntimeCore {
         const auto innerWidth=Value::Number(viewportWidth),innerHeight=Value::Number(viewportHeight);
         global->values[L"innerWidth"]=innerWidth;global->values[L"innerHeight"]=innerHeight;
         window->props[L"innerWidth"]=innerWidth;window->props[L"innerHeight"]=innerHeight;
+        global->values[L"scrollX"]=global->values[L"scrollY"]=Value::Number(0);
+        global->values[L"pageXOffset"]=global->values[L"pageYOffset"]=Value::Number(0);
+        window->props[L"scrollX"]=window->props[L"scrollY"]=Value::Number(0);
+        window->props[L"pageXOffset"]=window->props[L"pageYOffset"]=Value::Number(0);
+        auto screen=ObjectValue(ObjectKind::Plain);screen.object->props[L"width"]=innerWidth;screen.object->props[L"availWidth"]=innerWidth;
+        screen.object->props[L"height"]=innerHeight;screen.object->props[L"availHeight"]=innerHeight;
+        screen.object->props[L"colorDepth"]=Value::Number(24);screen.object->props[L"pixelDepth"]=Value::Number(24);
+        global->values[L"screen"]=screen;window->props[L"screen"]=screen;
         const auto pixelRatio=Value::Number(devicePixelRatio);
         global->values[L"devicePixelRatio"]=pixelRatio;window->props[L"devicePixelRatio"]=pixelRatio;
         auto parent=parentMessageSink?ObjectValue(ObjectKind::FrameWindow):Value::FromObject(window);
         global->values[L"parent"]=parent;window->props[L"parent"]=parent;
         global->values[L"performance"]=ObjectValue(ObjectKind::Performance);global->values[L"Math"]=ObjectValue(ObjectKind::Math);global->values[L"JSON"]=ObjectValue(ObjectKind::Json);global->values[L"Array"]=ObjectValue(ObjectKind::ArrayConstructor);
+        window->props[L"performance"]=global->values[L"performance"];window->props[L"Math"]=global->values[L"Math"];
+        window->props[L"JSON"]=global->values[L"JSON"];window->props[L"Array"]=global->values[L"Array"];
         auto objectConstructor=CreateObject(ObjectKind::ObjectConstructor);auto objectPrototype=CreateObject(ObjectKind::Plain);objectPrototype->props[L"hasOwnProperty"]=Native([](RuntimeCore& r,const Value& thisValue,const std::vector<Value>& a){const auto object=r.Deref(thisValue);return Value::Bool(!a.empty()&&object.type==Value::Type::Object&&object.object&&object.object->props.count(r.String(a[0]))!=0);});objectConstructor->props[L"prototype"]=Value::FromObject(objectPrototype);global->values[L"Object"]=Value::FromObject(objectConstructor);
         global->values[L"Number"]=ObjectValue(ObjectKind::NumberConstructor);
         global->values[L"String"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){return Value::String(a.empty()?L"":r.String(a[0]));});
@@ -3996,6 +4518,13 @@ struct RuntimeCore {
         const auto fileReader=Native([](RuntimeCore& r,const Value&,const std::vector<Value>&){return r.ObjectValue(ObjectKind::FileReader);});
         global->values[L"FileReader"]=fileReader;window->props[L"FileReader"]=fileReader;
         auto navigator=ObjectValue(ObjectKind::Plain);auto clipboard=ObjectValue(ObjectKind::Clipboard);navigator.object->props[L"clipboard"]=clipboard;
+        wchar_t localeName[LOCALE_NAME_MAX_LENGTH]{};
+        const std::wstring language=GetUserDefaultLocaleName(localeName,static_cast<int>(std::size(localeName)))>0?localeName:L"en-US";
+        navigator.object->props[L"appName"]=Value::String(L"Netscape");navigator.object->props[L"appVersion"]=Value::String(L"5.0");
+        navigator.object->props[L"userAgent"]=Value::String(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) TWebFrame/1.0");
+        navigator.object->props[L"platform"]=Value::String(L"Win32");navigator.object->props[L"language"]=Value::String(language);
+        navigator.object->props[L"languages"]=ArrayValue({Value::String(language)});navigator.object->props[L"cookieEnabled"]=Value::Bool(false);
+        navigator.object->props[L"onLine"]=Value::Bool(true);
         global->values[L"navigator"]=navigator;window->props[L"navigator"]=navigator;
         global->values[L"Date"]=ObjectValue(ObjectKind::DateConstructor);
         auto intl=ObjectValue(ObjectKind::Plain);
@@ -4072,12 +4601,15 @@ struct RuntimeCore {
                     [id](const auto& frame){return frame.first==id;}),r.frameCallbacks.end());}
             return Value::Undefined();
         });
+        window->props[L"requestAnimationFrame"]=global->values[L"requestAnimationFrame"];
+        window->props[L"cancelAnimationFrame"]=global->values[L"cancelAnimationFrame"];
         auto timeout=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){if(a.empty())return Value::Number(0);return Value::Number(r.ScheduleTimer(a[0],a.size()>1?r.Number(a[1]):0));});
         auto interval=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){if(a.empty())return Value::Number(0);return Value::Number(r.ScheduleTimer(a[0],a.size()>1?r.Number(a[1]):0,true));});
         auto clearTimeout=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){if(!a.empty())r.ClearTimer(static_cast<unsigned>(r.Number(a[0])));return Value::Undefined();});
         global->values[L"setTimeout"]=timeout;global->values[L"clearTimeout"]=clearTimeout;global->values[L"setInterval"]=interval;global->values[L"clearInterval"]=clearTimeout;window->props[L"setTimeout"]=timeout;window->props[L"clearTimeout"]=clearTimeout;window->props[L"setInterval"]=interval;window->props[L"clearInterval"]=clearTimeout;
         global->values[L"structuredClone"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){return a.empty()?Value::Undefined():r.CloneValue(a[0]);});
         global->values[L"getComputedStyle"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){if(a.empty())return r.ObjectValue(ObjectKind::Style);const auto value=r.Deref(a[0]);if(value.type==Value::Type::Object&&value.object&&value.object->kind==ObjectKind::Node){auto style=r.ObjectValue(ObjectKind::Style);style.object->node=value.object->node;style.object->props[L"$computed"]=Value::Bool(true);return style;}return r.ObjectValue(ObjectKind::Style);});
+        window->props[L"getComputedStyle"]=global->values[L"getComputedStyle"];
         auto promise=ObjectValue(ObjectKind::PromiseConstructor);
         promise.object->props[L"resolve"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){return r.PromiseResolveValue(a.empty()?Value::Undefined():a[0]);});
         promise.object->props[L"reject"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){auto result=r.PromiseValue();r.RejectPromise(result.object,a.empty()?Value::Undefined():a[0]);return result;});
@@ -4126,7 +4658,8 @@ struct RuntimeCore {
         const auto urlSearchParamsConstructor=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){return r.UrlSearchParamsValue(a.empty()?L"":r.String(a[0]));});
         global->values[L"URL"]=urlConstructor;window->props[L"URL"]=urlConstructor;
         global->values[L"URLSearchParams"]=urlSearchParamsConstructor;window->props[L"URLSearchParams"]=urlSearchParamsConstructor;
-        global->values[L"matchMedia"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>&){auto media=r.ObjectValue(ObjectKind::MediaQuery);media.object->props[L"matches"]=Value::Bool(false);return media;});
+        global->values[L"matchMedia"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){return r.MediaQueryValue(a.empty()?L"":r.String(a[0]));});
+        window->props[L"matchMedia"]=global->values[L"matchMedia"];
         auto console=ObjectValue(ObjectKind::Plain);
         for(const auto* level:{L"log",L"info",L"warn",L"error",L"debug"}){
             const std::wstring name=level;
@@ -4136,7 +4669,7 @@ struct RuntimeCore {
                 line+=L"\r\n";OutputDebugStringW(line.c_str());return Value::Undefined();
             });
         }
-        global->values[L"console"]=console;
+        global->values[L"console"]=console;window->props[L"console"]=console;
         global->values[L"fetch"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){const auto resource=a.empty()?L"":r.String(a[0]);std::wstring body;const bool loaded=r.resourceLoader&&r.resourceLoader(resource,body);auto response=r.ObjectValue(ObjectKind::Response);response.object->props[L"ok"]=Value::Bool(loaded);response.object->props[L"status"]=Value::Number(loaded?200:404);response.object->props[L"$body"]=Value::String(std::move(body));return r.PromiseResolveValue(response);});
     }
     bool CompileRun(const std::wstring& source,std::wstring* result,std::wstring* error){
@@ -4338,6 +4871,12 @@ void JavaScriptRuntime::SetViewportSize(double width,double height){
         found->second.object->props[L"innerWidth"]=widthValue;
         found->second.object->props[L"innerHeight"]=heightValue;
     }
+    const auto screen=impl_->core.global->values.find(L"screen");
+    if(screen!=impl_->core.global->values.end()&&screen->second.object){
+        screen->second.object->props[L"width"]=widthValue;screen->second.object->props[L"availWidth"]=widthValue;
+        screen->second.object->props[L"height"]=heightValue;screen->second.object->props[L"availHeight"]=heightValue;
+    }
+    impl_->core.UpdateMediaQueries();
 }
 void JavaScriptRuntime::SetDevicePixelRatio(double ratio){
     impl_->core.devicePixelRatio=std::isfinite(ratio)&&ratio>0?ratio:1;
@@ -4346,8 +4885,30 @@ void JavaScriptRuntime::SetDevicePixelRatio(double ratio){
     const auto found=impl_->core.global->values.find(L"window");
     if(found!=impl_->core.global->values.end()&&found->second.object)
         found->second.object->props[L"devicePixelRatio"]=value;
+    impl_->core.UpdateMediaQueries();
 }
-void JavaScriptRuntime::SetLocation(const std::wstring& location){impl_->core.location=location;}
+void JavaScriptRuntime::SetLocation(const std::wstring& location){
+    auto& core=impl_->core;core.location=location;
+    const auto found=core.global->values.find(L"location");
+    if(found==core.global->values.end())return;
+    const auto value=core.Deref(found->second);
+    if(value.type!=Value::Type::Object||!value.object||
+       value.object->kind!=ObjectKind::Location)return;
+    const auto query=location.find(L'?'),fragment=location.find(L'#');
+    const bool hasQuery=query!=std::wstring::npos&&
+        (fragment==std::wstring::npos||query<fragment);
+    const auto pathEnd=std::min(hasQuery?query:location.size(),
+        fragment==std::wstring::npos?location.size():fragment);
+    value.object->props[L"href"]=Value::String(location);
+    value.object->props[L"pathname"]=Value::String(location.substr(0,pathEnd));
+    value.object->props[L"search"]=Value::String(hasQuery?
+        location.substr(query,(fragment==std::wstring::npos?location.size():fragment)-query):L"");
+    value.object->props[L"hash"]=Value::String(fragment==std::wstring::npos?
+        L"":location.substr(fragment));
+}
+void JavaScriptRuntime::SetDocumentReadyState(const std::wstring& state){
+    impl_->core.documentReadyState=state==L"loading"||state==L"interactive"?state:L"complete";
+}
 void JavaScriptRuntime::NavigateToFragment(const std::wstring& fragment){
     const auto found=impl_->core.global->values.find(L"location");
     if(found!=impl_->core.global->values.end())

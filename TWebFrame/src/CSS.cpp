@@ -450,6 +450,14 @@ bool StyleSheet::Parse(const std::wstring& source, std::wstring* error) {
                     nestedMax=std::min(nestedMax,mediaValue(L"max-width",nestedMax));
                     nestedMinHeight=std::max(nestedMinHeight,mediaValue(L"min-height",nestedMinHeight));
                     nestedMaxHeight=std::min(nestedMaxHeight,mediaValue(L"max-height",nestedMaxHeight));
+                    // This embedded view has one CSS-pixel viewport rather than a
+                    // separate physical-screen layout surface. Device dimensions
+                    // therefore share that viewport and remain independent of the
+                    // Direct2D raster scale used for 100/150 percent DPI.
+                    nestedMin=std::max(nestedMin,mediaValue(L"min-device-width",nestedMin));
+                    nestedMax=std::min(nestedMax,mediaValue(L"max-device-width",nestedMax));
+                    nestedMinHeight=std::max(nestedMinHeight,mediaValue(L"min-device-height",nestedMinHeight));
+                    nestedMaxHeight=std::min(nestedMaxHeight,mediaValue(L"max-device-height",nestedMaxHeight));
                     if(prelude.find(L"prefers-reduced-motion:reduce")!=std::wstring::npos||
                        prelude.find(L"prefers-reduced-motion: reduce")!=std::wstring::npos)
                         nestedEnabled=false;
@@ -970,6 +978,14 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
         if(pair.first.rfind(L"--",0)==0)continue;
         applyDeclaration(pair.first, pair.second, {false, 1000, 0});
     }
+    // HTML hidden-state inputs are non-rendered controls. Chromium enforces
+    // this as a user-agent !important rule, so even a broad author rule such
+    // as `input { display:block }` must not expose their submitted values.
+    // Keep the rule in the common style cascade rather than teaching table or
+    // form layout about one particular page.
+    if(pseudo.empty()&&node&&node->tag==L"input"&&
+       ToLower(Trim(node->Attribute(L"type")))==L"hidden")
+        (*result.values)[L"display"]=L"none";
     return result;
 }
 

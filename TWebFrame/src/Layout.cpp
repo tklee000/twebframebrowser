@@ -362,6 +362,82 @@ bool ClipsOverflow(const LayoutBox& box) {
     return clips(overflow)||clips(overflowX)||clips(overflowY);
 }
 
+enum class FloatSide { None, Left, Right };
+
+FloatSide UsedFloatSide(const ComputedStyle& style) {
+    const auto value=ToLower(Trim(style.Get(L"float",L"none")));
+    if(value==L"left"||value==L"inline-start")return FloatSide::Left;
+    if(value==L"right"||value==L"inline-end")return FloatSide::Right;
+    return FloatSide::None;
+}
+
+bool EstablishesBlockFormattingContext(const LayoutBox& box) {
+    if(!box.parent||UsedFloatSide(box.style)!=FloatSide::None)return true;
+    const auto position=ToLower(Trim(box.style.Get(L"position",L"static")));
+    if(position==L"absolute"||position==L"fixed")return true;
+    const auto display=ToLower(Trim(box.style.Get(L"display",L"block")));
+    if(display==L"flow-root"||display==L"inline-block"||display==L"table-cell"||
+       display==L"table-caption"||display==L"flex"||display==L"inline-flex"||
+       display==L"grid"||display==L"inline-grid")return true;
+    const auto overflow=ToLower(Trim(box.style.Get(L"overflow",L"visible")));
+    const auto overflowX=ToLower(Trim(box.style.Get(L"overflow-x",overflow)));
+    const auto overflowY=ToLower(Trim(box.style.Get(L"overflow-y",overflow)));
+    const auto creates=[](const std::wstring& value){return value!=L"visible"&&value!=L"clip";};
+    return creates(overflow)||creates(overflowX)||creates(overflowY);
+}
+
+struct FloatArea {
+    LayoutRect rect;
+    FloatSide side=FloatSide::None;
+};
+
+bool ClearIncludes(FloatSide side,const std::wstring& clear) {
+    const auto value=ToLower(Trim(clear));
+    if(value==L"both")return true;
+    if(side==FloatSide::Left)return value==L"left"||value==L"inline-start";
+    if(side==FloatSide::Right)return value==L"right"||value==L"inline-end";
+    return false;
+}
+
+float ClearedFloatY(const std::vector<FloatArea>& floats,float y,const std::wstring& clear) {
+    float result=y;
+    for(const auto& area:floats)if(ClearIncludes(area.side,clear))
+        result=std::max(result,area.rect.y+area.rect.height);
+    return result;
+}
+
+void AvailableFloatBand(const std::vector<FloatArea>& floats,float containerLeft,
+                        float containerRight,float y,float& left,float& right,
+                        float& nextBottom) {
+    left=containerLeft;right=containerRight;
+    nextBottom=std::numeric_limits<float>::infinity();
+    for(const auto& area:floats){
+        const float bottom=area.rect.y+area.rect.height;
+        if(area.rect.y<=y+0.01f&&bottom>y+0.01f){
+            if(area.side==FloatSide::Left)left=std::max(left,area.rect.x+area.rect.width);
+            else if(area.side==FloatSide::Right)right=std::min(right,area.rect.x);
+            nextBottom=std::min(nextBottom,bottom);
+        }
+    }
+}
+
+LayoutRect PlaceFloat(const std::vector<FloatArea>& floats,float containerLeft,
+                      float containerRight,float startY,float width,float height,
+                      FloatSide side,const std::wstring& clear=L"") {
+    float y=ClearedFloatY(floats,startY,clear);
+    const float containerWidth=std::max(0.0f,containerRight-containerLeft);
+    width=std::min(std::max(0.0f,width),containerWidth);
+    for(size_t attempt=0;attempt<=floats.size();++attempt){
+        float left=containerLeft,right=containerRight,nextBottom=0;
+        AvailableFloatBand(floats,containerLeft,containerRight,y,left,right,nextBottom);
+        if(width<=right-left+0.01f)
+            return {side==FloatSide::Right?right-width:left,y,width,height};
+        if(!std::isfinite(nextBottom)||nextBottom<=y+0.01f)break;
+        y=nextBottom;
+    }
+    return {side==FloatSide::Right?containerRight-width:containerLeft,y,width,height};
+}
+
 LayoutRect IntersectRects(const LayoutRect& left,const LayoutRect& right) {
     const float x=std::max(left.x,right.x),y=std::max(left.y,right.y);
     const float r=std::min(left.x+left.width,right.x+right.width);
@@ -2025,7 +2101,13 @@ std::vector<float> ResolveTableColumns(const LayoutBox& table,const TableGridMod
 
     for(const auto& cell:model.cells){
         if(fixed&&cell.row!=0)continue;
-        const auto raw=Trim(cell.box->style.Get(L"width"));
+        auto raw=Trim(cell.box->style.Get(L"width"));
+        // HTML width on a table cell is a presentational hint.  Fixed-layout
+        // tables commonly rely on it for the first column even when no CSS
+        // width declaration exists (for example an avatar column followed by
+        // a fluid text column).
+        if((raw.empty()||raw==L"auto")&&cell.box->node)
+            raw=Trim(cell.box->node->Attribute(L"width"));
         if(!raw.empty()&&raw!=L"auto")
             distributeDeficit(explicitWidths,cell,
                 StyleSheet::Length(raw,availableWidth,viewportWidth,0),nullptr);
@@ -2097,6 +2179,21 @@ float MinContentWidth(const LayoutBox& box){
     value+=padding.left+padding.right+border.left+border.right+margin.left+margin.right;
     const auto maximum=Trim(box.style.Get(L"max-width"));if(!maximum.empty()&&maximum!=L"none"&&maximum!=L"auto")value=std::min(value,StyleSheet::Length(maximum,500,500,value));
     return remember(std::max(0.0f,value));
+}
+
+float FloatOuterWidth(const LayoutBox& box,float availableWidth,float viewportWidth){
+    const auto width=ToLower(Trim(box.style.Get(L"width")));
+    if(!width.empty()&&width!=L"auto")
+        return BlockOuterWidth(box,availableWidth,viewportWidth);
+
+    // CSS 2.1 floats with an automatic inline size are shrink-to-fit.  In
+    // particular, an inline <span> that becomes a float must not inherit the
+    // fill-available width used by an ordinary block.  All three operands are
+    // outer widths here (including decorations and margins), which keeps the
+    // result suitable for PlaceFloat and stable in CSS DIPs at every DPI.
+    const float preferredMinimum=MinContentWidth(box);
+    const float preferred=std::max(preferredMinimum,NaturalWidth(box));
+    return std::min(std::max(preferredMinimum,availableWidth),preferred);
 }
 
 float NaturalGridHeight(const LayoutBox& box,float availableWidth);
@@ -2205,54 +2302,126 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
                     if(row&&child->node->tag==L"br"){
                         value+=lineHeight>0?lineHeight:LineHeight(child->style);lineHeight=0;continue;
                     }
-                    if(row)lineHeight=std::max(lineHeight,NaturalHeight(*child,innerWidth));
+                    if(row){
+                        // An inline replaced element is measured from its own used
+                        // width. Passing the entire line width can expand an auto-
+                        // height icon to the width of its link or table cell.
+                        const float childWidth=std::max(1.0f,
+                            std::min(NaturalWidth(*child),innerWidth));
+                        lineHeight=std::max(lineHeight,NaturalHeight(*child,childWidth));
+                    }
                     else value+=NaturalHeight(*child,innerWidth);
                     ++visible;
                 }
                 if(row)value+=lineHeight;
                 if(flex&&!row)value+=rowGap*std::max(0,visible-1);
             }else{
-                // Normal block flow groups adjacent inline boxes into lines.
-                // A <br> flushes the current line, and consecutive breaks add
-                // an empty line instead of behaving like a tall empty block.
-                float lineWidth=0,lineHeight=0;
-                auto flushLine=[&]{value+=lineHeight;lineWidth=0;lineHeight=0;};
-                for(auto& child:box.children){
-                    if(!child->visible||child->style.Is(L"position",L"absolute")||
-                       child->style.Is(L"position",L"fixed"))continue;
-                    if(child->node->tag==L"br"){
-                        if(lineWidth>0||lineHeight>0)flushLine();
-                        else value+=LineHeight(child->style);
-                        continue;
-                    }
-                    if(IsInlineLevel(child->style.Get(L"display"))){
-                        const float childWidth=NaturalWidth(*child);
-                        if(lineWidth>0&&lineWidth+childWidth>innerWidth+0.5f)flushLine();
-                        lineWidth+=std::min(childWidth,innerWidth);
-                        const bool atomic=IsAtomicInlineLevel(*child);
-                        float childHeight=NaturalHeight(*child,
-                            std::max(1.0f,std::min(childWidth,innerWidth)));
-                        if(!atomic&&child->node->type==NodeType::Element&&
-                           !IsBlockifiedItem(*child)){
-                            const auto childPadding=EdgeValues(child->style,L"padding",innerWidth,innerWidth);
-                            const auto childBorder=BorderValues(child->style);
-                            const auto childMargin=EdgeValues(child->style,L"margin",innerWidth,innerWidth);
-                            childHeight=std::max(LineHeight(child->style),childHeight-
-                                childPadding.top-childPadding.bottom-childBorder.top-childBorder.bottom-
-                                childMargin.top-childMargin.bottom);
+                const bool hasFloats=std::any_of(box.children.begin(),box.children.end(),
+                    [](const auto& child){return child->visible&&
+                        UsedFloatSide(child->style)!=FloatSide::None;});
+                if(hasFloats){
+                    // Floats are removed from normal flow and share each
+                    // available horizontal band. A block formatting context
+                    // with auto height encloses their margin boxes.
+                    std::vector<FloatArea> floats;
+                    float cursor=0,lineWidth=0,lineHeight=0,lineStart=0,maxFloatBottom=0;
+                    auto flushLine=[&]{
+                        cursor+=lineHeight;lineWidth=0;lineHeight=0;lineStart=0;
+                    };
+                    for(auto& child:box.children){
+                        if(!child->visible||child->style.Is(L"position",L"absolute")||
+                           child->style.Is(L"position",L"fixed"))continue;
+                        const auto side=UsedFloatSide(child->style);
+                        if(side!=FloatSide::None){
+                            if(lineWidth>0||lineHeight>0)flushLine();
+                            const float childWidth=FloatOuterWidth(*child,innerWidth,availableWidth);
+                            const float childHeight=NaturalHeight(*child,std::max(1.0f,childWidth));
+                            const auto placed=PlaceFloat(floats,0,innerWidth,cursor,childWidth,
+                                childHeight,side,child->style.Get(L"clear"));
+                            floats.push_back({placed,side});
+                            maxFloatBottom=std::max(maxFloatBottom,placed.y+placed.height);
+                            continue;
                         }
-                        // Every CSS inline formatting context carries a strut
-                        // with the containing block's font and line-height. A
-                        // line made only from smaller inline descendants must
-                        // therefore not collapse below the parent's line box.
-                        lineHeight=std::max(LineHeight(box.style),std::max(lineHeight,
-                            childHeight+(atomic?InlineFormattingDescent(box.style):0.0f)));
-                    }else{
-                        if(lineWidth>0||lineHeight>0)flushLine();
-                        value+=NaturalHeight(*child,innerWidth);
+                        cursor=ClearedFloatY(floats,cursor,child->style.Get(L"clear"));
+                        if(child->node->tag==L"br"){
+                            if(lineWidth>0||lineHeight>0)flushLine();
+                            else cursor+=LineHeight(child->style);
+                            continue;
+                        }
+                        if(IsInlineLevel(child->style.Get(L"display"))){
+                            float left=0,right=innerWidth,nextBottom=0;
+                            AvailableFloatBand(floats,0,innerWidth,cursor,left,right,nextBottom);
+                            const float childWidth=NaturalWidth(*child);
+                            if(lineWidth==0)lineStart=left;
+                            if(lineStart+lineWidth+childWidth>right+0.5f){
+                                if(lineWidth>0||lineHeight>0)flushLine();
+                                else if(std::isfinite(nextBottom))cursor=nextBottom;
+                                AvailableFloatBand(floats,0,innerWidth,cursor,left,right,nextBottom);
+                                lineStart=left;
+                            }
+                            lineWidth+=std::min(childWidth,std::max(0.0f,right-lineStart));
+                            const bool atomic=IsAtomicInlineLevel(*child);
+                            lineHeight=std::max(LineHeight(box.style),std::max(lineHeight,
+                                NaturalHeight(*child,std::max(1.0f,std::min(childWidth,
+                                    std::max(1.0f,right-lineStart))))+
+                                (atomic?InlineFormattingDescent(box.style):0.0f)));
+                        }else{
+                            if(lineWidth>0||lineHeight>0)flushLine();
+                            float left=0,right=innerWidth,nextBottom=0;
+                            AvailableFloatBand(floats,0,innerWidth,cursor,left,right,nextBottom);
+                            if(right<=left+0.01f&&std::isfinite(nextBottom)){
+                                cursor=nextBottom;
+                                AvailableFloatBand(floats,0,innerWidth,cursor,left,right,nextBottom);
+                            }
+                            cursor+=NaturalHeight(*child,std::max(1.0f,right-left));
+                        }
                     }
+                    if(lineWidth>0||lineHeight>0)flushLine();
+                    value=cursor;
+                    if(EstablishesBlockFormattingContext(box))value=std::max(value,maxFloatBottom);
+                }else{
+                    // Normal block flow groups adjacent inline boxes into lines.
+                    // A <br> flushes the current line, and consecutive breaks add
+                    // an empty line instead of behaving like a tall empty block.
+                    float lineWidth=0,lineHeight=0;
+                    auto flushLine=[&]{value+=lineHeight;lineWidth=0;lineHeight=0;};
+                    for(auto& child:box.children){
+                        if(!child->visible||child->style.Is(L"position",L"absolute")||
+                           child->style.Is(L"position",L"fixed"))continue;
+                        if(child->node->tag==L"br"){
+                            if(lineWidth>0||lineHeight>0)flushLine();
+                            else value+=LineHeight(child->style);
+                            continue;
+                        }
+                        if(IsInlineLevel(child->style.Get(L"display"))){
+                            const float childWidth=NaturalWidth(*child);
+                            if(lineWidth>0&&lineWidth+childWidth>innerWidth+0.5f)flushLine();
+                            lineWidth+=std::min(childWidth,innerWidth);
+                            const bool atomic=IsAtomicInlineLevel(*child);
+                            float childHeight=NaturalHeight(*child,
+                                std::max(1.0f,std::min(childWidth,innerWidth)));
+                            if(!atomic&&child->node->type==NodeType::Element&&
+                               !IsBlockifiedItem(*child)){
+                                const auto childPadding=EdgeValues(child->style,L"padding",innerWidth,innerWidth);
+                                const auto childBorder=BorderValues(child->style);
+                                const auto childMargin=EdgeValues(child->style,L"margin",innerWidth,innerWidth);
+                                childHeight=std::max(LineHeight(child->style),childHeight-
+                                    childPadding.top-childPadding.bottom-childBorder.top-childBorder.bottom-
+                                    childMargin.top-childMargin.bottom);
+                            }
+                            // Every CSS inline formatting context carries a strut
+                            // with the containing block's font and line-height. A
+                            // line made only from smaller inline descendants must
+                            // therefore not collapse below the parent's line box.
+                            lineHeight=std::max(LineHeight(box.style),std::max(lineHeight,
+                                childHeight+(atomic?InlineFormattingDescent(box.style):0.0f)));
+                        }else{
+                            if(lineWidth>0||lineHeight>0)flushLine();
+                            value+=NaturalHeight(*child,innerWidth);
+                        }
+                    }
+                    if(lineWidth>0||lineHeight>0)flushLine();
                 }
-                if(lineWidth>0||lineHeight>0)flushLine();
             }
         }
         value+=padding.top+padding.bottom+border.top+border.bottom;
@@ -4567,8 +4736,12 @@ void LayoutEngine::UpdateTraversalMetadata(LayoutBox& box){
             box.overlayChildren.push_back(child);
             continue;
         }
-        const float bottom=child->rect.y+child->rect.height;
-        if(child->rect.y<previousBottom-0.01f){
+        // Indexed traversal must include visible overflow. If descendant bounds
+        // overlap the next sibling, retain the full paint order instead of
+        // building an index that can skip those descendants.
+        const float top=child->subtreeBounds.y;
+        const float bottom=top+child->subtreeBounds.height;
+        if(top<previousBottom-0.01f){
             box.verticallyOrderedChildren.clear();
             box.overlayChildren.clear();
             break;
@@ -4724,7 +4897,10 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
             BlockOuterHeight(child,box.content.height,width,viewportHeight_,viewportWidth_):
             NaturalHeight(child,width);
     };
-    bool inlineOnly=!box.children.empty();std::vector<std::pair<float,float>> inlineSizes;float inlineWidth=0,inlineHeight=0;
+    const bool hasFloats=std::any_of(box.children.begin(),box.children.end(),
+        [](const auto& child){return child->visible&&
+            UsedFloatSide(child->style)!=FloatSide::None;});
+    bool inlineOnly=!hasFloats&&!box.children.empty();std::vector<std::pair<float,float>> inlineSizes;float inlineWidth=0,inlineHeight=0;
     for(auto& child:box.children){if(!child->visible)continue;if(child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed"))continue;if(child->node->tag==L"br"){inlineOnly=false;break;}const auto display=child->style.Get(L"display");if(!IsInlineLevel(display)){inlineOnly=false;break;}const float width=inlineOuterWidth(*child),height=inlineOuterHeight(*child,width);inlineSizes.push_back({width,height});inlineWidth+=width;inlineHeight=std::max(inlineHeight,height);}
     const auto whiteSpace=box.style.Get(L"white-space");
     const bool noWrap=PreventsTextWrapping(whiteSpace);
@@ -4759,6 +4935,7 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
         return;
     }
     float cursorY=box.content.y;float lineX=box.content.x;float lineHeight=0;
+    std::vector<FloatArea> floats;
     // The root body and its first in-flow block share their adjoining top
     // margin when neither establishes a separating border, padding, or scroll
     // container. The body margin has already positioned this root box, so
@@ -4792,6 +4969,28 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
             const LayoutRect area=child->style.Is(L"position",L"fixed")?LayoutRect{0,0,viewportWidth_,viewportHeight_}:AbsoluteContainingBlock(box);
             LayoutBoxTree(*child,PositionedRect(*child,area,viewportWidth_,viewportHeight_),true);continue;
         }
+        const auto floatSide=UsedFloatSide(child->style);
+        if(floatSide!=FloatSide::None){
+            if(lineX>box.content.x){cursorY+=lineHeight;lineX=box.content.x;lineHeight=0;}
+            const float w=FloatOuterWidth(*child,flowWidth,viewportWidth_);
+            const auto cssH=ToLower(Trim(child->style.Get(L"height")));
+            const bool explicitHeight=!cssH.empty()&&cssH!=L"auto";
+            const bool resolvedHeight=explicitHeight&&
+                (cssH.find(L'%')==std::wstring::npos||definiteHeight);
+            const float h=resolvedHeight?
+                BlockOuterHeight(*child,box.content.height,flowWidth,viewportHeight_,viewportWidth_):
+                NaturalHeight(*child,std::max(1.0f,w));
+            const auto placed=PlaceFloat(floats,box.content.x,box.content.x+flowWidth,
+                cursorY,w,h,floatSide,child->style.Get(L"clear"));
+            LayoutBoxTree(*child,placed,true,true,resolvedHeight);
+            floats.push_back({placed,floatSide});
+            continue;
+        }
+        const float clearedY=ClearedFloatY(floats,cursorY,child->style.Get(L"clear"));
+        if(clearedY>cursorY+0.01f){
+            if(lineX>box.content.x)cursorY+=lineHeight;
+            cursorY=std::max(cursorY,clearedY);lineX=box.content.x;lineHeight=0;
+        }
         if(child->node->tag==L"br"){
             const float breakHeight=LineHeight(child->style);
             LayoutBoxTree(*child,{lineX,cursorY,0,breakHeight},true,false,false);
@@ -4799,10 +4998,19 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
             lineX=box.content.x;lineHeight=0;continue;
         }
         const auto d=child->style.Get(L"display");const bool inlineBox=IsInlineLevel(d);
-        if(inlineBox){float w=inlineOuterWidth(*child);const bool wrapText=child->node->type==NodeType::Text&&!noWrap;const bool atomic=IsAtomicInlineLevel(*child);const bool wrappingInlineContainer=!noWrap&&child->node->type==NodeType::Element&&!atomic&&!child->children.empty();if((wrapText||wrappingInlineContainer)&&lineX+w>box.content.x+flowWidth+0.5f){if(lineX>box.content.x){cursorY+=lineHeight;lineX=box.content.x;lineHeight=0;}w=std::min(w,flowWidth);}float h=(wrapText||wrappingInlineContainer)?NaturalHeight(*child,w):inlineOuterHeight(*child,w);if(!wrapText&&!wrappingInlineContainer&&lineX+w>box.content.x+flowWidth+0.5f&&lineX>box.content.x){cursorY+=lineHeight;lineX=box.content.x;lineHeight=0;}const float baselineOffset=atomic?0.0f:InlineBaselineOffset(box.style,*child,flowWidth,viewportWidth_);LayoutBoxTree(*child,{lineX,cursorY+baselineOffset,w,h},true,false,false);lineX+=w;lineHeight=std::max(LineHeight(box.style),std::max(lineHeight,h+(atomic?InlineFormattingDescent(box.style):0.0f)));}
+        if(inlineBox){float bandLeft=box.content.x,bandRight=box.content.x+flowWidth,nextBottom=0;AvailableFloatBand(floats,box.content.x,box.content.x+flowWidth,cursorY,bandLeft,bandRight,nextBottom);if(lineX==box.content.x)lineX=bandLeft;float w=inlineOuterWidth(*child);const bool wrapText=child->node->type==NodeType::Text&&!noWrap;const bool atomic=IsAtomicInlineLevel(*child);const bool wrappingInlineContainer=!noWrap&&child->node->type==NodeType::Element&&!atomic&&!child->children.empty();if((wrapText||wrappingInlineContainer)&&lineX+w>bandRight+0.5f){if(lineX>bandLeft){cursorY+=lineHeight;lineHeight=0;}else if(std::isfinite(nextBottom))cursorY=nextBottom;AvailableFloatBand(floats,box.content.x,box.content.x+flowWidth,cursorY,bandLeft,bandRight,nextBottom);lineX=bandLeft;w=std::min(w,std::max(0.0f,bandRight-bandLeft));}float h=(wrapText||wrappingInlineContainer)?NaturalHeight(*child,w):inlineOuterHeight(*child,w);if(!wrapText&&!wrappingInlineContainer&&lineX+w>bandRight+0.5f&&lineX>bandLeft){cursorY+=lineHeight;lineHeight=0;AvailableFloatBand(floats,box.content.x,box.content.x+flowWidth,cursorY,bandLeft,bandRight,nextBottom);lineX=bandLeft;}const float baselineOffset=atomic?0.0f:InlineBaselineOffset(box.style,*child,flowWidth,viewportWidth_);LayoutBoxTree(*child,{lineX,cursorY+baselineOffset,w,h},true,false,false);lineX+=w;lineHeight=std::max(LineHeight(box.style),std::max(lineHeight,h+(atomic?InlineFormattingDescent(box.style):0.0f)));}
         else{
             if(lineX>box.content.x){cursorY+=lineHeight;lineX=box.content.x;lineHeight=0;}
-            float h=NaturalHeight(*child,flowWidth);const auto cssH=child->style.Get(L"height");
+            float bandLeft=box.content.x,bandRight=box.content.x+flowWidth,nextBottom=0;
+            AvailableFloatBand(floats,box.content.x,box.content.x+flowWidth,cursorY,
+                               bandLeft,bandRight,nextBottom);
+            if(bandRight<=bandLeft+0.01f&&std::isfinite(nextBottom)){
+                cursorY=nextBottom;
+                AvailableFloatBand(floats,box.content.x,box.content.x+flowWidth,cursorY,
+                                   bandLeft,bandRight,nextBottom);
+            }
+            const float availableWidth=std::max(0.0f,bandRight-bandLeft);
+            float h=NaturalHeight(*child,std::max(1.0f,availableWidth));const auto cssH=child->style.Get(L"height");
             const bool explicitHeight=!cssH.empty()&&cssH!=L"auto";
             if(explicitHeight)
                 h=BlockOuterHeight(*child,box.content.height,flowWidth,viewportHeight_,viewportWidth_);
@@ -4823,10 +5031,10 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
                     h=constrained+decoration+childMargin.top+childMargin.bottom;
                 }
             }
-            const float w=BlockOuterWidth(*child,flowWidth,viewportWidth_);
+            const float w=BlockOuterWidth(*child,availableWidth,viewportWidth_);
             const bool autoLeft=ToLower(Trim(child->style.Get(L"margin-left")))==L"auto";
             const bool autoRight=ToLower(Trim(child->style.Get(L"margin-right")))==L"auto";
-            const float freeWidth=std::max(0.0f,flowWidth-w);float childX=box.content.x;
+            const float freeWidth=std::max(0.0f,availableWidth-w);float childX=bandLeft;
             if(autoLeft&&autoRight)childX+=freeWidth/2;else if(autoLeft)childX+=freeWidth;
             LayoutBoxTree(*child,{childX,cursorY,w,h},true,true,explicitHeight);cursorY+=h;
         }
@@ -5386,8 +5594,9 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
                             const LayoutBox* deferredScope){
     if(box.node&&box.node->modal&& &box!=paintingTopLayer_)return;
     if(IsDeferredContext(box,deferredScope))return;
-    const bool intersects=box.rect.x<clipBounds.x+clipBounds.width&&box.rect.x+box.rect.width>clipBounds.x&&box.rect.y<clipBounds.y+clipBounds.height&&box.rect.y+box.rect.height>clipBounds.y;
-    if(!box.visible||box.rect.width<=0||box.rect.height<=0||!intersects)return;
+    // An auto-sized ancestor may be outside the clip while an overflow-visible
+    // descendant remains inside it. Cull the painted subtree as a unit.
+    if(!box.visible||!Intersects(box.subtreeBounds,clipBounds))return;
     float opacity=1.0f;TryParseFloat(box.style.Get(L"opacity",L"1"),opacity);
     opacity=std::max(0.0f,std::min(1.0f,opacity));
     if(box.style.Is(L"visibility",L"hidden")||opacity<=0.001f)return;D2D1_MATRIX_3X2_F previousTransform{};const bool transformed=ApplyPaintTransform(target,box,previousTransform);Microsoft::WRL::ComPtr<ID2D1Layer> opacityLayer;if(opacity<0.999f&&SUCCEEDED(target->CreateLayer(nullptr,&opacityLayer)))target->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(),nullptr,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,D2D1::IdentityMatrix(),opacity),opacityLayer.Get());const auto background=BackgroundColor(box.style);ID2D1SolidColorBrush* brush=nullptr;
@@ -5621,8 +5830,10 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
     if(!box.verticallyOrderedChildren.empty()){
         const float top=childClip.y,bottom=childClip.y+childClip.height;
         auto first=std::lower_bound(box.verticallyOrderedChildren.begin(),box.verticallyOrderedChildren.end(),top,
-            [](const LayoutBox* child,float value){return child->rect.y+child->rect.height<=value;});
-        for(auto it=first;it!=box.verticallyOrderedChildren.end()&&(*it)->rect.y<bottom;++it)paintChild(**it);
+            [](const LayoutBox* child,float value){return child->subtreeBounds.y+
+                child->subtreeBounds.height<=value;});
+        for(auto it=first;it!=box.verticallyOrderedChildren.end()&&
+            (*it)->subtreeBounds.y<bottom;++it)paintChild(**it);
         for(auto* child:box.overlayChildren)paintChild(*child);
     }else{
         for(auto* child:box.paintChildren)paintChild(*child);
@@ -6110,9 +6321,10 @@ std::shared_ptr<Node> LayoutEngine::HitTestBox(const LayoutBox& box,float x,floa
         for(auto it=box.overlayChildren.rbegin();it!=box.overlayChildren.rend();++it)
             if(auto node=HitTestBox(**it,x,y))return node;
         auto first=std::lower_bound(box.verticallyOrderedChildren.begin(),box.verticallyOrderedChildren.end(),y,
-            [](const LayoutBox* child,float value){return child->rect.y+child->rect.height<=value;});
+            [](const LayoutBox* child,float value){return child->subtreeBounds.y+
+                child->subtreeBounds.height<=value;});
         auto last=first;
-        while(last!=box.verticallyOrderedChildren.end()&&(*last)->rect.y<=y)++last;
+        while(last!=box.verticallyOrderedChildren.end()&&(*last)->subtreeBounds.y<=y)++last;
         while(last!=first){--last;if(auto node=HitTestBox(**last,x,y))return node;}
     }else{
         for(auto it=box.paintChildren.rbegin();it!=box.paintChildren.rend();++it)

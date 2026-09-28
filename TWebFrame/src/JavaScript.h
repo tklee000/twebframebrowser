@@ -99,6 +99,7 @@ public:
     void SetViewportSize(double width, double height);
     void SetDevicePixelRatio(double ratio);
     void SetLocation(const std::wstring& location);
+    void SetDocumentReadyState(const std::wstring& state);
     void NavigateToFragment(const std::wstring& fragment);
     bool Load(const std::wstring& source, std::wstring* error = nullptr);
     bool Execute(const std::wstring& source, std::wstring* result = nullptr,
