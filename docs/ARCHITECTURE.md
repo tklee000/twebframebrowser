@@ -28,16 +28,29 @@ The public API owns the following responsibilities:
 
 The bridge name is compatible with existing local pages, but no WebView2 component is used.
 
-## Document lifecycle
+## Document lifecycle and threading
 
-Page loading is synchronous in version 0.8:
+The compatibility `NavigateToString()` path remains synchronous. Hosts that
+provide thread-safe resource callbacks can enable the parallel pipeline with
+`SetParallelResourceLoading(true)` and `NavigateToStringAsync()`:
 
-1. Parse the HTML document.
-2. Resolve host-provided external stylesheets and scripts.
-3. Parse the stylesheet and compile/execute scripts.
-4. Build style and layout state.
-5. Dispatch `DOMContentLoaded`.
-6. Notify the C++ load handler.
+1. A bounded CPU pool parses HTML into an isolated `Document`.
+2. External stylesheets, scripts, and iframe sources are loaded away from the
+   UI thread; CSS is parsed in the same worker-owned preparation result.
+3. A navigation generation is checked before the prepared document and
+   stylesheet are adopted by the stable UI-thread `Document` and `StyleSheet`.
+4. Images are fetched and decoded to CPU-side BGRA frames concurrently. Only
+   Direct2D bitmap creation and painting use the UI thread.
+5. JavaScript execution, DOM mutation, event ordering, final layout publication,
+   HWND access, and Direct2D/DirectWrite access stay on the owning UI thread.
+6. Dynamic `fetch()` and asynchronous `XMLHttpRequest` delegate to the host
+   resource loader. Host I/O runs on the worker pool and its result is posted
+   back before promise reactions or XHR completion callbacks execute.
+
+`CancelPendingLoads()` increments both document and resource generations. Work
+already inside host I/O may finish, but stale results are discarded and never
+touch the view. Destruction uses the same lifetime gate and drains posted result
+messages before releasing the runtime.
 
 DOM and inline-style mutations invalidate style or layout state. The next paint recalculates the required shared engine state. Viewport-only size changes can reuse the layout and text caches when no media-query boundary is crossed. Dirty-subtree layout and browser-scale incremental rendering are not goals of version 0.8.
 
@@ -84,7 +97,7 @@ DOM objects, events, browser-compatibility objects, and the C++ message bridge a
 
 ## Resource loading
 
-`SetResourceLoader()` gives the C++ host one explicit resource boundary. The engine uses it for page-relative external stylesheets, scripts, iframe documents, and `fetch()` data.
+`SetResourceLoader()` gives the C++ host one explicit resource boundary. The engine uses it for page-relative external stylesheets, scripts, iframe documents, `fetch()` data, and `XMLHttpRequest` text responses. When parallel resource loading is enabled, this callback must be safe for concurrent worker calls.
 
 TWebFrame does not contain an HTTP stack. The host decides whether a path maps to a file, an executable resource, generated text, or another trusted application source. The loader returns text and does not create browser origin, CORS, cookie, cache, or credential semantics.
 

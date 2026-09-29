@@ -8,6 +8,14 @@ TWebFrame is a small, Windows-native HTML UI frame for C and C++ applications. I
 
 TWebFrame is **not a general-purpose web browser** and version 0.8 does **not** claim complete HTML, CSS, DOM, Web API, or ECMAScript conformance. Its current purpose is to render trusted, application-owned HTML user interfaces and connect them to a native C/C++ host without embedding Chromium, WebView2, CEF, or an external JavaScript engine.
 
+The separate [TWebFrame Browser solution](TWebFrameBrowser.sln) adds a WinHTTP-based
+HTTPS/HTTP host, tabs, address bar, history, and live page loading using this
+project's own renderer. See [browser instructions and compatibility limits](Browser/README.md).
+
+For side-by-side renderer comparison, [Webview2Browser.sln](Webview2Browser.sln)
+builds the same-sized Win32 browser chrome and renders only the page body with
+Microsoft Edge WebView2. See [WebView2 comparison instructions](WebView2Browser/README.md).
+
 > TWebFrame 0.8 should be treated as an application UI runtime, not as a browser security boundary. Do not use it to display arbitrary or untrusted Internet content.
 
 ## Project goals
@@ -40,9 +48,13 @@ view->SetLoadHandler([](bool success, const std::wstring& error) {
 
 view->SetResourceLoader([](const std::wstring& path, std::wstring& text) {
     // Resolve application-owned stylesheets, scripts, iframe documents,
-    // and JSON requested through fetch().
+    // and data requested through fetch() or XMLHttpRequest.
     return false;
 });
+
+// Opt in only when the resource callbacks above are thread-safe. HTML/CSS
+// preparation, fetch I/O, and image decode then use a bounded worker pool.
+view->SetParallelResourceLoading(true);
 
 view->NavigateToString(LR"(
     <button id="run">Run</button>
@@ -52,6 +64,9 @@ view->NavigateToString(LR"(
         });
     </script>
 )");
+
+// For network-sized documents, use NavigateToStringAsync() instead. The load
+// handler runs on the view's UI thread after the newest generation is adopted.
 
 std::wstring result;
 std::wstring error;
@@ -125,7 +140,7 @@ The following list describes the tested version 0.8 implementation. It is a supp
 - `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`, `requestAnimationFrame`, and `cancelAnimationFrame`.
 - Compatibility subsets of `performance.now`, `structuredClone`, `CSS.escape`, `URLSearchParams`, `localStorage`, `location.search`, `getComputedStyle`, and `matchMedia`.
 - DOM bindings and the bidirectional `window.chrome.webview` host-message bridge.
-- Host-backed `fetch(...).json()` for application resources supplied through `SetResourceLoader()`.
+- Host-backed `fetch(...).json()` and `XMLHttpRequest` for application resources supplied through `SetResourceLoader()`.
 
 ### Input and accessibility
 
@@ -149,7 +164,8 @@ Anything not listed above should be considered unsupported until it has both an 
 - `fetch()` does not access the network. It only calls the host resource loader and currently exposes the response fields and JSON path required by local application pages.
 - External stylesheets, scripts, iframe documents, and fetched data must be supplied by the host.
 - `localStorage` is an in-runtime compatibility object and is not persistent browser storage.
-- Service workers, web workers, WebSocket, XMLHttpRequest, IndexedDB, Cache Storage, and the broader storage/network platform are not implemented.
+- Service workers, web workers, WebSocket, IndexedDB, Cache Storage, and the broader storage/network platform are not implemented.
+- `XMLHttpRequest` is a host-resource compatibility layer for jQuery-style text/JSON requests. It does not implement browser networking, upload streams, cookie/CORS enforcement, or complete HTTP header and status semantics.
 - This runtime must not be used to execute untrusted web content.
 
 ### HTML and DOM gaps
@@ -198,15 +214,25 @@ The root solution contains:
 - `TWebFrame` — reusable static library.
 - `TWebFrameTests` — self-contained regression tests for the shared HTML, DOM, CSS, layout, JavaScript, input, and accessibility paths.
 
-All test projects and test sources are maintained under `TWebFrame\tests`.
+All test projects and test sources are maintained under `TWebFrame2\tests`.
 
 ## Test
 
 ```powershell
-.\TWebFrame\tests\bin\x64\Release\TWebFrameTests.exe
+.\TWebFrame2\tests\bin\x64\Release\TWebFrameTests.exe
 ```
 
 The tests construct their own fixtures and do not require application-specific HTML, CSS, or JavaScript files. At version 0.8, the regression suite is the most precise executable definition of supported behavior.
+
+To run the optional full-distribution jQuery 1.11.2 compatibility test, pass the
+downloaded distribution file. The test initializes the complete source and
+exercises Sizzle, traversal, DOM mutation, attributes, CSS, data, events,
+Callbacks/Deferred, queues, form serialization, ready handling, and XHR-backed
+`getJSON()`:
+
+```powershell
+.\TWebFrame2\tests\bin\x64\Release\TWebFrameTests.exe --jquery C:\path\to\jquery-1.11.2.min.js
+```
 
 For screenshot comparisons:
 

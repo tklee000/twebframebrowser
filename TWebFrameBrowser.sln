@@ -4,7 +4,7 @@ VisualStudioVersion = 16.0.31729.503
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TWebFrame", "TWebFrame2\TWebFrame.vcxproj", "{05D5ACB1-7F24-4E5A-9BC0-D910A099A271}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TWebFrameTests", "TWebFrame2\tests\TWebFrameTests.vcxproj", "{4B5C62D1-2789-4E06-8B3E-9908B69441A8}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TWebFrameBrowser", "Browser\TWebFrameBrowser.vcxproj", "{5B13A382-05E8-4385-A609-A247892A0FD4}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -19,22 +19,21 @@ Global
 		{05D5ACB1-7F24-4E5A-9BC0-D910A099A271}.Debug|x64.ActiveCfg = Debug|x64
 		{05D5ACB1-7F24-4E5A-9BC0-D910A099A271}.Debug|x64.Build.0 = Debug|x64
 		{05D5ACB1-7F24-4E5A-9BC0-D910A099A271}.Release|Win32.ActiveCfg = Release|Win32
-		{05D5ACB1-7F24-4E5A-9BC0-D910A099A271}.Release|Win32.Build.0 = Release|Win32
 		{05D5ACB1-7F24-4E5A-9BC0-D910A099A271}.Release|x64.ActiveCfg = Release|x64
 		{05D5ACB1-7F24-4E5A-9BC0-D910A099A271}.Release|x64.Build.0 = Release|x64
-		{4B5C62D1-2789-4E06-8B3E-9908B69441A8}.Debug|Win32.ActiveCfg = Debug|Win32
-		{4B5C62D1-2789-4E06-8B3E-9908B69441A8}.Debug|Win32.Build.0 = Debug|Win32
-		{4B5C62D1-2789-4E06-8B3E-9908B69441A8}.Debug|x64.ActiveCfg = Debug|x64
-		{4B5C62D1-2789-4E06-8B3E-9908B69441A8}.Debug|x64.Build.0 = Debug|x64
-		{4B5C62D1-2789-4E06-8B3E-9908B69441A8}.Release|Win32.ActiveCfg = Release|Win32
-		{4B5C62D1-2789-4E06-8B3E-9908B69441A8}.Release|Win32.Build.0 = Release|Win32
-		{4B5C62D1-2789-4E06-8B3E-9908B69441A8}.Release|x64.ActiveCfg = Release|x64
-		{4B5C62D1-2789-4E06-8B3E-9908B69441A8}.Release|x64.Build.0 = Release|x64
+		{5B13A382-05E8-4385-A609-A247892A0FD4}.Debug|Win32.ActiveCfg = Debug|Win32
+		{5B13A382-05E8-4385-A609-A247892A0FD4}.Debug|Win32.Build.0 = Debug|Win32
+		{5B13A382-05E8-4385-A609-A247892A0FD4}.Debug|x64.ActiveCfg = Debug|x64
+		{5B13A382-05E8-4385-A609-A247892A0FD4}.Debug|x64.Build.0 = Debug|x64
+		{5B13A382-05E8-4385-A609-A247892A0FD4}.Release|Win32.ActiveCfg = Release|Win32
+		{5B13A382-05E8-4385-A609-A247892A0FD4}.Release|Win32.Build.0 = Release|Win32
+		{5B13A382-05E8-4385-A609-A247892A0FD4}.Release|x64.ActiveCfg = Release|x64
+		{5B13A382-05E8-4385-A609-A247892A0FD4}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {F1A7CB9B-FA89-4E07-8316-E224AEC24D3A}
+		SolutionGuid = {84A81A6B-8E6A-4C4A-AF89-FC65A5CA7A2E}
 	EndGlobalSection
 EndGlobal
