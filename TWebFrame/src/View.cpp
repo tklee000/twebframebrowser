@@ -23,6 +23,7 @@
 #include <shlwapi.h>
 #include <uxtheme.h>
 #include <algorithm>
+#include <array>
 #include <condition_variable>
 #include <chrono>
 #include <cmath>
@@ -71,6 +72,7 @@ constexpr UINT_PTR kTooltipToolId = 0x5750;
 class BackgroundWorkQueue {
 public:
     using Task = std::function<void()>;
+    enum class Priority : std::size_t { Critical, Normal, Low };
     BackgroundWorkQueue() {
         const auto logical=std::max(2u,std::thread::hardware_concurrency());
         const auto count=std::max(2u,std::min(6u,logical>2?logical-2:logical));
@@ -82,20 +84,28 @@ public:
         ready_.notify_all();
         for(auto& worker:workers_)if(worker.joinable())worker.join();
     }
-    void Submit(Task task){
-        {std::lock_guard<std::mutex> lock(mutex_);if(stopping_)return;tasks_.push_back(std::move(task));}
+    void Submit(Priority priority,Task task){
+        {std::lock_guard<std::mutex> lock(mutex_);if(stopping_)return;
+            tasks_[static_cast<std::size_t>(priority)].push_back(std::move(task));}
         ready_.notify_one();
     }
 private:
+    bool HasTasks()const{
+        for(const auto& queue:tasks_)if(!queue.empty())return true;
+        return false;
+    }
     void Run(){
         for(;;){Task task;{
             std::unique_lock<std::mutex> lock(mutex_);
-            ready_.wait(lock,[this]{return stopping_||!tasks_.empty();});
-            if(stopping_&&tasks_.empty())return;
-            task=std::move(tasks_.front());tasks_.pop_front();
+            ready_.wait(lock,[this]{return stopping_||HasTasks();});
+            if(stopping_&&!HasTasks())return;
+            for(auto& queue:tasks_)if(!queue.empty()){
+                task=std::move(queue.front());queue.pop_front();break;
+            }
         }try{task();}catch(...){}}
     }
-    std::mutex mutex_;std::condition_variable ready_;std::deque<Task> tasks_;
+    std::mutex mutex_;std::condition_variable ready_;
+    std::array<std::deque<Task>,3> tasks_;
     std::vector<std::thread> workers_;bool stopping_=false;
 };
 
@@ -601,7 +611,8 @@ struct View::Impl {
                 const auto fallback=reference;
                 const auto lifetime=asyncLifetime;
                 const auto generation=resourceGeneration;
-                ImageWorkers().Submit([loader,key,fallback,lifetime,generation]{
+                ImageWorkers().Submit(BackgroundWorkQueue::Priority::Low,
+                    [loader,key,fallback,lifetime,generation]{
                     {
                         std::lock_guard<std::mutex> lock(lifetime->mutex);
                         if(!lifetime->alive||!lifetime->hwnd||
@@ -988,8 +999,9 @@ struct View::Impl {
             const auto loader=resourceLoader;const auto base=basePath;
             const auto lifetime=asyncLifetime;
             const auto generation=resourceGeneration;
-            ImageWorkers().Submit([resource,complete=std::move(complete),loader,base,
-                                   lifetime,generation]() mutable {
+            ImageWorkers().Submit(BackgroundWorkQueue::Priority::Critical,
+                [resource,complete=std::move(complete),loader,base,
+                 lifetime,generation]() mutable {
                 {
                     std::lock_guard<std::mutex> lock(lifetime->mutex);
                     if(!lifetime->alive||!lifetime->hwnd||
@@ -1508,8 +1520,9 @@ struct View::Impl {
                 if(deferSource){
                     const auto loader=resourceLoader;const auto parentBase=basePath;
                     const auto generation=resourceGeneration;const auto lifetime=asyncLifetime;
-                    ImageWorkers().Submit([source,node,loader,parentBase,generation,lifetime,
-                                           frameBase,frameLocation,request]{
+                    ImageWorkers().Submit(BackgroundWorkQueue::Priority::Normal,
+                        [source,node,loader,parentBase,generation,lifetime,
+                         frameBase,frameLocation,request]{
                         {
                             std::lock_guard<std::mutex> lock(lifetime->mutex);
                             if(!lifetime->alive||!lifetime->hwnd||
@@ -3429,8 +3442,9 @@ struct View::Impl {
         const bool loadStylesInWorker=parallelResourceLoading;
         const bool executePageScripts=pageScriptsEnabled;
         const bool externalPage=base.find(L"://")!=std::wstring::npos;
-        ImageWorkers().Submit([html,base,location,generation,lifetime,loader,
-                               loadStylesInWorker,executePageScripts,externalPage]{
+        ImageWorkers().Submit(BackgroundWorkQueue::Priority::Critical,
+            [html,base,location,generation,lifetime,loader,
+             loadStylesInWorker,executePageScripts,externalPage]{
             {
                 std::lock_guard<std::mutex> lock(lifetime->mutex);
                 if(!lifetime->alive||!lifetime->hwnd||

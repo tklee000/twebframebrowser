@@ -2143,7 +2143,9 @@ struct RuntimeCore {
     size_t managedAllocationsSinceSweep=0;
     size_t managedSweepInterval=256;
     std::uint64_t executedInstructions=0;
-    std::uint64_t cycleCollectionNext=250000;
+    std::uint64_t cycleCollectionNext=1000000;
+    bool cycleCollectionPending=false;
+    size_t prototypeSweepWatermark=0;
     size_t activeExecutionFrames=0;
     struct NodeEventListeners {
         std::weak_ptr<Node> node;
@@ -2187,6 +2189,14 @@ struct RuntimeCore {
     struct TimerEntry { unsigned id=0;Value callback;std::chrono::steady_clock::time_point due;unsigned interval=0; };
     std::vector<TimerEntry> timers;
     std::deque<std::function<void()>> tasks;
+    struct OrderedScriptLoad {
+        std::shared_ptr<Node> node;
+        std::shared_ptr<Object> scriptObject;
+        std::wstring source;
+        bool ready=false;
+        bool loaded=false;
+    };
+    std::deque<std::shared_ptr<OrderedScriptLoad>> orderedScriptLoads;
     std::deque<std::function<void()>> microtasks;
     std::vector<std::weak_ptr<Object>> possiblyUnhandledRejections;
     unsigned nextFrameId=1;
@@ -2354,9 +2364,12 @@ struct RuntimeCore {
         inlineHandlerCache.clear();
         documentWriteBuffer.clear();documentWriteOpen=false;
         currentScript.reset();
-        frameCallbacks.clear();frameScheduled=false;timers.clear();tasks.clear();timerScheduled=false;
+        frameCallbacks.clear();frameScheduled=false;timers.clear();tasks.clear();
+        orderedScriptLoads.clear();timerScheduled=false;
         microtasks.clear();possiblyUnhandledRejections.clear();templatePrograms.clear();mutationTargets.clear();
         jitStatistics={};jitAllocatedCodeBytes=0;
+        executedInstructions=0;cycleCollectionNext=1000000;cycleCollectionPending=false;
+        prototypeSweepWatermark=0;
         module=std::make_shared<Module>();global=CreateEnvironment();InstallGlobals();
         for(const auto& script:document.QuerySelectorAll(L"script"))script->scriptStarted=true;
     }
@@ -3641,8 +3654,25 @@ struct RuntimeCore {
             if(microtasks.empty())break;
         }
         drainingMicrotasks=false;
-        CollectManagedCycles();
-        CollectUnusedPrototypes();
+        // A full shared-pointer cycle scan walks the complete live JavaScript
+        // graph. Running it after every Promise reaction made large advertising
+        // bundles repeatedly rescan the same objects. Request collection from
+        // the interpreter and perform it only at this safe job boundary, with
+        // the next interval scaled to the retained graph.
+        if(cycleCollectionPending){
+            CollectManagedCycles();cycleCollectionPending=false;
+            const auto live=managedObjects.size()+managedFunctions.size()+
+                managedNativeFunctions.size()+managedEnvironments.size();
+            const auto interval=std::max<std::uint64_t>(1000000,
+                static_cast<std::uint64_t>(live)*16);
+            cycleCollectionNext=executedInstructions+interval;
+        }
+        // Prototype reachability changes when a script adds a sizeable batch
+        // of functions, not on every microtask. Amortize this independent scan
+        // over compiler growth as well.
+        if(module&&module->prototypes.size()>=prototypeSweepWatermark+32){
+            CollectUnusedPrototypes();prototypeSweepWatermark=module->prototypes.size();
+        }
     }
     void BeginMutationBatch(){++mutationBatchDepth;}
     void FlushMutations(){
@@ -3784,10 +3814,22 @@ struct RuntimeCore {
     void RunTimers(){
         timerScheduled=false;
         if(!tasks.empty()){
-            auto task=std::move(tasks.front());tasks.pop_front();
-            try{MutationBatch batch(*this);task();DrainMicrotasks();}
-            catch(const JavaScriptException& exception){lastError=L"Uncaught "+String(exception.value);}
-            catch(const std::exception& exception){lastError=Utf8ToWide(exception.what());}
+            // Starting one queued task per Windows timer tick adds avoidable
+            // latency when a page inserts several independent async scripts.
+            // Drain a small browser-style time slice, keeping a microtask
+            // checkpoint after every task and yielding before UI input starves.
+            constexpr size_t kMaximumTasksPerSlice=16;
+            const auto deadline=std::chrono::steady_clock::now()+
+                std::chrono::milliseconds(4);
+            size_t completed=0;
+            do{
+                auto task=std::move(tasks.front());tasks.pop_front();
+                try{MutationBatch batch(*this);task();DrainMicrotasks();}
+                catch(const JavaScriptException& exception){lastError=L"Uncaught "+String(exception.value);}
+                catch(const std::exception& exception){lastError=Utf8ToWide(exception.what());}
+                ++completed;
+            }while(!tasks.empty()&&completed<kMaximumTasksPerSlice&&
+                    std::chrono::steady_clock::now()<deadline);
             ScheduleNextTimer();return;
         }
         const auto now=std::chrono::steady_clock::now();
@@ -3807,6 +3849,44 @@ struct RuntimeCore {
         auto current=node;
         while(current&&current->parent.lock())current=current->parent.lock();
         return current&&current==document.Root();
+    }
+    void CompleteExternalScript(const std::shared_ptr<Node>& node,
+                                const std::shared_ptr<Object>& scriptObject,
+                                bool loaded,std::wstring source){
+        (void)scriptObject;
+        MutationBatch batch(*this);
+        const auto previousScript=currentScript;
+        currentScript=node;
+        try{
+            if(!loaded){
+                currentScript=previousScript;Dispatch(node,L"error");
+                DrainMicrotasks();return;
+            }
+            if(!source.empty()){
+                Compiler compiler(module,source);
+                auto program=compiler.CompileProgram();
+                Run(program,global);
+            }
+            currentScript=previousScript;
+            Dispatch(node,L"load");
+            DrainMicrotasks();
+        }catch(const JavaScriptException& exception){
+            currentScript=previousScript;
+            lastError=L"Uncaught "+String(exception.value);
+            Dispatch(node,L"error");DrainMicrotasks();
+        }catch(const std::exception& exception){
+            currentScript=previousScript;
+            lastError=Utf8ToWide(exception.what());
+            Dispatch(node,L"error");DrainMicrotasks();
+        }
+    }
+    void DrainOrderedScriptLoads(){
+        while(!orderedScriptLoads.empty()&&orderedScriptLoads.front()->ready){
+            auto load=std::move(orderedScriptLoads.front());
+            orderedScriptLoads.pop_front();
+            CompleteExternalScript(load->node,load->scriptObject,load->loaded,
+                                   std::move(load->source));
+        }
     }
     void ExecuteConnectedScripts(const std::shared_ptr<Node>& root){
         if(!root||!IsConnected(root))return;
@@ -3828,30 +3908,37 @@ struct RuntimeCore {
                     // task has dispatched load/error; otherwise cycle collection can
                     // discard script.onload between appendChild() and the async task.
                     const auto scriptObject=NodeValue(node).object;
-                    EnqueueTask([this,node,resource,scriptObject]{
-                        (void)scriptObject;
-                        std::wstring source;
-                        const auto previousScript=currentScript;
-                        currentScript=node;
-                        try{
-                            const bool loaded=resourceLoader&&resourceLoader(resource,source);
-                            if(!loaded){currentScript=previousScript;Dispatch(node,L"error");return;}
-                            if(!source.empty()){
-                                Compiler compiler(module,source);
-                                auto program=compiler.CompileProgram();
-                                Run(program,global);
+                    const auto asyncProperty=scriptObject->props.find(L"async");
+                    const bool ordered=asyncProperty!=scriptObject->props.end()&&
+                                       !Truth(asyncProperty->second);
+                    std::shared_ptr<OrderedScriptLoad> orderedLoad;
+                    if(ordered){
+                        orderedLoad=std::make_shared<OrderedScriptLoad>();
+                        orderedLoad->node=node;orderedLoad->scriptObject=scriptObject;
+                        orderedScriptLoads.push_back(orderedLoad);
+                    }
+                    EnqueueTask([this,node,resource,scriptObject,orderedLoad]{
+                        auto complete=[this,node,scriptObject,orderedLoad]
+                            (bool loaded,std::wstring source){
+                            if(orderedLoad){
+                                orderedLoad->loaded=loaded;
+                                orderedLoad->source=std::move(source);
+                                orderedLoad->ready=true;
+                                DrainOrderedScriptLoads();return;
                             }
-                            currentScript=previousScript;
-                            Dispatch(node,L"load");
-                        }catch(const JavaScriptException& exception){
-                            currentScript=previousScript;
-                            lastError=L"Uncaught "+String(exception.value);
-                            Dispatch(node,L"error");
-                        }catch(const std::exception& exception){
-                            currentScript=previousScript;
-                            lastError=Utf8ToWide(exception.what());
-                            Dispatch(node,L"error");
+                            CompleteExternalScript(node,scriptObject,loaded,std::move(source));
+                        };
+                        // Parallel loading must include DOM-inserted scripts.
+                        // The old path called the synchronous loader from the
+                        // UI task, so a slow network response froze painting
+                        // and delayed every subsequently inserted ad script.
+                        if(asyncResourceLoader){
+                            asyncResourceLoader(resource,std::move(complete));
+                            return;
                         }
+                        std::wstring source;
+                        const bool loaded=resourceLoader&&resourceLoader(resource,source);
+                        complete(loaded,std::move(source));
                     });
                 }else{
                     const auto source=node->InnerText();
@@ -6803,8 +6890,10 @@ struct RuntimeCore {
             const size_t current=frame->ip++;const auto& ins=frame->chunk->code[current];
             ++executedInstructions;
             if(executedInstructions>=cycleCollectionNext){
-                cycleCollectionNext=executedInstructions+250000;
-                CollectManagedCycles();
+                cycleCollectionPending=true;
+                // Avoid testing the expensive safe-point condition on every
+                // instruction until the current JavaScript job returns.
+                cycleCollectionNext=executedInstructions+1000000;
             }
             if(frame->callStackIndex<callStack.size()){
                 callStack[frame->callStackIndex].line=ins.line;

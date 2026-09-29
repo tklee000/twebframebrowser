@@ -1202,6 +1202,36 @@ int wmain(int argc,wchar_t** argv) {
           browserCompatResult==L"11",error.c_str());
     Check(browserCompatResult==L"11",
           L"a connected script retains its load handler until its queued resource task completes");
+    std::vector<std::pair<std::wstring,
+        std::function<void(bool,std::wstring)>>> pendingScriptLoads;
+    dynamicScriptJs.SetAsyncResourceLoader(
+        [&](const std::wstring& resource,std::function<void(bool,std::wstring)> complete){
+            pendingScriptLoads.push_back({resource,std::move(complete)});
+        });
+    Check(dynamicScriptJs.Execute(LR"JS(
+        var orderedScripts=[];
+        var first=document.createElement('script');first.async=false;first.src='ordered-first.js';
+        first.onload=function(){orderedScripts.push('first-load');};
+        var second=document.createElement('script');second.async=false;second.src='ordered-second.js';
+        second.onload=function(){orderedScripts.push('second-load');};
+        document.head.appendChild(first);document.head.appendChild(second);
+    )JS",nullptr,&error),error.c_str());
+    dynamicScriptJs.RunTimers();
+    Check(pendingScriptLoads.size()==2,
+          L"a timer slice starts independent ordered script downloads in parallel");
+    if(pendingScriptLoads.size()==2){
+        pendingScriptLoads[1].second(true,L"orderedScripts.push('second');");
+        Check(dynamicScriptJs.Execute(L"return orderedScripts.join(',');",
+                                      &browserCompatResult,&error)&&browserCompatResult.empty(),
+              L"an async=false script waits when an earlier inserted script is still loading");
+        pendingScriptLoads[0].second(true,L"orderedScripts.push('first');");
+        Check(dynamicScriptJs.Execute(L"return orderedScripts.join(',');",
+                                      &browserCompatResult,&error)&&
+              browserCompatResult==L"first,first-load,second,second-load",error.c_str());
+        Check(browserCompatResult==L"first,first-load,second,second-load",
+              L"async=false scripts execute in insertion order after parallel loading");
+    }
+    dynamicScriptJs.SetAsyncResourceLoader({});
 
     Document jitDoc;Check(jitDoc.Parse(L"<body></body>",&error),L"baseline JIT fixture parses");
     JavaScriptRuntime jitJs(jitDoc);std::wstring jitResult;jitJs.SetJitCompilationThreshold(2);
@@ -4187,6 +4217,7 @@ int wmain(int argc,wchar_t** argv) {
             const DWORD asyncUiThread=GetCurrentThreadId();
             std::atomic<DWORD> asyncResourceThread{0};
             std::atomic<DWORD> asyncFetchThread{0};
+            std::atomic<DWORD> asyncScriptThread{0};
             bool asyncCompleted=false,asyncSucceeded=false;DWORD asyncCallbackThread=0;
             int asyncCompletionCount=0;
             inputView->SetParallelResourceLoading(true);
@@ -4198,6 +4229,10 @@ int wmain(int argc,wchar_t** argv) {
                 if(path==L"https://async.test/payload.txt"){
                     asyncFetchThread.store(GetCurrentThreadId(),std::memory_order_relaxed);
                     Sleep(20);source=L"worker-fetch";return true;
+                }
+                if(path==L"https://async.test/dynamic.js"){
+                    asyncScriptThread.store(GetCurrentThreadId(),std::memory_order_relaxed);
+                    Sleep(40);source=L"window.dynamicWorkerValue='worker-script';";return true;
                 }
                 return false;
             });
@@ -4247,6 +4282,26 @@ int wmain(int argc,wchar_t** argv) {
                   asyncFetchThread.load(std::memory_order_relaxed)!=0&&
                   asyncFetchThread.load(std::memory_order_relaxed)!=asyncUiThread,
                   L"fetch I/O resolves its promise on the UI thread after worker completion");
+            std::wstring asyncScriptMessage;
+            inputView->SetMessageHandler([&](const std::wstring& value){asyncScriptMessage=value;});
+            Check(inputView->ExecuteScript(
+                L"const script=document.createElement('script');script.src='dynamic.js';"
+                L"script.onload=()=>window.chrome.webview.postMessage(window.dynamicWorkerValue+'|load');"
+                L"document.head.appendChild(script);",
+                nullptr,&asyncFetchError),asyncFetchError.c_str());
+            Check(asyncScriptMessage.empty(),
+                  L"a DOM-inserted external script does not complete inside appendChild");
+            const auto scriptDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+            while(asyncScriptMessage.empty()&&std::chrono::steady_clock::now()<scriptDeadline){
+                MSG scriptMessage{};
+                if(PeekMessageW(&scriptMessage,nullptr,0,0,PM_REMOVE)){
+                    TranslateMessage(&scriptMessage);DispatchMessageW(&scriptMessage);
+                }else Sleep(1);
+            }
+            Check(asyncScriptMessage==L"worker-script|load"&&
+                  asyncScriptThread.load(std::memory_order_relaxed)!=0&&
+                  asyncScriptThread.load(std::memory_order_relaxed)!=asyncUiThread,
+                  L"DOM-inserted external scripts load on a worker and execute on the UI thread");
             inputView->SetLoadHandler({});inputView->SetResourceLoader({});
             inputView->SetParallelResourceLoading(false);
             std::wstring inputMessage;inputView->SetMessageHandler([&](const std::wstring& value){inputMessage=value;});
