@@ -12,6 +12,8 @@
 #include <objidl.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -286,7 +288,8 @@ void CheckDialogBackdropScale(float scale){
     std::wcerr<<L"dialog scale="<<scale<<L" base="<<static_cast<int>(dimmed.red)
         <<L" shadow="<<static_cast<int>(shadowPixel.red)<<L" corner="
         <<static_cast<int>(roundedCorner.red)<<L","<<static_cast<int>(roundedCorner.green);
-    for(const auto point:std::vector<std::pair<float,float>>{{59,68},{80,71},{80,75},{80,80}}){
+    for(const auto point:std::vector<std::pair<float,float>>{
+        {59.0f,68.0f},{80.0f,71.0f},{80.0f,75.0f},{80.0f,80.0f}}){
         const auto sample=raster.At(point.first,point.second,scale);
         std::wcerr<<L" p"<<point.first<<L","<<point.second<<L"="<<static_cast<int>(sample.red);
     }
@@ -449,6 +452,84 @@ int wmain(){
                 &value,&scriptError);
             Check(sourceChanged&&changedScript&&value==L"true|2|1|2",
                 L"changing img.src reloads, relayouts, and dispatches load");
+            const DWORD uiThread=GetCurrentThreadId();
+            std::atomic<DWORD> imageWorkerThread{0};
+            std::atomic<int> activeDecodes{0},maximumActiveDecodes{0},asyncRequests{0};
+            view->SetParallelResourceLoading(true);
+            view->SetBinaryResourceLoader([&](const std::wstring& resource,
+                                              std::vector<unsigned char>& bytes){
+                if(resource!=L"first.png"&&resource!=L"second.png"&&
+                   resource!=L"detached.png")return false;
+                imageWorkerThread.store(GetCurrentThreadId(),std::memory_order_relaxed);
+                const int active=activeDecodes.fetch_add(1,std::memory_order_relaxed)+1;
+                int maximum=maximumActiveDecodes.load(std::memory_order_relaxed);
+                while(maximum<active&&!maximumActiveDecodes.compare_exchange_weak(
+                    maximum,active,std::memory_order_relaxed)){}
+                Sleep(30);bytes=pngBytes;
+                asyncRequests.fetch_add(1,std::memory_order_relaxed);
+                activeDecodes.fetch_sub(1,std::memory_order_relaxed);return true;
+            });
+            Check(view->NavigateToString(
+                L"<img id='first' src='first.png' onload='window.asyncLoads=(window.asyncLoads||0)+1'>"
+                L"<img id='second' src='second.png' onload='window.asyncLoads=(window.asyncLoads||0)+1'>"),
+                L"parallel image fixture starts without waiting for decode");
+            const auto imageDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+            bool asyncImagesComplete=false;
+            while(!asyncImagesComplete&&std::chrono::steady_clock::now()<imageDeadline){
+                MSG message{};
+                while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){
+                    TranslateMessage(&message);DispatchMessageW(&message);
+                }
+                const bool queried=view->ExecuteScript(
+                    L"const a=document.getElementById('first'),b=document.getElementById('second');"
+                    L"return a.complete&&b.complete&&window.asyncLoads===2&&a.naturalWidth===2&&b.naturalWidth===2;",
+                    &value,&scriptError);
+                asyncImagesComplete=queried&&value==L"true";
+                if(!asyncImagesComplete)Sleep(1);
+            }
+            Check(asyncImagesComplete&&asyncRequests.load(std::memory_order_relaxed)==2,
+                  L"parallel image completions publish decoded pixels and load events on the view");
+            Check(imageWorkerThread.load(std::memory_order_relaxed)!=0&&
+                  imageWorkerThread.load(std::memory_order_relaxed)!=uiThread&&
+                  maximumActiveDecodes.load(std::memory_order_relaxed)>=2,
+                  L"independent image fetch/decode jobs overlap away from the UI thread");
+            const bool detachedStarted=view->ExecuteScript(
+                L"window.detachedImageLoads=0;(function(){"
+                L"var target=document.createElement('img');target.id='preloaded';"
+                L"document.body.appendChild(target);var preload=new Image(17,9);"
+                L"preload.onload=function(){window.detachedImageLoads++;"
+                L"window.detachedImageSize=preload.naturalWidth+'x'+preload.naturalHeight;"
+                L"target.src=preload.src;};preload.src='detached.png';})();",
+                nullptr,&scriptError);
+            const auto detachedDeadline=std::chrono::steady_clock::now()+
+                std::chrono::seconds(5);
+            bool detachedComplete=false;
+            while(!detachedComplete&&std::chrono::steady_clock::now()<detachedDeadline){
+                MSG message{};
+                while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){
+                    TranslateMessage(&message);DispatchMessageW(&message);
+                }
+                const bool queried=view->ExecuteScript(
+                    L"var image=document.getElementById('preloaded');"
+                    L"return window.detachedImageLoads+'|'+window.detachedImageSize+'|'"
+                    L"+image.complete+'|'+image.naturalWidth+'x'+image.naturalHeight;",
+                    &value,&scriptError);
+                detachedComplete=queried&&value==L"1|2x2|true|2x2";
+                if(!detachedComplete)Sleep(1);
+            }
+            Check(detachedStarted&&detachedComplete&&
+                  asyncRequests.load(std::memory_order_relaxed)==3,
+                  L"detached Image preload keeps its handlers alive and publishes pixels on load");
+            view->SetParallelResourceLoading(false);
+            view->SetBinaryResourceLoader([&](const std::wstring& resource,
+                                              std::vector<unsigned char>& bytes){
+                requestedResources.push_back(resource);
+                if(resource==L"alpha.png"){bytes=pngBytes;return true;}
+                if(resource==L"animation.gif"){bytes=gifBytes;return true;}
+                if(resource==L"https://images.test/pages/assets/alpha.png"){bytes=pngBytes;return true;}
+                if(resource==L"https://images.test/pages/assets/animation.gif"){bytes=gifBytes;return true;}
+                return false;
+            });
             requestedResources.clear();
             Check(view->NavigateToString(
                 L"<style>html,body{margin:0}body{background:#fff url('assets/alpha.png') 0 0/20px 20px no-repeat}</style>",

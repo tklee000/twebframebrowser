@@ -29,11 +29,21 @@ public:
     using FrameScheduler = std::function<void()>;
     using TimerScheduler = std::function<void(unsigned)>;
     using ResourceLoader = std::function<bool(const std::wstring&, std::wstring&)>;
+    using AsyncResourceLoader = std::function<void(
+        const std::wstring&, std::function<void(bool, std::wstring)>)>;
     using NavigationSink = std::function<void(const std::wstring&)>;
     using DialogSink = std::function<void(const std::wstring&)>;
-    using FrameMessageSink = std::function<void(const std::shared_ptr<Node>&, const std::wstring&)>;
-    using ParentMessageSink = std::function<void(const std::wstring&)>;
+    using DocumentWriteSink = std::function<void(const std::wstring&)>;
+    using FrameMessageSink = std::function<void(const std::shared_ptr<Node>&,
+                                                const std::wstring&,
+                                                const std::wstring&)>;
+    using FrameDocumentSink = std::function<void(const std::shared_ptr<Node>&,
+                                                 const std::wstring&)>;
+    using ParentMessageSink = std::function<void(const std::wstring&,
+                                                 const std::wstring&)>;
+    using TopMessageSink = ParentMessageSink;
     using FocusSink = std::function<void(const std::shared_ptr<Node>&)>;
+    using DocumentFocusProvider = std::function<bool()>;
     using ActivationSink = std::function<void(const std::shared_ptr<Node>&)>;
     using PointerCaptureSink = std::function<void(bool)>;
     using SelectionProvider = std::function<bool(const std::shared_ptr<Node>&, size_t&, size_t&)>;
@@ -85,20 +95,29 @@ public:
     void SetGeometryProvider(GeometryProvider provider);
     void SetStylePropertyProvider(StylePropertyProvider provider);
     void SetResourceLoader(ResourceLoader loader);
+    void SetAsyncResourceLoader(AsyncResourceLoader loader);
     void SetNavigationSink(NavigationSink sink);
     void SetDialogSink(DialogSink sink);
+    void SetDocumentWriteSink(DocumentWriteSink sink);
     void SetFrameMessageSink(FrameMessageSink sink);
+    void SetFrameDocumentSink(FrameDocumentSink sink);
     void SetParentMessageSink(ParentMessageSink sink);
+    void SetTopMessageSink(TopMessageSink sink);
     void SetFocusSink(FocusSink sink);
+    void SetDocumentFocusProvider(DocumentFocusProvider provider);
     void SetActivationSink(ActivationSink sink);
     void SetPointerCaptureSink(PointerCaptureSink sink);
     void SetSelectionProvider(SelectionProvider provider);
     void SetSelectionSetter(SelectionSetter setter);
     void SetDomSelectionProvider(DomSelectionProvider provider);
     void SetDomSelectionSetter(DomSelectionSetter setter);
+    void SetInlineEventHandlersEnabled(bool enabled);
     void SetViewportSize(double width, double height);
     void SetDevicePixelRatio(double ratio);
     void SetLocation(const std::wstring& location);
+    void SetWindowName(const std::wstring& name);
+    void SetCurrentScript(const std::shared_ptr<Node>& script);
+    std::wstring FrameWindowName(const std::shared_ptr<Node>& node);
     void SetDocumentReadyState(const std::wstring& state);
     void NavigateToFragment(const std::wstring& fragment);
     bool Load(const std::wstring& source, std::wstring* error = nullptr);
@@ -107,12 +126,17 @@ public:
     // Zero disables JIT compilation and execution for this runtime.
     void SetJitCompilationThreshold(size_t calls);
     JitStatistics GetJitStatistics() const;
+    std::wstring LastError() const;
+    std::wstring LastCreatedError() const;
+    std::wstring CreatedErrorTrace() const;
     void DispatchDocumentEvent(const std::wstring& eventName);
     void DispatchWindowEvent(const std::wstring& eventName);
     void RunAnimationFrame();
     void RunTimers();
     bool DispatchNodeEvent(const std::shared_ptr<Node>& node, const std::wstring& eventName,
                            const EventInit& init = {});
+    void CompleteImageRequest(const std::shared_ptr<Node>& node);
+    void CancelPendingImageRequests();
     bool DispatchClipboardEvent(const std::shared_ptr<Node>& node,
                                 const std::wstring& eventName,
                                 const std::wstring& text,
@@ -125,6 +149,7 @@ public:
     void DispatchWebMessageAsString(const std::wstring& message);
     bool DispatchWindowMessageAsJson(const std::wstring& json,
                                      const std::shared_ptr<Node>& sourceFrame = {},
+                                     const std::wstring& sourceOrigin = L"null",
                                      std::wstring* error = nullptr);
     void Clear();
 

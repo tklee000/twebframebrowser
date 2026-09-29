@@ -23,13 +23,17 @@
 #include <shlwapi.h>
 #include <uxtheme.h>
 #include <algorithm>
+#include <condition_variable>
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <sstream>
+#include <mutex>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -56,10 +60,150 @@ constexpr UINT_PTR kCaretBlinkTimer = 0x5749;
 constexpr UINT_PTR kImageAnimationTimer = 0x574a;
 constexpr UINT kAnimationFrameFallbackMessage = WM_APP + 0x57;
 constexpr UINT kNavigationMessage = WM_APP + 0x59;
+constexpr UINT kAsyncImageReadyMessage = WM_APP + 0x5a;
+constexpr UINT kAsyncDocumentReadyMessage = WM_APP + 0x5b;
+constexpr UINT kAsyncTextReadyMessage = WM_APP + 0x5c;
+constexpr UINT kAsyncFrameReadyMessage = WM_APP + 0x5d;
+constexpr UINT kAsyncFrameSourceReadyMessage = WM_APP + 0x5e;
+constexpr UINT kSyncChildFramesMessage = WM_APP + 0x5f;
 constexpr UINT_PTR kTooltipToolId = 0x5750;
+
+class BackgroundWorkQueue {
+public:
+    using Task = std::function<void()>;
+    BackgroundWorkQueue() {
+        const auto logical=std::max(2u,std::thread::hardware_concurrency());
+        const auto count=std::max(2u,std::min(6u,logical>2?logical-2:logical));
+        workers_.reserve(count);
+        for(unsigned index=0;index<count;++index)workers_.emplace_back([this]{Run();});
+    }
+    ~BackgroundWorkQueue(){
+        {std::lock_guard<std::mutex> lock(mutex_);stopping_=true;}
+        ready_.notify_all();
+        for(auto& worker:workers_)if(worker.joinable())worker.join();
+    }
+    void Submit(Task task){
+        {std::lock_guard<std::mutex> lock(mutex_);if(stopping_)return;tasks_.push_back(std::move(task));}
+        ready_.notify_one();
+    }
+private:
+    void Run(){
+        for(;;){Task task;{
+            std::unique_lock<std::mutex> lock(mutex_);
+            ready_.wait(lock,[this]{return stopping_||!tasks_.empty();});
+            if(stopping_&&tasks_.empty())return;
+            task=std::move(tasks_.front());tasks_.pop_front();
+        }try{task();}catch(...){}}
+    }
+    std::mutex mutex_;std::condition_variable ready_;std::deque<Task> tasks_;
+    std::vector<std::thread> workers_;bool stopping_=false;
+};
+
+BackgroundWorkQueue& ImageWorkers(){static BackgroundWorkQueue workers;return workers;}
+
+struct AsyncViewLifetime {
+    std::mutex mutex;
+    HWND hwnd=nullptr;
+    bool alive=true;
+    std::uint64_t navigationGeneration=0;
+    std::uint64_t resourceGeneration=0;
+};
+
+struct AsyncImageResult {
+    std::uint64_t generation=0;
+    std::wstring key;
+    std::shared_ptr<RasterImage> image;
+};
+
+struct AsyncDocumentResult {
+    std::uint64_t generation=0;
+    std::wstring base;
+    std::wstring location;
+    std::wstring error;
+    std::unique_ptr<Document> document;
+    std::unique_ptr<StyleSheet> styles;
+    std::unordered_map<std::wstring,std::wstring> textResources;
+    std::unordered_set<std::wstring> failedTextResources;
+};
+
+struct AsyncTextResult {
+    std::uint64_t generation=0;
+    bool loaded=false;
+    std::wstring content;
+    std::function<void(bool,std::wstring)> completion;
+};
+
+struct AsyncFrameResult {
+    std::uint64_t generation=0;
+    std::uint64_t request=0;
+    bool success=false;
+    std::shared_ptr<Node> node;
+};
+
+struct AsyncFrameSourceResult {
+    std::uint64_t generation=0;
+    std::uint64_t request=0;
+    bool loaded=false;
+    std::shared_ptr<Node> node;
+    std::wstring html;
+    std::wstring base;
+    std::wstring location;
+};
 
 std::wstring Utf8ToWide(const std::string& value) {
     if(value.empty())return {};int count=MultiByteToWideChar(CP_UTF8,0,value.data(),static_cast<int>(value.size()),nullptr,0);std::wstring out(count,L'\0');MultiByteToWideChar(CP_UTF8,0,value.data(),static_cast<int>(value.size()),out.data(),count);return out;
+}
+
+std::wstring ResolveResourceForBase(const std::wstring& base,
+                                    const std::wstring& reference) {
+    if(reference.rfind(L"data:",0)==0)return reference;
+    if(base.find(L"://")!=std::wstring::npos){
+        std::vector<wchar_t> combined(32768,L'\0');
+        DWORD length=static_cast<DWORD>(combined.size());
+        if(SUCCEEDED(UrlCombineW(base.c_str(),reference.c_str(),combined.data(),&length,0)))
+            return combined.data();
+    }
+    auto resolved=reference;
+    const auto baseScheme=base.find(L"://");
+    if(baseScheme!=std::wstring::npos&&reference.find(L"://")==std::wstring::npos){
+        auto cleanBase=base;const auto fragment=cleanBase.find(L'#');
+        if(fragment!=std::wstring::npos)cleanBase.resize(fragment);
+        const auto originEnd=cleanBase.find(L'/',baseScheme+3);
+        if(reference.rfind(L"//",0)==0)resolved=cleanBase.substr(0,baseScheme+1)+reference;
+        else if(!reference.empty()&&reference.front()==L'/')
+            resolved=(originEnd==std::wstring::npos?cleanBase:cleanBase.substr(0,originEnd))+reference;
+        else{
+            const auto slash=cleanBase.find_last_of(L'/');
+            resolved=(slash==std::wstring::npos?cleanBase+L'/':cleanBase.substr(0,slash+1))+reference;
+        }
+    }
+    return resolved;
+}
+
+bool LoadTextResourceForBase(const View::ResourceLoader& loader,
+                             const std::wstring& base,const std::wstring& reference,
+                             std::wstring& content){
+    const auto resolved=ResolveResourceForBase(base,reference);
+    const bool externalResource=base.find(L"://")!=std::wstring::npos||
+                                resolved.find(L"://")!=std::wstring::npos;
+    auto resource=reference;
+    const auto suffix=resource.find_first_of(L"?#");
+    if(suffix!=std::wstring::npos)resource.resize(suffix);
+    if(loader&&loader(resolved,content))return true;
+    if(resolved!=reference&&loader&&loader(reference,content))return true;
+    if(!externalResource&&loader){
+        auto withoutQuery=resolved;
+        const auto query=withoutQuery.find_first_of(L"?#");
+        if(query!=std::wstring::npos){
+            withoutQuery.resize(query);
+            if(loader(withoutQuery,content))return true;
+        }
+    }
+    if(externalResource)return false;
+    std::filesystem::path path(resource);
+    if(path.is_relative()&&!base.empty())path=std::filesystem::path(base)/path;
+    std::ifstream input(path,std::ios::binary);if(!input)return false;
+    std::ostringstream bytes;bytes<<input.rdbuf();content=Utf8ToWide(bytes.str());return true;
 }
 
 std::wstring EncodeFormComponent(const std::wstring& value,UINT codePage){
@@ -280,12 +424,27 @@ struct View::Impl {
     View::ResourceLoader resourceLoader;
     View::BinaryResourceLoader binaryResourceLoader;
     View::NavigationHandler navigationHandler;
-    bool browserMode=false;
+    bool pageScriptsEnabled=true;
+    bool parallelResourceLoading=false;
+    std::uint64_t navigationGeneration=0;
+    std::uint64_t resourceGeneration=0;
     std::unordered_map<std::wstring,std::shared_ptr<RasterImage>> rasterImageCache;
-    struct ChildFrame { std::shared_ptr<Node> node; std::unique_ptr<View> view; };
+    std::unordered_set<std::wstring> pendingRasterImages;
+    std::unordered_map<std::wstring,std::vector<std::shared_ptr<Node>>> pendingImageNodes;
+    std::shared_ptr<AsyncViewLifetime> asyncLifetime=std::make_shared<AsyncViewLifetime>();
+    struct ChildFrame {
+        std::shared_ptr<Node> node;
+        std::unique_ptr<View> view;
+        std::wstring source;
+        std::uint64_t request=0;
+    };
     std::vector<ChildFrame> childFrames;
+    JavaScriptRuntime::TopMessageSink topMessageRelay;
+    std::uint64_t nextChildFrameRequest=0;
+    bool childFrameSyncPending=false;
     std::wstring lastError;
     std::wstring basePath;
+    std::wstring currentLocation;
     std::wstring pendingNavigation;
     bool pendingNavigationNewWindow=false;
     ComPtr<ID2D1Factory> d2dFactory;
@@ -379,28 +538,14 @@ struct View::Impl {
         [this]{return CaretClientRect();}
     }){}
 
+    void PublishAsyncGenerations(){
+        std::lock_guard<std::mutex> lock(asyncLifetime->mutex);
+        asyncLifetime->navigationGeneration=navigationGeneration;
+        asyncLifetime->resourceGeneration=resourceGeneration;
+    }
+
     bool LoadTextResource(const std::wstring& reference,std::wstring& content)const{
-        const auto resolved=ResolveResourceReference(reference);
-        auto resource=reference;
-        const auto suffix=resource.find_first_of(L"?#");
-        if(suffix!=std::wstring::npos)resource.resize(suffix);
-        if(resourceLoader&&resourceLoader(resolved,content))return true;
-        if(resolved!=reference&&resourceLoader&&resourceLoader(reference,content))return true;
-        // Preserve the trusted-UI loader's historical queryless lookup while
-        // browser hosts receive the full URL first, including its query.
-        if(!browserMode&&resourceLoader){
-            auto withoutQuery=resolved;
-            const auto query=withoutQuery.find_first_of(L"?#");
-            if(query!=std::wstring::npos){
-                withoutQuery.resize(query);
-                if(resourceLoader(withoutQuery,content))return true;
-            }
-        }
-        if(basePath.find(L"://")!=std::wstring::npos||resolved.find(L"://")!=std::wstring::npos)return false;
-        std::filesystem::path path(resource);
-        if(path.is_relative()&&!basePath.empty())path=std::filesystem::path(basePath)/path;
-        std::ifstream input(path,std::ios::binary);if(!input)return false;
-        std::ostringstream bytes;bytes<<input.rdbuf();content=Utf8ToWide(bytes.str());return true;
+        return LoadTextResourceForBase(resourceLoader,basePath,reference,content);
     }
 
     static int HexDigit(wchar_t value){
@@ -422,28 +567,7 @@ struct View::Impl {
         flush();return result;
     }
     std::wstring ResolveResourceReference(const std::wstring& reference)const{
-        if(reference.rfind(L"data:",0)==0)return reference;
-        if(basePath.find(L"://")!=std::wstring::npos){
-            std::vector<wchar_t> combined(32768,L'\0');
-            DWORD length=static_cast<DWORD>(combined.size());
-            if(SUCCEEDED(UrlCombineW(basePath.c_str(),reference.c_str(),combined.data(),&length,0)))
-                return combined.data();
-        }
-        auto resolved=reference;
-        const auto baseScheme=basePath.find(L"://");
-        if(baseScheme!=std::wstring::npos&&reference.find(L"://")==std::wstring::npos){
-            auto base=basePath;const auto fragment=base.find(L'#');
-            if(fragment!=std::wstring::npos)base.resize(fragment);
-            const auto originEnd=base.find(L'/',baseScheme+3);
-            if(reference.rfind(L"//",0)==0)resolved=base.substr(0,baseScheme+1)+reference;
-            else if(!reference.empty()&&reference.front()==L'/')
-                resolved=(originEnd==std::wstring::npos?base:base.substr(0,originEnd))+reference;
-            else{
-                const auto slash=base.find_last_of(L'/');
-                resolved=(slash==std::wstring::npos?base+L'/':base.substr(0,slash+1))+reference;
-            }
-        }
-        return resolved;
+        return ResolveResourceForBase(basePath,reference);
     }
     bool LoadBinaryResource(const std::wstring& reference,
                             std::vector<unsigned char>& bytes)const{
@@ -471,6 +595,38 @@ struct View::Impl {
         const auto key=ResolveResourceReference(reference);
         const auto cached=rasterImageCache.find(key);
         if(cached!=rasterImageCache.end())return cached->second;
+        if(parallelResourceLoading&&binaryResourceLoader){
+            if(pendingRasterImages.insert(key).second){
+                const auto loader=binaryResourceLoader;
+                const auto fallback=reference;
+                const auto lifetime=asyncLifetime;
+                const auto generation=resourceGeneration;
+                ImageWorkers().Submit([loader,key,fallback,lifetime,generation]{
+                    {
+                        std::lock_guard<std::mutex> lock(lifetime->mutex);
+                        if(!lifetime->alive||!lifetime->hwnd||
+                           lifetime->resourceGeneration!=generation)return;
+                    }
+                    std::vector<unsigned char> bytes;std::wstring error;
+                    bool loaded=loader(key,bytes);
+                    if(!loaded&&key!=fallback){bytes.clear();loaded=loader(fallback,bytes);}
+                    {
+                        std::lock_guard<std::mutex> lock(lifetime->mutex);
+                        if(!lifetime->alive||!lifetime->hwnd||
+                           lifetime->resourceGeneration!=generation)return;
+                    }
+                    auto image=loaded?DecodeRasterImage(bytes,key,&error):std::shared_ptr<RasterImage>{};
+                    auto result=std::make_unique<AsyncImageResult>();
+                    result->generation=generation;result->key=key;result->image=std::move(image);
+                    std::lock_guard<std::mutex> lock(lifetime->mutex);
+                    if(!lifetime->alive||!lifetime->hwnd||
+                       lifetime->resourceGeneration!=generation)return;
+                    if(PostMessageW(lifetime->hwnd,kAsyncImageReadyMessage,0,
+                                    reinterpret_cast<LPARAM>(result.get())))result.release();
+                });
+            }
+            return {};
+        }
         std::vector<unsigned char> bytes;std::wstring decodeError;
         std::shared_ptr<RasterImage> image;
         if(LoadBinaryResource(reference,bytes))image=DecodeRasterImage(bytes,key,&decodeError);
@@ -500,10 +656,16 @@ struct View::Impl {
         if(node->imageSource==source&&node->imageComplete)return false;
         node->imageSource=source;node->image.reset();node->imageComplete=source.empty();
         if(source.empty())return true;
+        const auto key=ResolveResourceReference(source);
         node->image=ResolveRasterImage(source);
-        node->imageComplete=true;
-        if(dispatchEvent){JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
-            javascript.DispatchNodeEvent(node,node->image?L"load":L"error",event);}
+        node->imageComplete=!parallelResourceLoading||rasterImageCache.count(key)>0;
+        if(!node->imageComplete){
+            auto& nodes=pendingImageNodes[key];
+            if(std::find(nodes.begin(),nodes.end(),node)==nodes.end())nodes.push_back(node);
+        }
+        if(dispatchEvent&&node->imageComplete){JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
+            javascript.DispatchNodeEvent(node,node->image?L"load":L"error",event);
+            javascript.CompleteImageRequest(node);}
         return true;
     }
     void SyncImageAnimationTimer(){
@@ -521,6 +683,43 @@ struct View::Impl {
         for(const auto& node:document.QuerySelectorAll(L"img"))
             changed=LoadImageNode(node,dispatchEvents)||changed;
         SyncImageAnimationTimer();return changed;
+    }
+    void ClearPendingImageLoads(){
+        pendingImageNodes.clear();
+        javascript.CancelPendingImageRequests();
+    }
+    void CompleteAsyncImage(std::unique_ptr<AsyncImageResult> result){
+        if(!result||result->generation!=resourceGeneration)return;
+        pendingRasterImages.erase(result->key);
+        if(result->image&&result->image->animated){
+            const auto now=GetTickCount64();
+            result->image->nextFrameTick=now+
+                std::max(1u,result->image->frames.front().delayMs);
+        }
+        rasterImageCache[result->key]=result->image;
+        std::vector<std::shared_ptr<Node>> completed;
+        std::unordered_set<const Node*> seen;
+        const auto append=[&](const std::shared_ptr<Node>& node){
+            if(!node||!seen.insert(node.get()).second)return;
+            const auto source=node->Attribute(L"src");
+            if(source.empty()||ResolveResourceReference(source)!=result->key)return;
+            node->image=result->image;node->imageSource=source;node->imageComplete=true;
+            completed.push_back(node);
+        };
+        const auto pending=pendingImageNodes.find(result->key);
+        if(pending!=pendingImageNodes.end()){
+            auto nodes=std::move(pending->second);pendingImageNodes.erase(pending);
+            for(const auto& node:nodes)append(node);
+        }
+        for(const auto& node:document.QuerySelectorAll(L"img"))append(node);
+        layoutDirty=true;viewportOnlyDirty=false;SyncImageAnimationTimer();
+        InvalidateRect(hwnd,nullptr,FALSE);
+        for(const auto& node:completed){
+            if(result->generation!=resourceGeneration)break;
+            JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
+            javascript.DispatchNodeEvent(node,result->image?L"load":L"error",event);
+            javascript.CompleteImageRequest(node);
+        }
     }
     void AdvanceImageAnimations(){
         KillTimer(hwnd,kImageAnimationTimer);imageAnimationTimerActive=false;
@@ -657,6 +856,11 @@ struct View::Impl {
         RECT clipped{};if(IntersectRect(&clipped,&dirty,&client))InvalidateRect(hwnd,&clipped,FALSE);
     }
     void InvalidateScrollViewport(const std::shared_ptr<Node>& node){
+        // Replaced elements backed by child HWNDs participate in the same
+        // scroll coordinate space as painted layout boxes.  LayoutEngine moves
+        // those boxes as scroll offsets change, so mirror the new coordinates
+        // before repainting the exposed viewport.
+        UpdateFrameBounds();
         if(!layoutDirty)if(const auto* box=layout.BoxFor(node)){
             // Scrolled descendants are clipped to the scroll container's border box.
             // Invalidate only that box, converting CSS pixels to device pixels in
@@ -680,6 +884,7 @@ struct View::Impl {
     bool Initialize(HWND parent,const RECT& bounds){
         auto instance=reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(parent,GWLP_HINSTANCE));if(!instance)instance=GetModuleHandleW(nullptr);if(!EnsureWindowClass(instance,kWindowClass,&Impl::WindowProc)){lastError=L"Failed to register TWebFrame window class";return false;}
         hwnd=CreateWindowExW(0,kWindowClass,L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|WS_CLIPCHILDREN,bounds.left,bounds.top,bounds.right-bounds.left,bounds.bottom-bounds.top,parent,nullptr,instance,this);if(!hwnd){lastError=L"Failed to create TWebFrame child window";return false;}
+        {std::lock_guard<std::mutex> lock(asyncLifetime->mutex);asyncLifetime->hwnd=hwnd;}
         InitializeTooltip(instance);
         DragAcceptFiles(hwnd,TRUE);
         HRESULT hr=D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,d2dFactory.ReleaseAndGetAddressOf());if(FAILED(hr)){lastError=L"D2D1CreateFactory failed";return false;}
@@ -691,6 +896,10 @@ struct View::Impl {
         javascript.SetMutationSink([this](const JavaScriptRuntime::Mutation& mutation){HandleMutation(mutation);});
         javascript.SetFocusSink([this](const std::shared_ptr<Node>& node){
             SetFocusedNode(node,focusVisibleFromKeyboard,true);
+        });
+        javascript.SetDocumentFocusProvider([this]{
+            const auto focus=GetFocus();
+            return focus==hwnd||(focus&&IsChild(hwnd,focus));
         });
         javascript.SetActivationSink([this](const std::shared_ptr<Node>& node){
             if(!node)return;if(layoutDirty)Rebuild();float x=0,y=0;if(const auto* box=layout.BoxFor(node)){x=box->content.x+box->content.width/2;y=box->content.y+box->content.height/2;}Activate(node,x,y,true);
@@ -759,12 +968,42 @@ struct View::Impl {
             if(!SetTimer(hwnd,kAnimationFrameTimer,16,nullptr))
                 PostMessageW(hwnd,kAnimationFrameFallbackMessage,0,0);
         });
+        javascript.SetFrameDocumentSink([this](const std::shared_ptr<Node>& node,
+                                               const std::wstring& html){
+            CommitChildFrameDocument(node,html);
+        });
         javascript.SetTimerScheduler([this](unsigned delay){
             KillTimer(hwnd,kJavaScriptTimer);
             if(delay)SetTimer(hwnd,kJavaScriptTimer,std::max(1u,delay),nullptr);
         });
         javascript.SetResourceLoader([this](const std::wstring& resource,std::wstring& content){
             return LoadTextResource(resource,content);
+        });
+        javascript.SetAsyncResourceLoader([this](const std::wstring& resource,
+                                                  std::function<void(bool,std::wstring)> complete){
+            if(!parallelResourceLoading){
+                std::wstring content;const bool loaded=LoadTextResource(resource,content);
+                complete(loaded,std::move(content));return;
+            }
+            const auto loader=resourceLoader;const auto base=basePath;
+            const auto lifetime=asyncLifetime;
+            const auto generation=resourceGeneration;
+            ImageWorkers().Submit([resource,complete=std::move(complete),loader,base,
+                                   lifetime,generation]() mutable {
+                {
+                    std::lock_guard<std::mutex> lock(lifetime->mutex);
+                    if(!lifetime->alive||!lifetime->hwnd||
+                       lifetime->resourceGeneration!=generation)return;
+                }
+                auto result=std::make_unique<AsyncTextResult>();
+                result->generation=generation;result->completion=std::move(complete);
+                result->loaded=LoadTextResourceForBase(loader,base,resource,result->content);
+                std::lock_guard<std::mutex> lock(lifetime->mutex);
+                if(!lifetime->alive||!lifetime->hwnd||
+                   lifetime->resourceGeneration!=generation)return;
+                if(PostMessageW(lifetime->hwnd,kAsyncTextReadyMessage,0,
+                                reinterpret_cast<LPARAM>(result.get())))result.release();
+            });
         });
         javascript.SetNavigationSink([this](const std::wstring& target){
             pendingNavigation=target;
@@ -774,9 +1013,17 @@ struct View::Impl {
         javascript.SetDialogSink([this](const std::wstring& message){
             MessageBoxW(hwnd,message.c_str(),L"",MB_OK|MB_ICONINFORMATION);
         });
-        javascript.SetFrameMessageSink([this](const std::shared_ptr<Node>& node,const std::wstring& data){
+        javascript.SetDocumentWriteSink([this](const std::wstring& html){
+            // document.open()/write()/close() creates a replacement Document
+            // in the same browsing context.  Keep the JavaScript Window and
+            // its globals (for example SafeFrame's bootstrap configuration)
+            // while rebuilding DOM, CSS, resources, layout, and child frames.
+            LoadHtmlInternal(&html,{},{},{},{},basePath,currentLocation,true);
+        });
+        javascript.SetFrameMessageSink([this](const std::shared_ptr<Node>& node,const std::wstring& data,
+                                              const std::wstring& origin){
             for(auto& frame:childFrames)if(frame.node==node){
-                frame.view->impl_->javascript.DispatchWindowMessageAsJson(data);
+                frame.view->impl_->javascript.DispatchWindowMessageAsJson(data,{},origin);
                 frame.view->impl_->layoutDirty=true;
                 InvalidateRect(frame.view->Window(),nullptr,FALSE);
                 break;
@@ -791,6 +1038,16 @@ struct View::Impl {
                 geometry.clientWidth=box->content.width;geometry.clientHeight=box->content.height;
                 geometry.scrollWidth=std::max(box->content.width,box->scrollWidth);
                 geometry.scrollHeight=std::max(box->content.height,box->scrollHeight);
+            }
+            // In standards mode the root element's client box represents the
+            // viewport, even though the layout root itself is an internal
+            // wrapper rather than an ordinary CSS content box.
+            if(node&&node==document.QuerySelector(L"html")){
+                RECT client{};GetClientRect(hwnd,&client);const float scale=DpiScale();
+                geometry.clientWidth=static_cast<float>(std::max(1L,client.right))/scale;
+                geometry.clientHeight=static_cast<float>(std::max(1L,client.bottom))/scale;
+                geometry.scrollWidth=std::max(geometry.scrollWidth,geometry.clientWidth);
+                geometry.scrollHeight=std::max(geometry.scrollHeight,geometry.clientHeight);
             }
             return geometry;
         });
@@ -836,15 +1093,31 @@ struct View::Impl {
     }
     void UpdateFrameBounds(){
         const float scale=DpiScale();
-        for(auto& frame:childFrames){
+        struct FramePlacement { HWND window=nullptr;RECT bounds{};bool visible=false; };
+        std::vector<FramePlacement> placements;placements.reserve(childFrames.size());
+        // Moving or showing a child HWND can synchronously dispatch messages
+        // that mutate the DOM and resynchronize childFrames. Compute the full
+        // placement list first so vector erasure/reallocation cannot invalidate
+        // the loop that is currently applying layout.
+        for(const auto& frame:childFrames){
             const auto* box=layout.BoxFor(frame.node);
-            if(!box||!box->visible||box->content.width<=0||box->content.height<=0){frame.view->SetVisible(false);continue;}
+            FramePlacement placement;placement.window=frame.view?frame.view->Window():nullptr;
+            if(!box||!box->visible||box->content.width<=0||box->content.height<=0){
+                placements.push_back(placement);continue;
+            }
             RECT bounds{static_cast<LONG>(std::floor(box->content.x*scale)),
                 static_cast<LONG>(std::floor(box->content.y*scale)),
                 static_cast<LONG>(std::ceil((box->content.x+box->content.width)*scale)),
                 static_cast<LONG>(std::ceil((box->content.y+box->content.height)*scale))};
-            frame.view->SetBounds(bounds);
-            frame.view->SetVisible(true);
+            placement.bounds=bounds;placement.visible=true;placements.push_back(placement);
+        }
+        for(const auto& placement:placements){
+            if(!placement.window||!IsWindow(placement.window))continue;
+            if(!placement.visible){ShowWindow(placement.window,SW_HIDE);continue;}
+            MoveWindow(placement.window,placement.bounds.left,placement.bounds.top,
+                placement.bounds.right-placement.bounds.left,
+                placement.bounds.bottom-placement.bounds.top,TRUE);
+            if(IsWindow(placement.window))ShowWindow(placement.window,SW_SHOW);
         }
     }
     void SyncCssTransitionTimer(){
@@ -1144,10 +1417,187 @@ struct View::Impl {
             liveRegionText[node.get()]=text;
         }
     }
+    std::wstring ChildFrameSource(const std::shared_ptr<Node>& node)const{
+        if(!node)return {};
+        const auto srcdoc=node->attributes.find(L"srcdoc");
+        if(srcdoc!=node->attributes.end())return L"srcdoc:"+srcdoc->second;
+        const auto source=Trim(node->Attribute(L"src"));
+        return source.empty()||ToLower(source)==L"about:blank"?
+            L"about:blank":ResolveResourceReference(source);
+    }
+    void DispatchChildFrameEvent(const std::shared_ptr<Node>& node,bool success){
+        JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
+        javascript.DispatchNodeEvent(node,success?L"load":L"error",event);
+        layoutDirty=true;viewportOnlyDirty=false;InvalidateRect(hwnd,nullptr,FALSE);
+    }
+    void StartChildFrame(const std::shared_ptr<Node>& node,
+                         const std::unordered_map<std::wstring,std::wstring>* preparedText=nullptr,
+                         const std::unordered_set<std::wstring>* failedText=nullptr){
+        if(!node||node->tag!=L"iframe"||!IsConnectedToDocument(node))return;
+        const auto descriptor=ChildFrameSource(node);
+        RECT bounds{0,0,1,1};auto child=View::Create(hwnd,bounds);
+        if(!child){DispatchChildFrameEvent(node,false);return;}
+        child->SetResourceLoader(resourceLoader);
+        child->SetBinaryResourceLoader(binaryResourceLoader);
+        child->SetParallelResourceLoading(parallelResourceLoading);
+        child->SetPageScriptsEnabled(pageScriptsEnabled);
+        child->SetNavigationHandler(navigationHandler);
+        child->SetMessageHandler([this](const std::wstring& message){
+            if(messageHandler)messageHandler(message);
+        });
+        // The iframe name initializes the child browsing context's Window
+        // name and persists across that context's navigations.
+        child->impl_->javascript.SetWindowName(javascript.FrameWindowName(node));
+        JavaScriptRuntime::ParentMessageSink deliverToParent=
+            [this,node](const std::wstring& data,const std::wstring& origin){
+            javascript.DispatchWindowMessageAsJson(data,node,origin);
+            layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);
+        };
+        child->impl_->javascript.SetParentMessageSink(deliverToParent);
+        if(topMessageRelay)child->impl_->javascript.SetTopMessageSink(topMessageRelay);
+        child->impl_->topMessageRelay=topMessageRelay?topMessageRelay:deliverToParent;
+        const auto request=++nextChildFrameRequest;
+        childFrames.push_back({node,std::move(child),descriptor,request});
+        if(parallelResourceLoading){
+            const auto parentLifetime=asyncLifetime;const auto parentGeneration=resourceGeneration;
+            childFrames.back().view->SetLoadHandler(
+                [node,parentLifetime,parentGeneration,request](bool success,const std::wstring&){
+                    auto result=std::make_unique<AsyncFrameResult>();
+                    result->generation=parentGeneration;result->request=request;
+                    result->success=success;result->node=node;
+                    std::lock_guard<std::mutex> lock(parentLifetime->mutex);
+                    if(!parentLifetime->alive||!parentLifetime->hwnd||
+                       parentLifetime->resourceGeneration!=parentGeneration)return;
+                    if(PostMessageW(parentLifetime->hwnd,kAsyncFrameReadyMessage,0,
+                                    reinterpret_cast<LPARAM>(result.get())))result.release();
+                });
+        }
+
+        std::wstring childHtml,frameBase,frameLocation;
+        bool loaded=false,deferSource=false;
+        const auto srcdoc=node->attributes.find(L"srcdoc");
+        if(srcdoc!=node->attributes.end()){
+            childHtml=srcdoc->second;frameBase=basePath;frameLocation=L"about:srcdoc";loaded=true;
+        }else{
+            const auto source=Trim(node->Attribute(L"src"));
+            if(source.empty()||ToLower(source)==L"about:blank"){
+                childHtml=L"<!doctype html><html><head></head><body></body></html>";
+                frameBase=basePath;frameLocation=L"about:blank";loaded=true;
+            }else{
+                const auto sourceKey=ResolveResourceReference(source);
+                const auto prepared=preparedText?preparedText->find(sourceKey):
+                    std::unordered_map<std::wstring,std::wstring>::const_iterator{};
+                if(preparedText&&prepared!=preparedText->end()){
+                    childHtml=prepared->second;loaded=true;
+                }else if(failedText&&failedText->count(sourceKey)>0){
+                    loaded=false;
+                }else if(parallelResourceLoading){
+                    deferSource=true;
+                }else loaded=LoadTextResource(source,childHtml);
+                const auto resolvedSource=ResolveResourceReference(source);
+                if(resolvedSource.find(L"://")!=std::wstring::npos){
+                    frameBase=resolvedSource;frameLocation=resolvedSource;
+                }else{
+                    auto framePath=std::filesystem::path(source);
+                    const auto suffix=source.find_first_of(L"?#");
+                    if(suffix!=std::wstring::npos)
+                        framePath=std::filesystem::path(source.substr(0,suffix));
+                    if(framePath.is_relative())framePath=std::filesystem::path(basePath)/framePath;
+                    frameBase=framePath.parent_path().wstring();frameLocation=framePath.wstring();
+                }
+                if(deferSource){
+                    const auto loader=resourceLoader;const auto parentBase=basePath;
+                    const auto generation=resourceGeneration;const auto lifetime=asyncLifetime;
+                    ImageWorkers().Submit([source,node,loader,parentBase,generation,lifetime,
+                                           frameBase,frameLocation,request]{
+                        {
+                            std::lock_guard<std::mutex> lock(lifetime->mutex);
+                            if(!lifetime->alive||!lifetime->hwnd||
+                               lifetime->resourceGeneration!=generation)return;
+                        }
+                        auto result=std::make_unique<AsyncFrameSourceResult>();
+                        result->generation=generation;result->request=request;result->node=node;
+                        result->base=frameBase;result->location=frameLocation;
+                        result->loaded=LoadTextResourceForBase(loader,parentBase,source,result->html);
+                        std::lock_guard<std::mutex> lock(lifetime->mutex);
+                        if(!lifetime->alive||!lifetime->hwnd||
+                           lifetime->resourceGeneration!=generation)return;
+                        if(PostMessageW(lifetime->hwnd,kAsyncFrameSourceReadyMessage,0,
+                                        reinterpret_cast<LPARAM>(result.get())))result.release();
+                    });
+                    return;
+                }
+            }
+        }
+        auto found=std::find_if(childFrames.begin(),childFrames.end(),
+            [&](const ChildFrame& frame){return frame.node==node&&frame.request==request;});
+        if(found==childFrames.end())return;
+        if(!loaded){childFrames.erase(found);DispatchChildFrameEvent(node,false);return;}
+        auto& frame=*found->view;
+        if(parallelResourceLoading){
+            frame.impl_->LoadHtmlAsync(childHtml,frameBase,frameLocation);return;
+        }
+        if(!frame.impl_->LoadHtml(childHtml,frameBase,frameLocation)){
+            childFrames.erase(found);DispatchChildFrameEvent(node,false);return;
+        }
+        DispatchChildFrameEvent(node,true);
+    }
+    void CommitChildFrameDocument(const std::shared_ptr<Node>& node,
+                                  const std::wstring& html){
+        if(!node||node->tag!=L"iframe"||!IsConnectedToDocument(node))return;
+        auto found=std::find_if(childFrames.begin(),childFrames.end(),
+            [&](const ChildFrame& frame){return frame.node==node;});
+        if(found==childFrames.end()){
+            StartChildFrame(node);
+            found=std::find_if(childFrames.begin(),childFrames.end(),
+                [&](const ChildFrame& frame){return frame.node==node;});
+        }
+        if(found==childFrames.end())return;
+        constexpr auto location=L"about:blank";
+        if(parallelResourceLoading){
+            found->view->impl_->LoadHtmlAsync(html,basePath,location);
+            return;
+        }
+        const bool loaded=found->view->impl_->LoadHtml(html,basePath,location);
+        DispatchChildFrameEvent(node,loaded);
+    }
+    void SyncChildFrames(const std::unordered_map<std::wstring,std::wstring>* preparedText=nullptr,
+                         const std::unordered_set<std::wstring>* failedText=nullptr){
+        const auto nodes=document.QuerySelectorAll(L"iframe");
+        std::unordered_set<const Node*> live;
+        for(const auto& node:nodes)live.insert(node.get());
+        childFrames.erase(std::remove_if(childFrames.begin(),childFrames.end(),
+            [&](const ChildFrame& frame){
+                return live.count(frame.node.get())==0||frame.source!=ChildFrameSource(frame.node);
+            }),childFrames.end());
+        for(const auto& node:nodes){
+            const auto found=std::find_if(childFrames.begin(),childFrames.end(),
+                [&](const ChildFrame& frame){return frame.node==node;});
+            if(found==childFrames.end())StartChildFrame(node,preparedText,failedText);
+            else found->view->impl_->javascript.SetWindowName(javascript.FrameWindowName(node));
+        }
+        UpdateFrameBounds();
+    }
+    void ScheduleChildFrameSync(){
+        if(childFrameSyncPending)return;
+        childFrameSyncPending=true;
+        if(!PostMessageW(hwnd,kSyncChildFramesMessage,0,0))childFrameSyncPending=false;
+    }
     void HandleMutation(const JavaScriptRuntime::Mutation& mutation){
-        const bool imageChanged=(mutation.kind==JavaScriptRuntime::MutationKind::Tree||
-            mutation.kind==JavaScriptRuntime::MutationKind::Layout||
-            mutation.kind==JavaScriptRuntime::MutationKind::Style)&&LoadImages(true);
+        bool framesMayHaveChanged=mutation.kind==JavaScriptRuntime::MutationKind::Tree;
+        if(!framesMayHaveChanged)for(const auto& target:mutation.targets)
+            if(target&&target->tag==L"iframe"){framesMayHaveChanged=true;break;}
+        if(framesMayHaveChanged)ScheduleChildFrameSync();
+        bool imageChanged=false;
+        if(mutation.kind==JavaScriptRuntime::MutationKind::Tree||
+           mutation.kind==JavaScriptRuntime::MutationKind::Layout||
+           mutation.kind==JavaScriptRuntime::MutationKind::Style){
+            imageChanged=LoadImages(true);
+            // Image() and document.createElement('img') may begin fetching
+            // before they are connected to the document tree.
+            for(const auto& target:mutation.targets)
+                imageChanged=LoadImageNode(target,true)||imageChanged;
+        }
         if(imageChanged){layoutDirty=true;viewportOnlyDirty=false;}
         LayoutRect dirtyBounds{};bool hasDirtyBounds=false,canTarget=!layoutDirty&&
             !mutation.targets.empty()&&(mutation.kind==JavaScriptRuntime::MutationKind::Paint||
@@ -1185,9 +1635,12 @@ struct View::Impl {
             if(layoutDirty)viewportOnlyDirty=false;
             else SyncCssTransitionTimer();
         }
+        bool scrollChanged=false;
         if(!layoutDirty&&(mutation.kind==JavaScriptRuntime::MutationKind::Paint||
                           mutation.kind==JavaScriptRuntime::MutationKind::Style))
-            for(const auto& target:mutation.targets)layout.SyncScroll(target);
+            for(const auto& target:mutation.targets)
+                scrollChanged=layout.SyncScroll(target)||scrollChanged;
+        if(scrollChanged)UpdateFrameBounds();
         if(canTarget&&!layoutDirty&&mutation.kind==JavaScriptRuntime::MutationKind::Style)
             for(const auto& target:mutation.targets){
                 LayoutRect visual{};if(!layout.VisualBounds(target,visual)){canTarget=false;break;}
@@ -2140,9 +2593,9 @@ struct View::Impl {
             JavaScriptRuntime::EventInit close{};close.bubbles=false;close.cancelable=false;javascript.DispatchNodeEvent(dialog,L"close",close);
             layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);
         }
-        if(browserMode&&method!=L"dialog"){
+        if(navigationHandler&&method!=L"dialog"){
             if(!method.empty()&&method!=L"get"){
-                lastError=L"POST form submission is not supported by this browser";
+                lastError=L"POST form submission is not supported";
                 if(loadHandler)loadHandler(false,lastError);
                 return true;
             }
@@ -2598,6 +3051,56 @@ struct View::Impl {
         LRESULT textResult=0;if(textInput.HandleMessage(hwnd,message,wParam,lParam,textResult))return textResult;
         switch(message){
         case kAccessibilityDispatchMessage:return accessibility?accessibility->HandleDispatch(lParam):0;
+        case kAsyncImageReadyMessage:
+            CompleteAsyncImage(std::unique_ptr<AsyncImageResult>(
+                reinterpret_cast<AsyncImageResult*>(lParam)));
+            return 0;
+        case kAsyncDocumentReadyMessage:
+            CompleteAsyncDocument(std::unique_ptr<AsyncDocumentResult>(
+                reinterpret_cast<AsyncDocumentResult*>(lParam)));
+            return 0;
+        case kAsyncTextReadyMessage:{
+            std::unique_ptr<AsyncTextResult> result(
+                reinterpret_cast<AsyncTextResult*>(lParam));
+            if(result&&result->generation==resourceGeneration&&result->completion)
+                result->completion(result->loaded,std::move(result->content));
+            return 0;
+        }
+        case kAsyncFrameReadyMessage:{
+            std::unique_ptr<AsyncFrameResult> result(
+                reinterpret_cast<AsyncFrameResult*>(lParam));
+            if(result&&result->generation==resourceGeneration&&result->node){
+                const auto found=std::find_if(childFrames.begin(),childFrames.end(),
+                    [&](const ChildFrame& frame){return frame.node==result->node&&
+                                                        frame.request==result->request;});
+                if(found==childFrames.end())return 0;
+                if(!result->success)childFrames.erase(found);
+                JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
+                javascript.DispatchNodeEvent(result->node,result->success?L"load":L"error",event);
+                layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);
+            }
+            return 0;
+        }
+        case kAsyncFrameSourceReadyMessage:{
+            std::unique_ptr<AsyncFrameSourceResult> result(
+                reinterpret_cast<AsyncFrameSourceResult*>(lParam));
+            if(!result||result->generation!=resourceGeneration||!result->node)return 0;
+            const auto found=std::find_if(childFrames.begin(),childFrames.end(),
+                [&](const ChildFrame& frame){return frame.node==result->node&&
+                                                    frame.request==result->request;});
+            if(found==childFrames.end())return 0;
+            if(result->loaded){
+                found->view->impl_->LoadHtmlAsync(result->html,result->base,result->location);
+            }else{
+                childFrames.erase(found);
+                JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
+                javascript.DispatchNodeEvent(result->node,L"error",event);
+                layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);
+            }
+            return 0;
+        }
+        case kSyncChildFramesMessage:
+            childFrameSyncPending=false;SyncChildFrames();return 0;
         case kNavigationMessage:{
             auto target=std::move(pendingNavigation);pendingNavigation.clear();
             if(target.empty())return 0;
@@ -2680,7 +3183,7 @@ struct View::Impl {
                 }
                 CloseSelectPopup();
             }
-            if(layout.BeginScrollbarInteraction(x,y,scrollbarDragNode,scrollbarDragOffset,scrollbarDragHorizontal)){if(scrollbarDragNode)SetCapture(hwnd);else javascript.DispatchNodeEvent(layout.HitTest(x,y),L"scroll");if(accessibility)accessibility->Invalidate();InvalidateRect(hwnd,nullptr,FALSE);return 0;}
+            if(layout.BeginScrollbarInteraction(x,y,scrollbarDragNode,scrollbarDragOffset,scrollbarDragHorizontal)){if(scrollbarDragNode)SetCapture(hwnd);else javascript.DispatchNodeEvent(layout.HitTest(x,y),L"scroll");if(accessibility)accessibility->Invalidate();UpdateFrameBounds();InvalidateRect(hwnd,nullptr,FALSE);return 0;}
             SetFocus(hwnd);auto target=layout.HitTest(x,y);auto pointer=PointerEventAt(wParam,x,y,0,1);if(javascript.DispatchNodeEvent(target,L"pointerdown",pointer))return 0;Activate(target,x,y);
             if(editingNode&&focused&&FocusTarget(target)==focused&&
                (IsTextControl(focused)||IsContentEditable(focused))){
@@ -2809,18 +3312,60 @@ struct View::Impl {
         case WM_SETCURSOR:{POINT screenPoint{};GetCursorPos(&screenPoint);const LRESULT parentHit=ParentResizeHit(screenPoint);if(const HCURSOR resize=ResizeCursor(parentHit)){SetCursor(resize);return TRUE;}const UINT hit=LOWORD(lParam);
             if(const HCURSOR resize=ResizeCursor(hit)){SetCursor(resize);return TRUE;}
             if(hit==HTCLIENT){SetCursor(CursorAtCurrentPosition());return TRUE;}break;}
-        case WM_DESTROY:pendingNavigation.clear();HideTooltip();if(tooltip){DestroyWindow(tooltip);tooltip=nullptr;}if(tooltipFont){DeleteObject(tooltipFont);tooltipFont=nullptr;}KillTimer(hwnd,kAnimationFrameTimer);KillTimer(hwnd,kJavaScriptTimer);KillTimer(hwnd,kCssTransitionTimer);KillTimer(hwnd,kCaretBlinkTimer);KillTimer(hwnd,kImageAnimationTimer);caretBlinkTimerActive=false;cssTransitionTimerActive=false;imageAnimationTimerActive=false;childFrames.clear();textInput.Cancel(nullptr);if(accessibility)accessibility->Disconnect();ResetRenderTargets();return 0;default:break;}return DefWindowProcW(hwnd,message,wParam,lParam);}
-    bool LoadHtml(const std::wstring& html,const std::wstring& base,const std::wstring& location){
-        HideTooltip();lastError.clear();childFrames.clear();basePath=base;rasterImageCache.clear();textInput.Cancel(nullptr);focused.reset();editingNode.reset();ClearEditingBoundary();textSelectionDragging=false;if(GetCapture()==hwnd)ReleaseCapture();StopCaretBlink();hovered.reset();hoverPath.clear();hasPointerPosition=false;pointerX=pointerY=0;scrollbarDragNode.reset();scrollbarDragOffset=0;scrollbarDragHorizontal=false;openSelectPopup.reset();selectPopupHotIndex=-1;selectPopupScrollOffset=0;selectPopupShowAll=false;selectPopupScrollDragging=false;selectPopupScrollDragOffset=0;selectionAnchor=caretPosition=0;textEditDirty=false;liveRegions.clear();liveRegionText.clear();KillTimer(hwnd,kCssTransitionTimer);KillTimer(hwnd,kImageAnimationTimer);cssTransitionTimerActive=false;imageAnimationTimerActive=false;layout.ClearTransitions();javascript.Clear();javascript.SetDocumentReadyState(L"loading");UpdateJavaScriptViewport();if(!document.Parse(html,&lastError)){if(loadHandler)loadHandler(false,lastError);return false;}
-        std::wstring css=document.StyleText();
-        for(const auto& link:document.QuerySelectorAll(L"link[rel='stylesheet']")){
-            std::wstring external;if(LoadTextResource(link->Attribute(L"href"),external))css+=external+L"\n";
-            else if(!browserMode){lastError=L"Cannot load stylesheet: "+link->Attribute(L"href");if(loadHandler)loadHandler(false,lastError);return false;}
+        case WM_DESTROY:{
+            {std::lock_guard<std::mutex> lock(asyncLifetime->mutex);
+                asyncLifetime->alive=false;asyncLifetime->hwnd=nullptr;}
+            MSG pending{};
+            while(PeekMessageW(&pending,hwnd,kAsyncImageReadyMessage,
+                               kAsyncImageReadyMessage,PM_REMOVE))
+                delete reinterpret_cast<AsyncImageResult*>(pending.lParam);
+            while(PeekMessageW(&pending,hwnd,kAsyncDocumentReadyMessage,
+                               kAsyncDocumentReadyMessage,PM_REMOVE))
+                delete reinterpret_cast<AsyncDocumentResult*>(pending.lParam);
+            while(PeekMessageW(&pending,hwnd,kAsyncTextReadyMessage,
+                               kAsyncTextReadyMessage,PM_REMOVE))
+                delete reinterpret_cast<AsyncTextResult*>(pending.lParam);
+            while(PeekMessageW(&pending,hwnd,kAsyncFrameReadyMessage,
+                               kAsyncFrameReadyMessage,PM_REMOVE))
+                delete reinterpret_cast<AsyncFrameResult*>(pending.lParam);
+            while(PeekMessageW(&pending,hwnd,kAsyncFrameSourceReadyMessage,
+                               kAsyncFrameSourceReadyMessage,PM_REMOVE))
+                delete reinterpret_cast<AsyncFrameSourceResult*>(pending.lParam);
+            pendingNavigation.clear();HideTooltip();if(tooltip){DestroyWindow(tooltip);tooltip=nullptr;}if(tooltipFont){DeleteObject(tooltipFont);tooltipFont=nullptr;}KillTimer(hwnd,kAnimationFrameTimer);KillTimer(hwnd,kJavaScriptTimer);KillTimer(hwnd,kCssTransitionTimer);KillTimer(hwnd,kCaretBlinkTimer);KillTimer(hwnd,kImageAnimationTimer);caretBlinkTimerActive=false;cssTransitionTimerActive=false;imageAnimationTimerActive=false;childFrames.clear();textInput.Cancel(nullptr);if(accessibility)accessibility->Disconnect();ResetRenderTargets();return 0;}
+        default:break;}return DefWindowProcW(hwnd,message,wParam,lParam);}
+    bool LoadHtmlInternal(const std::wstring* html,std::unique_ptr<Document> parsed,
+                          std::unique_ptr<StyleSheet> parsedStyles,
+                          std::unordered_map<std::wstring,std::wstring> preparedText,
+                          std::unordered_set<std::wstring> failedText,
+                          const std::wstring& base,const std::wstring& location,
+                          bool preserveJavaScriptWindow=false){
+        HideTooltip();lastError.clear();childFrames.clear();childFrameSyncPending=false;basePath=base;currentLocation=location;++resourceGeneration;PublishAsyncGenerations();rasterImageCache.clear();pendingRasterImages.clear();ClearPendingImageLoads();textInput.Cancel(nullptr);focused.reset();editingNode.reset();ClearEditingBoundary();textSelectionDragging=false;if(GetCapture()==hwnd)ReleaseCapture();StopCaretBlink();hovered.reset();hoverPath.clear();hasPointerPosition=false;pointerX=pointerY=0;scrollbarDragNode.reset();scrollbarDragOffset=0;scrollbarDragHorizontal=false;openSelectPopup.reset();selectPopupHotIndex=-1;selectPopupScrollOffset=0;selectPopupShowAll=false;selectPopupScrollDragging=false;selectPopupScrollDragOffset=0;selectionAnchor=caretPosition=0;textEditDirty=false;liveRegions.clear();liveRegionText.clear();KillTimer(hwnd,kCssTransitionTimer);KillTimer(hwnd,kImageAnimationTimer);cssTransitionTimerActive=false;imageAnimationTimerActive=false;layout.ClearTransitions();if(!preserveJavaScriptWindow)javascript.Clear();javascript.SetDocumentReadyState(L"loading");UpdateJavaScriptViewport();if(parsed)document.AdoptParsed(*parsed);else if(!html||!document.Parse(*html,&lastError)){if(loadHandler)loadHandler(false,lastError);return false;}
+        const bool externalPage=base.find(L"://")!=std::wstring::npos;
+        const auto loadText=[&](const std::wstring& reference,std::wstring& content){
+            const auto key=ResolveResourceReference(reference);
+            const auto found=preparedText.find(key);
+            if(found!=preparedText.end()){content=found->second;return true;}
+            if(failedText.count(key)>0)return false;
+            return LoadTextResource(reference,content);
+        };
+        if(parsedStyles)styles=std::move(*parsedStyles);
+        else{
+            std::wstring css=document.StyleText();
+            for(const auto& link:document.QuerySelectorAll(L"link[rel='stylesheet']")){
+                std::wstring external;if(loadText(link->Attribute(L"href"),external))css+=external+L"\n";
+                else if(!externalPage){lastError=L"Cannot load stylesheet: "+link->Attribute(L"href");if(loadHandler)loadHandler(false,lastError);return false;}
+            }
+            if(!styles.Parse(css,&lastError)){
+                if(!externalPage){if(loadHandler)loadHandler(false,lastError);return false;}
+                styles.Parse(L"",nullptr);lastError.clear();
+            }
         }
-        if(!styles.Parse(css,&lastError)){
-            if(!browserMode){if(loadHandler)loadHandler(false,lastError);return false;}
-            styles.Parse(L"",nullptr);lastError.clear();
-        }
+        // Page scripts can synchronously query layout while the document is
+        // still loading.  The previous navigation's layout boxes are no
+        // longer valid once the new DOM and style sheet have been installed,
+        // so make the geometry provider rebuild them before the first such
+        // query instead of exposing stale (or missing) coordinates.
+        layoutDirty=true;viewportOnlyDirty=false;
         LoadImages(false);std::vector<std::pair<std::shared_ptr<Node>,std::wstring>> initialImages;
         for(const auto& image:document.QuerySelectorAll(L"img"))
             initialImages.push_back({image,image->imageSource});
@@ -2828,18 +3373,22 @@ struct View::Impl {
         // Each classic script is its own JavaScript Script Record. A load or
         // syntax/runtime error in one script must not prevent later scripts
         // from running, and function declarations are hoisted only within the
-        // script that contains them. Browser mode intentionally skips scripts.
-        for(const auto& script:browserMode?std::vector<std::shared_ptr<Node>>{}:
-                                            document.QuerySelectorAll(L"script")){
+        // script that contains them. Hosts may disable automatic page scripts
+        // while retaining normal URL, stylesheet, iframe and form behavior.
+        for(const auto& script:pageScriptsEnabled?document.QuerySelectorAll(L"script"):
+                                                  std::vector<std::shared_ptr<Node>>{}){
             if(!IsClassicJavaScriptType(script->Attribute(L"type")))continue;
             const auto source=script->Attribute(L"src");std::wstring program;
             if(source.empty())program=script->InnerText();
-            else if(!LoadTextResource(source,program)){
+            else if(!loadText(source,program)){
                 JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
                 javascript.DispatchNodeEvent(script,L"error",event);continue;
             }
             std::wstring scriptError;
-            if(!javascript.Execute(program,nullptr,&scriptError)){
+            javascript.SetCurrentScript(script);
+            const bool executed=javascript.Execute(program,nullptr,&scriptError);
+            javascript.SetCurrentScript({});
+            if(!executed){
                 JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
                 javascript.DispatchNodeEvent(script,L"error",event);continue;
             }
@@ -2849,44 +3398,14 @@ struct View::Impl {
             }
         }
         lastError.clear();
-        for(const auto& item:initialImages)if(item.first->imageSource==item.second&&!item.second.empty()){
+        for(const auto& item:initialImages)if(item.first->imageSource==item.second&&
+            !item.second.empty()&&item.first->imageComplete){
             JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
             javascript.DispatchNodeEvent(item.first,item.first->image?L"load":L"error",event);
         }
         javascript.SetDocumentReadyState(L"interactive");
         javascript.DispatchDocumentEvent(L"DOMContentLoaded");
-        for(const auto& node:document.QuerySelectorAll(L"iframe[src]")){
-            const auto source=node->Attribute(L"src");std::wstring childHtml;
-            if(!LoadTextResource(source,childHtml)){
-                JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
-                javascript.DispatchNodeEvent(node,L"error",event);continue;
-            }
-            RECT bounds{0,0,1,1};auto child=View::Create(hwnd,bounds);
-            if(!child){
-                JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
-                javascript.DispatchNodeEvent(node,L"error",event);continue;
-            }
-            child->SetResourceLoader(resourceLoader);
-            child->SetBinaryResourceLoader(binaryResourceLoader);
-            child->SetBrowserMode(browserMode);
-            child->SetNavigationHandler(navigationHandler);
-            child->SetMessageHandler([this](const std::wstring& message){if(messageHandler)messageHandler(message);});
-            child->impl_->javascript.SetParentMessageSink([this,node](const std::wstring& data){
-                javascript.DispatchWindowMessageAsJson(data,node);
-                layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);
-            });
-            childFrames.push_back({node,std::move(child)});
-            auto framePath=std::filesystem::path(source);const auto suffix=source.find_first_of(L"?#");
-            if(suffix!=std::wstring::npos)framePath=std::filesystem::path(source.substr(0,suffix));
-            if(framePath.is_relative())framePath=std::filesystem::path(basePath)/framePath;
-            auto& frame=*childFrames.back().view;
-            if(!frame.impl_->LoadHtml(childHtml,framePath.parent_path().wstring(),framePath.wstring())){
-                childFrames.pop_back();
-                JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
-                javascript.DispatchNodeEvent(node,L"error",event);continue;
-            }
-            javascript.DispatchNodeEvent(node,L"load");
-        }
+        SyncChildFrames(&preparedText,&failedText);
         javascript.SetDocumentReadyState(L"complete");
         javascript.DispatchWindowEvent(L"load");
         layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);JavaScriptRuntime::Mutation initialMutation;
@@ -2894,10 +3413,116 @@ struct View::Impl {
         NotifyAccessibilityMutation(initialMutation,true);
         if(loadHandler)loadHandler(true,L"");return true;
     }
+    bool LoadHtml(const std::wstring& html,const std::wstring& base,
+                  const std::wstring& location){
+        ++navigationGeneration;
+        PublishAsyncGenerations();
+        return LoadHtmlInternal(&html,{},{},{},{},base,location);
+    }
+    bool LoadHtmlAsync(const std::wstring& html,const std::wstring& base,
+                       const std::wstring& location){
+        const auto generation=++navigationGeneration;
+        ++resourceGeneration;pendingRasterImages.clear();ClearPendingImageLoads();
+        PublishAsyncGenerations();
+        const auto lifetime=asyncLifetime;
+        const auto loader=resourceLoader;
+        const bool loadStylesInWorker=parallelResourceLoading;
+        const bool executePageScripts=pageScriptsEnabled;
+        const bool externalPage=base.find(L"://")!=std::wstring::npos;
+        ImageWorkers().Submit([html,base,location,generation,lifetime,loader,
+                               loadStylesInWorker,executePageScripts,externalPage]{
+            {
+                std::lock_guard<std::mutex> lock(lifetime->mutex);
+                if(!lifetime->alive||!lifetime->hwnd||
+                   lifetime->navigationGeneration!=generation)return;
+            }
+            auto result=std::make_unique<AsyncDocumentResult>();
+            result->generation=generation;result->base=base;result->location=location;
+            result->document=std::make_unique<Document>();
+            if(!result->document->Parse(html,&result->error))result->document.reset();
+            if(result->document&&loadStylesInWorker){
+                const auto loadPrepared=[&](const std::wstring& reference,std::wstring& content){
+                    const auto key=ResolveResourceForBase(base,reference);
+                    const auto found=result->textResources.find(key);
+                    if(found!=result->textResources.end()){content=found->second;return true;}
+                    if(result->failedTextResources.count(key)>0)return false;
+                    const bool loaded=LoadTextResourceForBase(loader,base,reference,content);
+                    if(loaded)result->textResources.emplace(key,content);
+                    else result->failedTextResources.insert(key);
+                    return loaded;
+                };
+                std::wstring css=result->document->StyleText();
+                for(const auto& link:result->document->QuerySelectorAll(L"link[rel='stylesheet']")){
+                    std::wstring external;
+                    if(loadPrepared(link->Attribute(L"href"),external))
+                        css+=external+L"\n";
+                    else if(!externalPage){
+                        result->error=L"Cannot load stylesheet: "+link->Attribute(L"href");
+                        result->document.reset();break;
+                    }
+                }
+                if(result->document){
+                    result->styles=std::make_unique<StyleSheet>();
+                    if(!result->styles->Parse(css,&result->error)){
+                        if(!externalPage)result->document.reset();
+                        else{result->styles->Parse(L"",nullptr);result->error.clear();}
+                    }
+                }
+                if(result->document){
+                    if(executePageScripts)for(const auto& script:
+                        result->document->QuerySelectorAll(L"script[src]")){
+                        if(!IsClassicJavaScriptType(script->Attribute(L"type")))continue;
+                        std::wstring ignored;loadPrepared(script->Attribute(L"src"),ignored);
+                    }
+                }
+            }
+            std::lock_guard<std::mutex> lock(lifetime->mutex);
+            if(!lifetime->alive||!lifetime->hwnd||
+               lifetime->navigationGeneration!=generation)return;
+            if(PostMessageW(lifetime->hwnd,kAsyncDocumentReadyMessage,0,
+                            reinterpret_cast<LPARAM>(result.get())))result.release();
+        });
+        return true;
+    }
+    void CancelPendingLoads(){
+        ++navigationGeneration;++resourceGeneration;
+        pendingRasterImages.clear();ClearPendingImageLoads();PublishAsyncGenerations();
+    }
+    void CompleteAsyncDocument(std::unique_ptr<AsyncDocumentResult> result){
+        if(!result||result->generation!=navigationGeneration)return;
+        if(!result->document){
+            lastError=result->error.empty()?L"HTML parsing failed":result->error;
+            if(loadHandler)loadHandler(false,lastError);
+            return;
+        }
+        LoadHtmlInternal(nullptr,std::move(result->document),std::move(result->styles),
+                         std::move(result->textResources),
+                         std::move(result->failedTextResources),
+                         result->base,result->location);
+    }
 };
 
 View::View(std::unique_ptr<Impl> impl):impl_(std::move(impl)){}
 View::~View(){
+    if(impl_&&impl_->asyncLifetime){
+        {std::lock_guard<std::mutex> lock(impl_->asyncLifetime->mutex);
+            impl_->asyncLifetime->alive=false;impl_->asyncLifetime->hwnd=nullptr;}
+        if(impl_->hwnd){MSG message{};while(PeekMessageW(&message,impl_->hwnd,
+            kAsyncImageReadyMessage,kAsyncImageReadyMessage,PM_REMOVE))
+            delete reinterpret_cast<AsyncImageResult*>(message.lParam);}
+        if(impl_->hwnd){MSG message{};while(PeekMessageW(&message,impl_->hwnd,
+            kAsyncDocumentReadyMessage,kAsyncDocumentReadyMessage,PM_REMOVE))
+            delete reinterpret_cast<AsyncDocumentResult*>(message.lParam);}
+        if(impl_->hwnd){MSG message{};while(PeekMessageW(&message,impl_->hwnd,
+            kAsyncTextReadyMessage,kAsyncTextReadyMessage,PM_REMOVE))
+            delete reinterpret_cast<AsyncTextResult*>(message.lParam);}
+        if(impl_->hwnd){MSG message{};while(PeekMessageW(&message,impl_->hwnd,
+            kAsyncFrameReadyMessage,kAsyncFrameReadyMessage,PM_REMOVE))
+            delete reinterpret_cast<AsyncFrameResult*>(message.lParam);}
+        if(impl_->hwnd){MSG message{};while(PeekMessageW(&message,impl_->hwnd,
+            kAsyncFrameSourceReadyMessage,kAsyncFrameSourceReadyMessage,PM_REMOVE))
+            delete reinterpret_cast<AsyncFrameSourceResult*>(message.lParam);}
+    }
     // Disconnect UI Automation before DestroyWindow begins its synchronous
     // message teardown. UiaDisconnectProvider cannot make the required COM
     // call while handling a SendMessage-delivered WM_DESTROY.
@@ -2913,15 +3538,24 @@ void View::SetLoadHandler(LoadHandler handler){impl_->loadHandler=std::move(hand
 void View::SetResourceLoader(ResourceLoader loader){impl_->resourceLoader=std::move(loader);}
 void View::SetBinaryResourceLoader(BinaryResourceLoader loader){impl_->binaryResourceLoader=std::move(loader);}
 void View::SetNavigationHandler(NavigationHandler handler){impl_->navigationHandler=std::move(handler);}
-void View::SetBrowserMode(bool enabled){impl_->browserMode=enabled;}
+void View::SetParallelResourceLoading(bool enabled){impl_->parallelResourceLoading=enabled;}
+void View::SetPageScriptsEnabled(bool enabled){
+    impl_->pageScriptsEnabled=enabled;
+    impl_->javascript.SetInlineEventHandlersEnabled(enabled);
+}
 bool View::Navigate(const std::wstring& filePath){auto path=filePath;const auto suffix=path.find_first_of(L"?#");if(suffix!=std::wstring::npos)path.resize(suffix);std::ifstream input(path,std::ios::binary);if(!input){impl_->lastError=L"Cannot open HTML file: "+path;if(impl_->loadHandler)impl_->loadHandler(false,impl_->lastError);return false;}std::ostringstream bytes;bytes<<input.rdbuf();auto slash=path.find_last_of(L"\\/");return impl_->LoadHtml(Utf8ToWide(bytes.str()),slash==std::wstring::npos?L"":path.substr(0,slash),filePath);}
 bool View::NavigateToString(const std::wstring& html,const std::wstring& basePath){return impl_->LoadHtml(html,basePath,basePath);}
+bool View::NavigateToStringAsync(const std::wstring& html,const std::wstring& basePath){return impl_->LoadHtmlAsync(html,basePath,basePath);}
+void View::CancelPendingLoads(){impl_->CancelPendingLoads();}
 bool View::ExecuteScript(const std::wstring& source,std::wstring* result,std::wstring* error){const bool ok=impl_->javascript.Execute(source,result,error);if(!ok)impl_->lastError=error?*error:L"JavaScript execution failed";impl_->RefreshTextSelectionFromDom();return ok;}
 bool View::PostWebMessageAsJson(const std::wstring& json,std::wstring* error){const bool ok=impl_->javascript.DispatchWebMessageAsJson(json,error);if(!ok)impl_->lastError=error?*error:L"Invalid JSON web message";impl_->RefreshTextSelectionFromDom();return ok;}
 void View::PostWebMessageAsString(const std::wstring& message){impl_->javascript.DispatchWebMessageAsString(message);impl_->RefreshTextSelectionFromDom();}
 std::wstring View::DumpLayoutJson()const{if(impl_->layoutDirty)const_cast<Impl*>(impl_.get())->Rebuild();return impl_->layout.DumpJson();}
 std::wstring View::DumpAccessibilityJson()const{return const_cast<Impl*>(impl_.get())->DumpAccessibilityJson();}
-std::wstring View::LastError()const{return impl_->lastError;}
+std::wstring View::LastError()const{
+    if(!impl_->lastError.empty())return impl_->lastError;
+    return impl_->javascript.LastError();
+}
 std::wstring View::DocumentTitle()const{const auto title=impl_->document.QuerySelector(L"title");return title?title->InnerText():L"";}
 
 } // namespace TWebFrame

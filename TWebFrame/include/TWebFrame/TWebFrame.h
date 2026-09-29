@@ -20,7 +20,8 @@ public:
     using MessageHandler = std::function<void(const std::wstring&)>;
     using LoadHandler = std::function<void(bool, const std::wstring&)>;
     // Resolves page-relative text resources such as stylesheets, scripts, and
-    // JSON requested by fetch(). Return false when a resource is unavailable.
+    // data requested by fetch() or XMLHttpRequest. Return false when a resource
+    // is unavailable.
     using ResourceLoader = std::function<bool(const std::wstring&, std::wstring&)>;
     // Resolves byte resources without a text transcoding step. Image hosts use
     // this callback so JPEG/PNG/GIF bytes, including archive-backed resources,
@@ -45,12 +46,24 @@ public:
     void SetResourceLoader(ResourceLoader loader);
     void SetBinaryResourceLoader(BinaryResourceLoader loader);
     void SetNavigationHandler(NavigationHandler handler);
-    // Best-effort mode for fetched HTML: page scripts are not executed.
-    // This does not provide a browser sandbox or security boundary.
-    void SetBrowserMode(bool enabled);
+    // Load text/binary resources, parse asynchronous documents and CSS, and
+    // decode raster resources on a bounded worker pool. Host loaders used with
+    // this mode must be safe to call concurrently from worker threads.
+    void SetParallelResourceLoading(bool enabled);
+    // Controls automatic execution of script elements and inline event
+    // handlers. This does not provide a browser sandbox or security boundary.
+    void SetPageScriptsEnabled(bool enabled);
 
     bool Navigate(const std::wstring& filePath);
     bool NavigateToString(const std::wstring& html, const std::wstring& basePath = L"");
+    // Parses HTML on the bounded CPU worker pool and publishes the resulting
+    // document on the view's UI thread. Completion is reported by LoadHandler.
+    bool NavigateToStringAsync(const std::wstring& html,
+                               const std::wstring& basePath = L"");
+    // Invalidates queued document parses and image jobs without replacing the
+    // currently displayed document. In-flight host I/O may finish, but its
+    // result will not be published to this view.
+    void CancelPendingLoads();
 
     // Source is always parsed and compiled by TWebFrame's JavaScript compiler.
     // The returned string is the JavaScript result converted to a string.

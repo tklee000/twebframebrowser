@@ -948,7 +948,7 @@ std::uint64_t StyleContextHash(const std::shared_ptr<Node>& node,std::uint64_t p
                                const std::shared_ptr<Node>& knownPrevious={}){
     std::uint64_t hash=parentHash;MixHash(hash,HashText(node->tag));MixHash(hash,static_cast<std::uint64_t>(node->type));if(node->type==NodeType::Text)return hash;
     std::uint64_t attributes=0;for(const auto& item:node->attributes)if(styleSheet.AttributeAffectsStyle(item.first)){std::uint64_t pair=HashText(item.first);MixHash(pair,HashText(item.second));attributes^=pair;}MixHash(hash,attributes);
-    std::uint64_t inlineStyle=0;for(const auto& item:node->inlineStyle){std::uint64_t pair=HashText(item.first);MixHash(pair,HashText(item.second));inlineStyle^=pair;}MixHash(hash,inlineStyle);
+    std::uint64_t inlineStyle=0;for(const auto& item:node->inlineStyle){std::uint64_t pair=HashText(item.first);MixHash(pair,HashText(item.second));if(node->inlineStylePriority.count(item.first))MixHash(pair,1);inlineStyle^=pair;}MixHash(hash,inlineStyle);
     MixHash(hash,(node->checked?1ull:0ull)|(node->disabled?2ull:0ull)|(node->hovered?4ull:0ull)|(node->focused?8ull:0ull)|(node->focusVisible?16ull:0ull)|(node->focusWithin?128ull:0ull)|(node->indeterminate?256ull:0ull));auto parent=node->parent.lock();if(parent){bool first=false,last=false;std::uint64_t childIndex=0;std::shared_ptr<Node> previous;if(knownIndex){childIndex=knownIndex;first=knownIndex==1;last=knownIndex==knownCount;previous=knownPrevious;}else{std::uint64_t currentIndex=0;for(const auto& sibling:parent->children)if(sibling->type==NodeType::Element){++currentIndex;if(sibling==node){first=currentIndex==1;childIndex=currentIndex;break;}previous=sibling;}for(auto it=parent->children.rbegin();it!=parent->children.rend();++it)if((*it)->type==NodeType::Element){last=*it==node;break;}}MixHash(hash,(first?32ull:0ull)|(last?64ull:0ull));if(styleSheet.UsesNthChildFor(node))MixHash(hash,childIndex);if(previous){MixHash(hash,HashText(previous->tag));MixHash(hash,(previous->checked?1ull:0ull)|(previous->disabled?2ull:0ull)|(previous->focused?4ull:0ull)|(previous->focusVisible?8ull:0ull)|(previous->indeterminate?16ull:0ull));std::uint64_t siblingAttributes=0;for(const auto& item:previous->attributes)if(styleSheet.AttributeAffectsStyle(item.first)){std::uint64_t pair=HashText(item.first);MixHash(pair,HashText(item.second));siblingAttributes^=pair;}MixHash(hash,siblingAttributes);}}return hash;
 }
 
@@ -1987,6 +1987,9 @@ float NaturalWidth(const LayoutBox& box){
     }
     else if(box.node->tag==L"canvas")
         value=StyleSheet::Length(box.node->Attribute(L"width"),500,500,300);
+    else if(box.node->tag==L"iframe"||box.node->tag==L"embed"||
+            box.node->tag==L"object"||box.node->tag==L"video")
+        value=StyleSheet::Length(box.node->Attribute(L"width"),500,500,300);
     else if(box.node->tag==L"img"){
         const auto authoredWidth=Trim(box.node->Attribute(L"width"));
         const auto authoredHeight=Trim(box.node->Attribute(L"height"));
@@ -2164,7 +2167,8 @@ float MinContentWidth(const LayoutBox& box){
     }
     if(box.node->tag==L"br")return remember(0.0f);
     if(box.node->tag==L"input"||box.node->tag==L"select"||box.node->tag==L"button"||
-       box.node->tag==L"img")return remember(NaturalWidth(box));
+       box.node->tag==L"img"||box.node->tag==L"iframe"||box.node->tag==L"embed"||
+       box.node->tag==L"object"||box.node->tag==L"video")return remember(NaturalWidth(box));
     const auto display=box.style.Get(L"display");const bool flex=display==L"flex"||display==L"inline-flex";
     const bool horizontal=IsInlineLevel(display)||display==L"table-row"||(flex&&!IsColumnFlexDirection(box.style));
     const auto flexWrap=ToLower(Trim(box.style.Get(L"flex-wrap",L"nowrap")));
@@ -2236,6 +2240,9 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
         value=ControlLineHeight(text,box.style)+padding.top+padding.bottom+border.top+border.bottom;
     }
     else if(box.node->tag==L"canvas")
+        value=StyleSheet::Length(box.node->Attribute(L"height"),availableWidth,availableWidth,150);
+    else if(box.node->tag==L"iframe"||box.node->tag==L"embed"||
+            box.node->tag==L"object"||box.node->tag==L"video")
         value=StyleSheet::Length(box.node->Attribute(L"height"),availableWidth,availableWidth,150);
     else if(box.node->tag==L"img"){
         const auto authoredHeight=Trim(box.node->Attribute(L"height"));
@@ -2514,7 +2521,7 @@ LayoutRect PositionedRect(const LayoutBox& box,const LayoutRect& area,float view
     return {x,y,std::max(0.0f,width),std::max(0.0f,height)};
 }
 
-LayoutRect AbsoluteContainingBlock(const LayoutBox& box){
+LayoutRect PositionedPaddingBox(const LayoutBox& box){
     // CSS establishes an absolutely positioned descendant's containing block
     // from the ancestor's padding box, not its content box.  Derive it from
     // the final border box so percentages and opposing insets include authored
@@ -2523,6 +2530,23 @@ LayoutRect AbsoluteContainingBlock(const LayoutBox& box){
     return {box.rect.x+border.left,box.rect.y+border.top,
         std::max(0.0f,box.rect.width-border.left-border.right),
         std::max(0.0f,box.rect.height-border.top-border.bottom)};
+}
+
+const LayoutBox* AbsoluteContainingBlockAncestor(const LayoutBox& box){
+    // An absolutely positioned box is not generally positioned against its
+    // immediate DOM parent. Walk to the nearest positioned ancestor; if there
+    // is none, CSS uses the initial containing block (the viewport).
+    for(auto ancestor=box.parent;ancestor;ancestor=ancestor->parent)
+        if(ToLower(Trim(ancestor->style.Get(L"position",L"static")))!=L"static")
+            return ancestor;
+    return nullptr;
+}
+
+LayoutRect AbsoluteContainingBlock(const LayoutBox& box,float viewportWidth,
+                                   float viewportHeight){
+    if(const auto* ancestor=AbsoluteContainingBlockAncestor(box))
+        return PositionedPaddingBox(*ancestor);
+    return {0,0,viewportWidth,viewportHeight};
 }
 
 struct GridAreaDefinition {
@@ -4362,7 +4386,7 @@ LayoutEngine::~LayoutEngine(){ClearOwnerBoundThreadCaches();}
 void LayoutEngine::SetRasterImageResolver(RasterImageResolver resolver){rasterImageResolver_=std::move(resolver);}
 
 std::unique_ptr<LayoutBox> LayoutEngine::Build(const std::shared_ptr<Node>& node,const ComputedStyle* parentStyle,std::uint64_t parentContext,size_t siblingIndex,size_t siblingCount,const std::shared_ptr<Node>& previousElement){
-    if(!node)return {};auto box=std::make_unique<LayoutBox>();box->node=node;boxIndex_[node.get()]=box.get();const auto cacheKey=StyleContextHash(node,parentContext,styleSheet_,siblingIndex,siblingCount,previousElement);auto cached=styleCache_.find(cacheKey);if(cached!=styleCache_.end())box->style=cached->second;else{box->style=styleSheet_.Compute(node,parentStyle);styleCache_.emplace(cacheKey,box->style);}box->style.deviceScale=deviceScale_;box->visible=!box->style.Is(L"display",L"none");
+    if(!node||node->type==NodeType::Comment)return {};auto box=std::make_unique<LayoutBox>();box->node=node;boxIndex_[node.get()]=box.get();const auto cacheKey=StyleContextHash(node,parentContext,styleSheet_,siblingIndex,siblingCount,previousElement);auto cached=styleCache_.find(cacheKey);if(cached!=styleCache_.end())box->style=cached->second;else{box->style=styleSheet_.Compute(node,parentStyle);styleCache_.emplace(cacheKey,box->style);}box->style.deviceScale=deviceScale_;box->visible=!box->style.Is(L"display",L"none");
     if(!box->visible)return box;
     if(node->type==NodeType::Element&&styleSheet_.HasPseudoRulesFor(node,L"first-letter")){
         std::shared_ptr<Node> textNode;size_t offset=0,length=0;
@@ -4405,7 +4429,7 @@ std::unique_ptr<LayoutBox> LayoutEngine::Build(const std::shared_ptr<Node>& node
         return PreservesLineBreaks(parentWhiteSpace)?!normalized.empty():!Trim(normalized).empty();
     };
     std::vector<bool> hasFollowingContent(node->children.size());bool following=false;
-    for(size_t index=node->children.size();index>0;--index){const auto& child=node->children[index-1];hasFollowingContent[index-1]=following;if(child->type==NodeType::Text){if(hasRenderableText(child->text))following=true;}else following=true;}
+    for(size_t index=node->children.size();index>0;--index){const auto& child=node->children[index-1];hasFollowingContent[index-1]=following;if(child->type==NodeType::Text){if(hasRenderableText(child->text))following=true;}else if(child->type==NodeType::Element)following=true;}
     const auto appendBuilt=[&](std::unique_ptr<LayoutBox> built,
                                const std::shared_ptr<Node>& sourceNode,
                                bool preserveLeading,bool preserveTrailing){
@@ -4426,6 +4450,7 @@ std::unique_ptr<LayoutBox> LayoutEngine::Build(const std::shared_ptr<Node>& node
     size_t elementIndex=0;std::shared_ptr<Node> previousChildElement;
     for(size_t childIndex=0;childIndex<node->children.size();++childIndex){auto& child=node->children[childIndex];
         if(node->tag==L"svg")break; // SVG descendants are painted in the SVG viewport, not HTML flow.
+        if(child->type==NodeType::Comment)continue;
         if(child->type==NodeType::Text&&!hasRenderableText(child->text))continue;
         if(child->type==NodeType::Text){
             const auto firstLetter=firstLetterRuns_.find(child.get());
@@ -4923,7 +4948,7 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
         size_t index=0;
         for(auto& child:box.children)if(child->visible){
             if(child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed")){
-                const LayoutRect area=child->style.Is(L"position",L"fixed")?LayoutRect{0,0,viewportWidth_,viewportHeight_}:AbsoluteContainingBlock(box);
+                const LayoutRect area=child->style.Is(L"position",L"fixed")?LayoutRect{0,0,viewportWidth_,viewportHeight_}:AbsoluteContainingBlock(*child,viewportWidth_,viewportHeight_);
                 LayoutBoxTree(*child,PositionedRect(*child,area,viewportWidth_,viewportHeight_),true);continue;
             }
             const auto size=inlineSizes[index++];
@@ -4966,7 +4991,7 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
     for(auto& child:box.children){if(!child->visible)continue;
         const bool absolute=child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed");
         if(absolute){
-            const LayoutRect area=child->style.Is(L"position",L"fixed")?LayoutRect{0,0,viewportWidth_,viewportHeight_}:AbsoluteContainingBlock(box);
+            const LayoutRect area=child->style.Is(L"position",L"fixed")?LayoutRect{0,0,viewportWidth_,viewportHeight_}:AbsoluteContainingBlock(*child,viewportWidth_,viewportHeight_);
             LayoutBoxTree(*child,PositionedRect(*child,area,viewportWidth_,viewportHeight_),true);continue;
         }
         const auto floatSide=UsedFloatSide(child->style);
@@ -5236,7 +5261,7 @@ void LayoutEngine::LayoutFlex(LayoutBox& box){
         for(auto& child:box.children)if(child->visible&&
             (child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed"))){
             const LayoutRect area=child->style.Is(L"position",L"fixed")?
-                LayoutRect{0,0,viewportWidth_,viewportHeight_}:AbsoluteContainingBlock(box);
+                LayoutRect{0,0,viewportWidth_,viewportHeight_}:AbsoluteContainingBlock(*child,viewportWidth_,viewportHeight_);
             auto positioned=PositionedRect(*child,area,viewportWidth_,viewportHeight_);
             if(child->style.Get(L"left").empty()&&child->style.Get(L"right").empty()&&
                box.style.Is(L"justify-content",L"center"))
@@ -5333,7 +5358,7 @@ void LayoutEngine::LayoutFlex(LayoutBox& box){
         cursor+=reverse?-advance:advance;
     }
     for(auto& c:box.children)if(c->visible&&(c->style.Is(L"position",L"absolute")||c->style.Is(L"position",L"fixed"))){
-        const LayoutRect area=c->style.Is(L"position",L"fixed")?LayoutRect{0,0,viewportWidth_,viewportHeight_}:AbsoluteContainingBlock(box);
+        const LayoutRect area=c->style.Is(L"position",L"fixed")?LayoutRect{0,0,viewportWidth_,viewportHeight_}:AbsoluteContainingBlock(*c,viewportWidth_,viewportHeight_);
         auto positioned=PositionedRect(*c,area,viewportWidth_,viewportHeight_);
         if(c->style.Get(L"left").empty()&&c->style.Get(L"right").empty()&&box.style.Is(L"justify-content",L"center"))positioned.x=area.x+(area.width-positioned.width)/2;
         if(c->style.Get(L"top").empty()&&c->style.Get(L"bottom").empty()&&box.style.Is(L"align-items",L"center"))positioned.y=area.y+(area.height-positioned.height)/2;
@@ -5400,8 +5425,10 @@ void LayoutEngine::LayoutGrid(LayoutBox& box,bool definiteWidth,bool definiteHei
         LayoutBoxTree(*item.box,{left,top,width,height},true);
     }
     for(auto& child:box.children)if(child->visible&&(child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed"))){
-        auto area=child->style.Is(L"position",L"fixed")?LayoutRect{0,0,viewportWidth_,viewportHeight_}:AbsoluteContainingBlock(box);
-        if(!child->style.Is(L"position",L"fixed"))
+        const auto* containingBlock=AbsoluteContainingBlockAncestor(*child);
+        auto area=child->style.Is(L"position",L"fixed")?LayoutRect{0,0,viewportWidth_,viewportHeight_}:
+            AbsoluteContainingBlock(*child,viewportWidth_,viewportHeight_);
+        if(!child->style.Is(L"position",L"fixed")&&containingBlock==&box)
             area.width=std::max(0.0f,area.width-(box.content.width-gridWidth));
         LayoutBoxTree(*child,PositionedRect(*child,area,viewportWidth_,viewportHeight_),true);
     }

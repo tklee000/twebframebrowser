@@ -15,9 +15,12 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -43,9 +46,16 @@ LRESULT CALLBACK ResizeHostWindowProc(HWND window,UINT message,WPARAM wParam,LPA
     return DefWindowProcW(window,message,wParam,lParam);
 }
 struct ConstantHash { std::size_t operator()(int) const { return 1; } };
-void Check(bool condition, const wchar_t* message) {
-    if (!condition) { std::wcerr << L"FAIL: " << message << L"\n"; ++failures; }
+void CheckAt(bool condition, const wchar_t* message, int line) {
+    static std::size_t checkIndex = 0;
+    ++checkIndex;
+    if (!condition) {
+        std::wcerr << L"FAIL[" << checkIndex << L", line " << line << L"]: "
+                   << message << L"\n";
+        ++failures;
+    }
 }
+#define Check(condition, message) CheckAt((condition), (message), __LINE__)
 const LayoutBox* FindLayout(const LayoutBox* box, const std::wstring& id, const std::wstring& className=L"") {
     if (!box) return nullptr;
     if ((!id.empty() && box->node->Attribute(L"id") == id) ||
@@ -411,6 +421,191 @@ BoxRasterSample CaptureBoxRaster(LayoutEngine& layout,float scale) {
     if(memory)DeleteDC(memory);
     return sample;
 }
+
+int RunJQueryCompatibility(const std::wstring& sourcePath) {
+    std::ifstream input(std::filesystem::path(sourcePath),std::ios::binary);
+    if(!input){std::wcerr<<L"Cannot open jQuery source: "<<sourcePath<<L'\n';return 2;}
+    const std::string bytes((std::istreambuf_iterator<char>(input)),
+                            std::istreambuf_iterator<char>());
+    const int length=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,bytes.data(),
+                                         static_cast<int>(bytes.size()),nullptr,0);
+    if(length<=0){std::wcerr<<L"jQuery source is not valid UTF-8\n";return 2;}
+    std::wstring source(static_cast<size_t>(length),L'\0');
+    MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,bytes.data(),
+                        static_cast<int>(bytes.size()),source.data(),length);
+
+    Document document;std::wstring error;
+    if(!document.Parse(
+        L"<!doctype html><html><head></head><body>"
+        L"<div id='fixture' class='item'><span class='label'>alpha</span>"
+        L"<ul id='list'><li class='first'>one</li><li class='second'>two</li></ul></div>"
+        L"<div class='item secondary'></div>"
+        L"<form id='form'><input name='query' value='hello world'>"
+        L"<input type='checkbox' name='enabled' value='yes' checked></form>"
+        L"</body></html>",&error)){
+        std::wcerr<<L"jQuery fixture parse failed: "<<error<<L'\n';return 2;
+    }
+    JavaScriptRuntime runtime(document);
+    runtime.SetLocation(L"https://jquery.test/index.html");
+    runtime.SetResourceLoader([](const std::wstring& resource,std::wstring& body){
+        if(resource!=L"payload.json")return false;
+        body=L"{\"value\":9}";return true;
+    });
+    if(!runtime.Execute(source,nullptr,&error)){
+        std::wcerr<<L"jQuery 1.11.2 initialization failed: "<<error<<L'\n';return 1;
+    }
+    std::wstring result;
+    if(!runtime.Execute(LR"JS(
+        function check(value,label){if(!value)throw new Error(label);}
+        check(jQuery.fn.jquery==='1.11.2','version');
+        check(jQuery('.item').length===2,'class selector');
+        const target=jQuery('#fixture');
+        check(target.find('li').length===2&&target.find('li').first().text()==='one',
+              'find/first/text');
+        check(target.find('li').last().is('.second'),'last/is');
+        check(target.find('.second').closest('#fixture').length===1,'closest');
+        check(target.children('#list').length===1&&jQuery('#list').children().length===2,
+              'children');
+        check(jQuery('.first').next().hasClass('second')&&
+              jQuery('.second').prev().hasClass('first'),'next/prev');
+
+        target.addClass('active').attr('data-ready','yes').css('color','red')
+              .append('<b class="added">beta</b>').prepend('<i class="prefix">zero</i>');
+        check(target.hasClass('active')&&target.attr('data-ready')==='yes','class/attr');
+        check(target.find('.added').text()==='beta'&&target.find('.prefix').text()==='zero',
+              'append/prepend');
+        target.toggleClass('active').removeAttr('data-ready');
+        check(!target.hasClass('active')&&target.attr('data-ready')===undefined,
+              'toggleClass/removeAttr');
+        target.data('count',3);
+        check(target.data('count')===3,'data');
+        target.hide();check(target.css('display')==='none','hide');
+        target.show();check(target.css('display')!=='none','show');
+
+        let clickCount=0,delegated=0,oneCount=0;
+        const firstNode=target.find('.first')[0];
+        const seedMatch=jQuery.find('li',target[0],null,[firstNode]).length;
+        const directMatch=jQuery.find.matches('li',[firstNode]).length;
+        const selectorMatch=jQuery.find.matchesSelector(firstNode,'li');
+        check(seedMatch===1&&directMatch===1&&selectorMatch,
+              'Sizzle seed '+seedMatch+'|'+directMatch+'|'+selectorMatch+'|'
+              +firstNode.nodeType+'|'+firstNode.nodeName);
+        target.on('click.test',function(){clickCount++;});
+        target.on('click.test','li',function(){delegated++;});
+        target.one('custom',function(){oneCount++;});
+        target.trigger('click');
+        target.find('.first').trigger('click');
+        target.trigger('custom').trigger('custom');
+        target.off('.test');target.trigger('click');
+        check(clickCount===2&&delegated===1&&oneCount===1,
+              'events '+clickCount+'|'+delegated+'|'+oneCount);
+
+        const copied=jQuery.extend(true,{}, {nested:{a:1}}, {nested:{b:2}});
+        check(copied.nested.a===1&&copied.nested.b===2,'extend');
+        check(jQuery.map([1,2,3],function(value){return value*2;}).join(',')==='2,4,6',
+              'map');
+        check(jQuery.grep([1,2,3],function(value){return value>1;}).join(',')==='2,3',
+              'grep');
+        const callbacks=jQuery.Callbacks('memory');let callbackValue=0;
+        callbacks.add(function(value){callbackValue+=value;}).fire(2);
+        callbacks.add(function(value){callbackValue+=value;});
+        check(callbackValue===4,'Callbacks memory');
+        let deferredValue=0;
+        jQuery.Deferred().resolve(5).then(function(value){deferredValue=value;});
+        check(deferredValue===5,'Deferred');
+        let queueValue='';
+        target.queue(function(next){queueValue+='a';next();})
+              .queue(function(next){queueValue+='b';next();});
+        check(queueValue==='ab','queue');
+        check(typeof XMLHttpRequest==='function','XMLHttpRequest constructor');
+        const manualRequest=new XMLHttpRequest();
+        manualRequest.open('GET','payload.json',false);manualRequest.send();
+        check(manualRequest.status===200&&manualRequest.responseText==='{"value":9}',
+              'XMLHttpRequest '+manualRequest.status+'|'+manualRequest.responseText);
+        check(jQuery.support.ajax,'jQuery AJAX support');
+        let ajaxValue=0,readyCount=0;
+        jQuery(function(){readyCount++;});
+        jQuery.getJSON('payload.json',function(data){ajaxValue=data.value;});
+
+        const serialized=jQuery('#form').serialize();
+        check(serialized==='query=hello+world&enabled=yes','serialize '+serialized);
+        jQuery('#form input[name=query]').val('updated');
+        check(jQuery('#form input[name=query]').val()==='updated','val');
+        const clone=target.clone(true);clone.attr('id','clone').appendTo('body');
+        check(jQuery('#clone').length===1&&jQuery('#clone .added').length===1,'clone/appendTo');
+        jQuery('#clone').remove();check(jQuery('#clone').length===0,'remove');
+        return 'jquery-complete';
+    )JS",&result,&error)){
+        std::wcerr<<L"jQuery smoke operations failed: "<<error<<L'\n';return 1;
+    }
+    if(result!=L"jquery-complete"){
+        std::wcerr<<L"jQuery smoke result mismatch: "<<result<<L'\n';return 1;
+    }
+    runtime.RunTimers();
+    if(!runtime.Execute(L"return ajaxValue+'|'+readyCount;",&result,&error)||result!=L"9|1"){
+        std::wcerr<<L"jQuery async/ready completion failed: "<<error<<L" result="<<result<<L'\n';
+        return 1;
+    }
+    std::wcout<<L"jQuery 1.11.2 full source parsed, initialized, and passed the compatibility suite\n";
+    return 0;
+}
+
+int RunJavaScriptFiles(int count,wchar_t** paths) {
+    Document document;std::wstring error;
+    if(!document.Parse(L"<html><head></head><body></body></html>",&error)){
+        std::wcerr<<L"diagnostic document parse failed: "<<error<<L'\n';return 1;
+    }
+    JavaScriptRuntime runtime(document);
+    runtime.SetLocation(L"https://example.test/index.html?ad_test=1");
+    runtime.SetViewportSize(1280,720);
+    std::vector<std::filesystem::path> searchDirectories;
+    for(int index=0;index<count;++index)
+        searchDirectories.push_back(std::filesystem::absolute(paths[index]).parent_path());
+    runtime.SetResourceLoader([searchDirectories](const std::wstring& resource,std::wstring& body){
+        auto clean=resource;const auto suffix=clean.find_first_of(L"?#");
+        if(suffix!=std::wstring::npos)clean.resize(suffix);
+        const auto slash=clean.find_last_of(L"/\\");
+        const auto filename=clean.substr(slash==std::wstring::npos?0:slash+1);
+        for(const auto& directory:searchDirectories){
+            std::ifstream input(directory/filename,std::ios::binary);if(!input)continue;
+            const std::string bytes((std::istreambuf_iterator<char>(input)),
+                                    std::istreambuf_iterator<char>());
+            const int length=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,bytes.data(),
+                                                  static_cast<int>(bytes.size()),nullptr,0);
+            if(length<=0)return false;body.assign(static_cast<size_t>(length),L'\0');
+            MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,bytes.data(),
+                                static_cast<int>(bytes.size()),body.data(),length);return true;
+        }
+        return false;
+    });
+    std::wstring previousErrorTrace;
+    for(int index=0;index<count;++index){
+        std::ifstream input(std::filesystem::path(paths[index]),std::ios::binary);
+        if(!input){std::wcerr<<L"cannot open JavaScript file: "<<paths[index]<<L'\n';return 1;}
+        const std::string bytes((std::istreambuf_iterator<char>(input)),
+                                std::istreambuf_iterator<char>());
+        int length=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,bytes.data(),
+                                       static_cast<int>(bytes.size()),nullptr,0);
+        if(length<=0){std::wcerr<<L"invalid UTF-8 JavaScript file: "<<paths[index]<<L'\n';return 1;}
+        std::wstring source(static_cast<size_t>(length),L'\0');
+        MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,bytes.data(),
+                            static_cast<int>(bytes.size()),source.data(),length);
+        std::wstring result;
+        if(!runtime.Execute(source,&result,&error)){
+            std::wcerr<<L"JavaScript file "<<index+1<<L" failed: "<<error<<L'\n';return 1;
+        }
+        runtime.RunTimers();
+        std::wcout<<L"JavaScript file "<<index+1<<L" result: "<<result;
+        const auto createdError=runtime.LastCreatedError();
+        if(!createdError.empty())std::wcout<<L" last-error: "<<createdError;
+        std::wcout<<L'\n';
+        const auto errorTrace=runtime.CreatedErrorTrace();
+        if(errorTrace.size()>previousErrorTrace.size())
+            std::wcout<<L"new errors:\n"<<errorTrace.substr(previousErrorTrace.size())<<L'\n';
+        previousErrorTrace=errorTrace;
+    }
+    return 0;
+}
 }
 
 int wmain(int argc,wchar_t** argv) {
@@ -421,6 +616,13 @@ int wmain(int argc,wchar_t** argv) {
     }
     if(argc>1&&_wcsicmp(argv[1],L"--editing-benchmark")==0){
         const int result=RunEditingBenchmark();if(uninitializeCom)CoUninitialize();return result;
+    }
+    if(argc>2&&_wcsicmp(argv[1],L"--jquery")==0){
+        const int result=RunJQueryCompatibility(argv[2]);if(uninitializeCom)CoUninitialize();return result;
+    }
+    if(argc>2&&_wcsicmp(argv[1],L"--javascript")==0){
+        const int result=RunJavaScriptFiles(argc-2,argv+2);
+        if(uninitializeCom)CoUninitialize();return result;
     }
     FastMap<int, std::wstring, ConstantHash> fastMap;
     for (int i = 0; i < 64; ++i) fastMap[i] = std::to_wstring(i);
@@ -499,6 +701,19 @@ int wmain(int argc,wchar_t** argv) {
     Check(mutationJs.Execute(L"const node=document.getElementById('scroll');node.scrollTop=8;node.style.color='red';",nullptr,&error)&&
           mutationNotifications==1&&lastMutation.kind==JavaScriptRuntime::MutationKind::Style,
           L"batched mutations retain the strongest invalidation level");
+    std::wstring cssomResult;
+    Check(mutationJs.Execute(
+              L"const style=document.getElementById('scroll').style;"
+              L"style.setProperty('width','120px','important');"
+              L"const removed=style.removeProperty('color');"
+              L"return [removed,style.getPropertyValue('width'),style.getPropertyPriority('width'),style.item(0),style.cssText,document.getElementById('scroll').getAttribute('style')].join('|');",
+              &cssomResult,&error)&&
+          cssomResult==L"red|120px|important|width|width: 120px !important;|width: 120px !important;",
+          L"CSSStyleDeclaration mutators preserve priority, ordering and the reflected style attribute");
+    Check(mutationJs.Execute(
+              L"const style=document.getElementById('scroll').style;style.width='';style.cssText='height: 45px; color: blue !important';return style.length+'|'+style.height+'|'+style.getPropertyPriority('color');",
+              &cssomResult,&error)&&cssomResult==L"2|45px|important",
+          L"CSSStyleDeclaration empty assignment removes declarations and cssText reparses priorities");
     mutationNotifications=0;
     Check(mutationJs.Execute(L"document.getElementById('scroll').setAttribute('width','240');",nullptr,&error)&&
           mutationNotifications==1&&lastMutation.kind==JavaScriptRuntime::MutationKind::Layout,
@@ -648,6 +863,346 @@ int wmain(int argc,wchar_t** argv) {
           L"DOM, CSS, layout and JavaScript numeric fallbacks do not throw first-chance C++ exceptions");
     if(numericExceptionHandler)RemoveVectoredExceptionHandler(numericExceptionHandler);
 
+    Document jqueryDomDoc;
+    Check(jqueryDomDoc.Parse(
+        L"<body><form id='jquery-form'><input name='first'><textarea name='second'></textarea>"
+        L"<button name='submit'>Submit</button></form><div id='jquery-node'>text</div></body>",&error),
+        L"jQuery DOM compatibility fixture parses");
+    JavaScriptRuntime jqueryDomJs(jqueryDomDoc);std::wstring jqueryDomResult;
+    jqueryDomJs.SetResourceLoader([](const std::wstring& resource,std::wstring& body){
+        if(resource!=L"jquery-payload.json")return false;
+        body=L"{\"value\":9}";return true;
+    });
+    Check(jqueryDomJs.Execute(
+        L"const form=document.getElementById('jquery-form');"
+        L"const node=document.getElementById('jquery-node');"
+        L"const request=new XMLHttpRequest();request.open('GET','jquery-payload.json',false);request.send();"
+        L"const typedRequest=new XMLHttpRequest();typedRequest.responseType='json';"
+        L"typedRequest.open('GET','jquery-payload.json',false);typedRequest.send();"
+        L"return node.nodeName+'|'+node.firstChild.nodeName+'|'+form.elements.length+'|'"
+        L"+request.readyState+'|'+request.status+'|'+JSON.parse(request.responseText).value+'|'"
+        L"+typedRequest.response.value+'|'+typeof typedRequest.response;",
+        &jqueryDomResult,&error)&&jqueryDomResult==L"DIV|#text|3|4|200|9|9|object",error.c_str());
+    Check(jqueryDomResult==L"DIV|#text|3|4|200|9|9|object",
+          L"standard nodeName, form collections and text/JSON XMLHttpRequest responses support library paths");
+
+    Document browserCompatDoc;
+    Check(browserCompatDoc.Parse(L"<body><div id='first'></div><div id='second'></div></body>",&error),
+          L"browser compatibility fixture parses");
+    JavaScriptRuntime browserCompatJs(browserCompatDoc);std::wstring browserCompatResult;
+    Check(browserCompatJs.Execute(LR"JS(
+        var first=document.getElementById('first'),second=document.getElementById('second');
+        var comment=document.createComment('marker');first.appendChild(comment);
+        function makeCache(){var keys=[];function cache(key,value){cache[key+' ']=value;return value;}return cache;}
+        var classCache=makeCache();
+        function matcher(name){var expression=classCache[name+' '];return expression||
+          (expression=new RegExp('(^|\\s)'+name+'(\\s|$)'))&&
+          classCache(name,function(value){return expression.test(value);});}
+        var matchItem=matcher('item'),matchItemAgain=matcher('item');
+        localStorage.setItem('x','1');localStorage.removeItem('x');
+        sessionStorage.setItem('y','2');sessionStorage.removeItem('y');
+        return comment.nodeType+'|'+comment.nodeName+'|'+first.innerHTML+'|'+
+          first.compareDocumentPosition(second)+'|'+second.compareDocumentPosition(first)+'|'+
+          /[a-z]+/g.source+'|'+'abcdef'.substr(-3,2)+'|'+'a'.concat('b','c')+'|'+
+          matchItem('item active')+'|'+matchItemAgain('item')+'|'+
+          localStorage.getItem('x')+'|'+sessionStorage.getItem('y');
+    )JS",&browserCompatResult,&error)&&
+          browserCompatResult==L"8|#comment|<!--marker-->|4|2|[a-z]+|de|abc|true|true|null|null",
+          error.c_str());
+    Check(browserCompatResult==L"8|#comment|<!--marker-->|4|2|[a-z]+|de|abc|true|true|null|null",
+          L"comments, document order, strings, RegExp source, storage and inferred function names follow browser semantics");
+    Check(browserCompatJs.Execute(
+          L"const detached=document.createElement('div'),before=detached.isConnected;"
+          L"document.body.appendChild(detached);const during=detached.isConnected;"
+          L"detached.remove();return before+'|'+during+'|'+detached.isConnected;",
+          &browserCompatResult,&error)&&browserCompatResult==L"false|true|false",error.c_str());
+    Check(browserCompatResult==L"false|true|false",
+          L"Node isConnected follows attachment to and removal from the active document");
+    Check(browserCompatJs.Execute(
+        L"var windowEvents=0,detachedEvents=0;"
+        L"window.addEventListener('path-probe',function(){windowEvents++;},true);"
+        L"var detached=document.createElement('img');"
+        L"detached.addEventListener('path-probe',function(){detachedEvents++;});"
+        L"detached.dispatchEvent(new Event('path-probe'));"
+        L"var connected=document.createElement('img');document.body.appendChild(connected);"
+        L"connected.dispatchEvent(new Event('path-probe'));"
+        L"return windowEvents+'|'+detachedEvents;",
+        &browserCompatResult,&error)&&browserCompatResult==L"1|1",error.c_str());
+    Check(browserCompatResult==L"1|1",
+          L"detached node events stay off the document and window propagation path");
+    Check(browserCompatJs.Execute(
+        L"var parent=document.createElement('div'),oldChild=document.createElement('span'),"
+        L"replacement=document.createElement('img');oldChild.id='old-child';"
+        L"replacement.id='replacement';parent.appendChild(oldChild);document.body.appendChild(parent);"
+        L"var returned=parent.replaceChild(replacement,oldChild);"
+        L"return (returned===oldChild)+'|'+(oldChild.parentNode===null)+'|'"
+        L"+(replacement.parentNode===parent)+'|'+parent.firstChild.id;",
+        &browserCompatResult,&error)&&browserCompatResult==L"true|true|true|replacement",
+        error.c_str());
+    Check(browserCompatResult==L"true|true|true|replacement",
+          L"Node.replaceChild connects a detached replacement and returns the removed child");
+    Check(browserCompatJs.Execute(LR"JS(
+        var observerLog=[];var target=document.getElementById('first');
+        var mutations=new MutationObserver(function(records){observerLog.push(records[0].type+':'+records[0].attributeName);});
+        mutations.observe(target,{attributes:true,attributeFilter:['data-state']});
+        var intersections=new IntersectionObserver(function(entries,observer){observerLog.push('intersection:'+entries[0].isIntersecting);observer.unobserve(target);});
+        intersections.observe(target);target.setAttribute('data-state','ready');
+    )JS",nullptr,&error),error.c_str());
+    Check(browserCompatJs.Execute(L"return observerLog.join('|');",&browserCompatResult,&error)&&
+          browserCompatResult==L"intersection:true|attributes:data-state",error.c_str());
+    Check(browserCompatResult==L"intersection:true|attributes:data-state",
+          L"intersection and mutation observers deliver generic DOM records at microtask checkpoints");
+    Check(browserCompatJs.Execute(LR"JS(
+        var async=1;async=2;
+        var computed={['dynamic'+'Key']:3,['method'](){return 4;}};
+        var marker=0,keys=[];for(var key in (marker=5,{first:1,second:2}))keys.push(key);
+        class Base { constructor(value){this.baseValue=value;} inherited(){return 9;} get inheritedValue(){return 11;} set assigned(value){this.saved=value;} static get category(){return 'base';} }
+        class Derived extends Base { constructor(value){super(value+1);this.derivedValue=value;} local(){return 10;} }
+        class FieldBase { baseField=21; }class FieldDerived extends FieldBase { emptyField;derivedField=this.baseField+1; }
+        var reversed=[1,2,3].reverse();var derived=new Derived(14);derived.assigned=12;
+        var fields=new FieldDerived();
+        var destructured=[];for(let [left,right] of [[1,2],[3,4]])destructured.push(left+right);
+        var regexAfterControl=false;if(true)/data-/.test('data-x')&&(regexAfterControl=true);
+        var symbolOne=Symbol('key'),symbolTwo=Symbol('key'),symbolObject={[symbolOne]:13};
+        var bundledModules={1490(value){return value+1;},'named-module'(){return 16;}};
+        function propertyCarrier(){}propertyCarrier.visible=26;
+        var weakKey={},weakMap=new WeakMap([[weakKey,27]]),weakSet=new WeakSet([weakKey]);
+        function proxyTarget(value){return this.base+value;}proxyTarget.answer=31;
+        var proxy=new Proxy(proxyTarget,{
+          get(target,key,receiver){return key==='virtual'?32:Reflect.get(target,key,receiver);},
+          set(target,key,value){return Reflect.set(target,key,value+1);},
+          apply(target,receiver,args){return Reflect.apply(target,receiver,args)+1;}
+        });proxy.written=32;
+        var dollarExport={$W:34};Object.defineProperty(dollarExport,'$getter',{enumerable:true,get(){return 35;}});
+        var dollarKeys=[];for(var dollarKey in dollarExport)dollarKeys.push(dollarKey);
+        let {index:destructuredDefault=18,preservedNull=19}={preservedNull:null};
+        let {[symbolOne]:computedBinding=20}=symbolObject;
+        let [nestedFirst,{value:nestedValue=nestedFirst+1}]=[23,{}];
+        let {params:{create:nestedPatternDefault=25}={}}={};
+        function templateTag(parts,value){return parts[0]+value+parts[1]+'/'+parts.raw[0];}
+        return async+'|'+computed.dynamicKey+'|'+computed.method()+'|'+marker+'|'+keys.length+'|'+
+          String.fromCharCode(65,66)+'|'+String.fromCodePoint(0x1f600).length+'|'+new Array(3).join('x')+'|'+
+          Array.call(null,6,7).join('')+'|'+Number.call(null,'8')+'|'+reversed.join('')+'|'+
+          derived.inherited()+'|'+derived.local()+'|'+derived.inheritedValue+'|'+derived.saved+'|'+derived.baseValue+'|'+derived.derivedValue+'|'+Derived.category+'|'+first.hasChildNodes()+'|'+
+          unescape(escape('A B'))+'|'+templateTag`left${6}right`+'|'+destructured.join(',')+'|'+regexAfterControl+'|'+
+          (symbolOne!==symbolTwo)+'|'+symbolObject[symbolOne]+'|'+(Symbol.for('shared')===Symbol.for('shared'))+'|'+Symbol.keyFor(Symbol.for('shared'))+'|'+
+          bundledModules[1490](16)+'|'+bundledModules['named-module']()+'|'+destructuredDefault+'|'+preservedNull+'|'+computedBinding+'|'+
+          fields.baseField+'|'+fields.derivedField+'|'+fields.hasOwnProperty('emptyField')+'|'+nestedFirst+'|'+nestedValue+'|'+nestedPatternDefault+'|'+
+          Object.keys(propertyCarrier).join(',')+'|'+Object.values(propertyCarrier)[0]+'|'+Object.hasOwn(propertyCarrier,'visible')+'|'+
+          weakMap.get(weakKey)+'|'+weakMap.has(weakKey)+'|'+weakSet.has(weakKey)+'|'+(window.WeakMap===WeakMap)+'|'+
+          proxy.virtual+'|'+proxy.answer+'|'+proxyTarget.written+'|'+proxy.call({base:2},3)+'|'+typeof proxy+'|'+
+          dollarKeys.includes('$W')+'|'+Object.keys(dollarExport).includes('$getter')+'|'+dollarExport.$getter;
+    )JS",&browserCompatResult,&error)&&
+          browserCompatResult==L"2|3|4|5|2|AB|2|xx|67|8|321|9|10|11|12|15|14|base|true|A B|left6right/left|3,7|true|true|13|true|shared|17|16|18|null|13|21|22|true|23|24|25|visible|26|true|27|true|true|true|32|31|33|6|function|true|true|35",error.c_str());
+    Check(browserCompatResult==L"2|3|4|5|2|AB|2|xx|67|8|321|9|10|11|12|15|14|base|true|A B|left6right/left|3,7|true|true|13|true|shared|17|16|18|null|13|21|22|true|23|24|25|visible|26|true|27|true|true|true|32|31|33|6|function|true|true|35",
+          L"computed object keys, async identifiers, for-in expressions, string factories and callable constructors follow browser semantics");
+    Check(browserCompatJs.Execute(LR"JS(
+        class ComputedMembers {
+          *[Symbol.iterator](){yield 35;yield* [36];}
+          ['field'+'Name']=37;
+          get ['computed'+'Value'](){return this.fieldName+1;}
+          static ['answer'](){return 39;}
+        }
+        var computedMembers=new ComputedMembers();
+        var second=0,total=0;for([,second] of [[1,2],[3,4]])total+=second;
+        function* generate(){yield 40;yield* [41,42];}
+        var iterator=generate(),first=iterator.next(),remaining=generate();
+        return [...computedMembers[Symbol.iterator]()].join(',')+'|'+computedMembers.fieldName+'|'+
+          computedMembers.computedValue+'|'+ComputedMembers.answer()+'|'+total+'|'+
+          first.value+'|'+first.done+'|'+[...remaining].join(',');
+    )JS",&browserCompatResult,&error)&&browserCompatResult==L"35,36|37|38|39|6|40|false|40,41,42",error.c_str());
+    Check(browserCompatResult==L"35,36|37|38|39|6|40|false|40,41,42",
+          L"computed class members, generators and destructuring assignment in for-of loops follow browser semantics");
+    Check(browserCompatJs.Execute(LR"JS(
+        class ConstructorRoot { constructor(value){this.rootValue=value;} }
+        class ConstructorMiddle extends ConstructorRoot {}
+        class ConstructorLeaf extends ConstructorMiddle { constructor(value){super(value+1);} }
+        return new ConstructorLeaf(40).rootValue;
+    )JS",&browserCompatResult,&error)&&browserCompatResult==L"41",error.c_str());
+    Check(browserCompatResult==L"41",
+          L"super calls through constructor-less derived classes reach the inherited constructor");
+    Check(browserCompatJs.Execute(LR"JS(
+        function Widget(){}class Panel{}var widget=new Widget(),panel=new Panel();
+        return [(function(){}) instanceof Function,(()=>0) instanceof Function,
+          Widget instanceof Function,Panel instanceof Function,[] instanceof Array,
+          new Array(2) instanceof Array,[] instanceof Object,widget instanceof Widget,
+          widget instanceof Object,panel instanceof Panel,new Date(0) instanceof Date,
+          Promise.resolve(1) instanceof Promise,/x/ instanceof Object,null instanceof Object].join('|');
+    )JS",&browserCompatResult,&error)&&
+          browserCompatResult==L"true|true|true|true|true|true|true|true|true|true|true|true|true|false",
+          error.c_str());
+    Check(browserCompatResult==L"true|true|true|true|true|true|true|true|true|true|true|true|true|false",
+          L"instanceof follows standard Function, Array, Object and constructor prototype relationships");
+    Check(browserCompatJs.Execute(LR"JS(
+        var numericObject={valueOf(){return 4;}};
+        var stringObject={toString(){return 'prefix';}};
+        var uuidSeed=[1e7]+-1e3+-4e3+-8e3+-1e11;
+        return ([1,2]+3)+'|'+(numericObject+5)+'|'+(stringObject+5)+'|'+
+          typeof uuidSeed+'|'+uuidSeed;
+    )JS",&browserCompatResult,&error)&&
+          browserCompatResult==L"1,23|9|prefix5|string|10000000-1000-4000-8000-100000000000",
+          error.c_str());
+    Check(browserCompatResult==L"1,23|9|prefix5|string|10000000-1000-4000-8000-100000000000",
+          L"addition applies ordinary object-to-primitive conversion and array stringification");
+    Check(browserCompatJs.Execute(
+          L"return 131..toString()+'|'+0b101+'|'+0o10+'|'+0x10+'|'+.5+'|'+1.25e+2;",
+          &browserCompatResult,&error)&&browserCompatResult==L"131|5|8|16|0.5|125",error.c_str());
+    Check(browserCompatResult==L"131|5|8|16|0.5|125",
+          L"numeric literals stop before member access and support standard radix and exponent forms");
+    Check(browserCompatJs.Execute(
+          L"return Object.is(NaN,NaN)+'|'+Object.is(0,-0)+'|'+Object.is('x','x')+'|'"
+          L"+Object.is({},{});",
+          &browserCompatResult,&error)&&browserCompatResult==L"true|false|true|false",error.c_str());
+    Check(browserCompatResult==L"true|false|true|false",
+          L"Object.is applies SameValue equality for numbers, primitives and object identity");
+    Check(browserCompatJs.Execute(LR"JS(
+        var classicGlobal=(function(global){return global===window&&global.document===document;})(this);
+        return classicGlobal+'|'+(this===window);
+    )JS",&browserCompatResult,&error)&&browserCompatResult==L"true|true",error.c_str());
+    Check(browserCompatResult==L"true|true",
+          L"classic scripts expose Window as their top-level this value");
+    Check(browserCompatJs.Execute(L"window.scriptExport={value:1};",nullptr,&error),error.c_str());
+    Check(browserCompatJs.Execute(
+          L"var scriptExport=scriptExport||{};scriptExport.second=2;"
+          L"return (scriptExport===window.scriptExport)+'|'+scriptExport.value+'|'+window.scriptExport.second;",
+          &browserCompatResult,&error)&&browserCompatResult==L"true|1|2",error.c_str());
+    Check(browserCompatJs.Execute(
+          L"window.scriptExport={value:3};return (scriptExport===window.scriptExport)+'|'+scriptExport.value;",
+          &browserCompatResult,&error)&&browserCompatResult==L"true|3",error.c_str());
+    Check(browserCompatResult==L"true|3",
+          L"global var bindings and Window properties share storage across classic scripts");
+    Check(browserCompatJs.Execute(
+          L"var first=document.createElement('div'),rects=first.getClientRects();"
+          L"return typeof first.getClientRects+'|'+rects.length;",
+          &browserCompatResult,&error)&&browserCompatResult==L"function|0",error.c_str());
+    Check(browserCompatResult==L"function|0",
+          L"elements expose an empty DOMRectList when they have no rendered geometry");
+    Check(browserCompatJs.Execute(
+          L"return Date.parse('2024-01-02T03:04:05.006Z')+'|'"
+          L"+Number.isNaN(Date.parse('not a date'))+'|'"
+          L"+new Intl.NumberFormat('en-US').format(12345.5)+'|'"
+          L"+new Intl.NumberFormat('en-US',{useGrouping:false,minimumFractionDigits:2,maximumFractionDigits:2}).format(12345.5);",
+          &browserCompatResult,&error)&&
+          browserCompatResult==L"1704164645006|true|12,345.5|12345.50",error.c_str());
+    Check(browserCompatResult==L"1704164645006|true|12,345.5|12345.50",
+          L"Date.parse and Intl.NumberFormat expose browser-compatible static formatting APIs");
+    Check(browserCompatJs.Execute(
+          L"var zeroEntry={A:0};return (zeroEntry.A!=null)+'|'+(0==null)+'|'"
+          L"+(null==undefined)+'|'+('5'==5)+'|'+(false==0)+'|'+([1]==1);",
+          &browserCompatResult,&error)&&browserCompatResult==L"true|false|true|true|true|true",error.c_str());
+    Check(browserCompatResult==L"true|false|true|true|true|true",
+          L"abstract equality keeps nullish values distinct from numbers and converts other primitives and objects");
+    Check(browserCompatJs.Execute(L"return new Date(0).toString();",&browserCompatResult,&error)&&
+          browserCompatResult==L"Thu, 01 Jan 1970 00:00:00 GMT",error.c_str());
+    Check(browserCompatResult==L"Thu, 01 Jan 1970 00:00:00 GMT",
+          L"Date exposes a stable general-purpose string conversion");
+    Check(browserCompatJs.Execute(
+          L"return [1,2].flatMap(function(value,index,array){return [value+index,array.length];}).join(',');",
+          &browserCompatResult,&error)&&browserCompatResult==L"1,2,3,2",error.c_str());
+    Check(browserCompatResult==L"1,2,3,2",
+          L"Array flatMap invokes its callback with standard arguments and flattens one level");
+    Check(browserCompatJs.Execute(LR"JS(
+        var optionalCalls=0,missing=null,present={method(){optionalCalls++;return {value:7};}};
+        return missing?.method()+'|'+missing?.deep.value+'|'+present?.method().value+'|'+
+          optionalCalls+'|'+({}).missing?.();
+    )JS",&browserCompatResult,&error)&&
+          browserCompatResult==L"undefined|undefined|7|1|undefined",error.c_str());
+    Check(browserCompatResult==L"undefined|undefined|7|1|undefined",
+          L"optional chaining short-circuits the complete property and call chain");
+    Check(browserCompatJs.Execute(LR"JS(
+        var mapLog=[],setLog=[],mapValue=new Map([['a',1],['b',2]]),setValue=new Set(['x','y']);
+        mapValue.forEach(function(value,key,owner){mapLog.push(key+value+(owner===mapValue));});
+        setValue.forEach(function(value,key,owner){setLog.push(value+key+(owner===setValue));});
+        return mapLog.join(',')+'|'+setLog.join(',')+'|'+mapValue.keys().join(',')+'|'+
+          setValue.entries().map(function(entry){return entry.join('');}).join(',');
+    )JS",&browserCompatResult,&error)&&
+          browserCompatResult==L"a1true,b2true|xxtrue,yytrue|a,b|xx,yy",error.c_str());
+    Check(browserCompatResult==L"a1true,b2true|xxtrue,yytrue|a,b|xx,yy",
+          L"Map and Set expose standard key, entry and forEach iteration semantics");
+    Check(browserCompatJs.Execute(LR"JS(
+        var headers=new Headers({'X-Test':'one'}),headerLog=[];
+        headers.append('x-test','two');headers.set('Content-Type','text/plain');
+        headers.forEach(function(value,key,owner){headerLog.push(key+'='+value+':' +(owner===headers));});
+        class ConstructorBase { constructor(value){this.constructed=value;} }
+        class ImplicitDerived extends ConstructorBase { marker=3; }
+        var implicitDerived=new ImplicitDerived(8);
+        return headers.get('X-TEST')+'|'+headers.has('content-type')+'|'+headerLog.length+'|'+
+          implicitDerived.constructed+'|'+implicitDerived.marker;
+    )JS",&browserCompatResult,&error)&&browserCompatResult==L"one, two|true|2|8|3",error.c_str());
+    Check(browserCompatResult==L"one, two|true|2|8|3",
+          L"Headers normalize names and implicit derived constructors forward arguments to their base");
+    Check(browserCompatJs.Execute(LR"JS(
+        const outer=[];var closure;let label='outer';
+        { const outer=null;let captured=9;closure=()=>captured; }
+        while(true){ { let label='inner';break; } }
+        try { { const label='try';throw new Error(label); } } catch(error) { outer.push(error.message); }
+        outer.push('ready');
+        return outer.join(',')+'|'+closure()+'|'+label;
+    )JS",&browserCompatResult,&error)&&browserCompatResult==L"try,ready|9|outer",error.c_str());
+    Check(browserCompatResult==L"try,ready|9|outer",
+          L"block-scoped declarations shadow without overwriting outer bindings across jumps and exceptions");
+
+    Document dynamicScriptDoc;Check(dynamicScriptDoc.Parse(L"<html><head></head><body></body></html>",&error),
+          L"dynamic script scheduling fixture parses");
+    JavaScriptRuntime dynamicScriptJs(dynamicScriptDoc);
+    dynamicScriptJs.SetResourceLoader([](const std::wstring& resource,std::wstring& source){
+        if(resource==L"external.js"){
+            source=L"dynamicOrder.push('external');callbackReady();";return true;
+        }
+        if(resource==L"scoped-external.js"){
+            source=L"scopedLoad+=10;";return true;
+        }
+        return false;
+    });
+    const bool dynamicInlineExecuted=dynamicScriptJs.Execute(LR"JS(
+        var inlineOrder=[];
+        var inline=document.createElement('script');
+        inline.innerHTML="if(1 < 2 && 3 > 2) inlineOrder.push('inline-innerHTML');";
+        document.head.appendChild(inline);
+        return inlineOrder.join(',')+'|'+inline.textContent;
+    )JS",&browserCompatResult,&error);
+    if(!dynamicInlineExecuted||browserCompatResult!=
+       L"inline-innerHTML|if(1 < 2 && 3 > 2) inlineOrder.push('inline-innerHTML');")
+        std::wcerr<<L"dynamic inline actual: executed="<<dynamicInlineExecuted
+                  <<L" result=["<<browserCompatResult<<L"] error=["<<error<<L"]\n";
+    Check(dynamicInlineExecuted&&
+          browserCompatResult==L"inline-innerHTML|if(1 < 2 && 3 > 2) inlineOrder.push('inline-innerHTML');",
+          error.c_str());
+    Check(browserCompatResult==
+          L"inline-innerHTML|if(1 < 2 && 3 > 2) inlineOrder.push('inline-innerHTML');",
+          L"script innerHTML preserves raw text and executes when the element is connected");
+    Check(dynamicScriptJs.Execute(LR"JS(
+        var dynamicOrder=[];
+        var external=document.createElement('script');external.src='external.js';
+        external.onload=function(){dynamicOrder.push('load');};
+        document.head.appendChild(external);
+        dynamicOrder.push('after-append');
+        window.callbackReady=function(){dynamicOrder.push('callback');};
+    )JS",nullptr,&error),error.c_str());
+    Check(dynamicScriptJs.Execute(L"return dynamicOrder.join(',');",&browserCompatResult,&error)&&
+          browserCompatResult==L"after-append",error.c_str());
+    Check(browserCompatResult==L"after-append",
+          L"DOM-inserted external scripts wait for a later event-loop task");
+    dynamicScriptJs.RunTimers();
+    Check(dynamicScriptJs.Execute(L"return dynamicOrder.join(',');",&browserCompatResult,&error)&&
+          browserCompatResult==L"after-append,external,callback,load",error.c_str());
+    Check(browserCompatResult==L"after-append,external,callback,load",
+          L"a later event-loop task executes the external script and dispatches load");
+    Check(dynamicScriptJs.Execute(LR"JS(
+        var scopedLoad=0;
+        (function(){
+            const script=document.createElement('script');
+            script.src='scoped-external.js';
+            script.onload=function(){scopedLoad++;};
+            document.head.appendChild(script);
+        })();
+    )JS",nullptr,&error),error.c_str());
+    dynamicScriptJs.RunTimers();
+    Check(dynamicScriptJs.Execute(L"return scopedLoad;",&browserCompatResult,&error)&&
+          browserCompatResult==L"11",error.c_str());
+    Check(browserCompatResult==L"11",
+          L"a connected script retains its load handler until its queued resource task completes");
+
     Document jitDoc;Check(jitDoc.Parse(L"<body></body>",&error),L"baseline JIT fixture parses");
     JavaScriptRuntime jitJs(jitDoc);std::wstring jitResult;jitJs.SetJitCompilationThreshold(2);
     Check(jitJs.Execute(LR"(
@@ -708,6 +1263,11 @@ int wmain(int argc,wchar_t** argv) {
         L"return innerWidth+'|'+innerHeight+'|'+window.innerWidth+'|'+window.innerHeight;",
         &semanticsResult,&error)&&semanticsResult==L"1280|720|1280|720",
         L"viewport dimensions are exposed through browser window globals");
+    Check(semanticsJs.Execute(
+        L"var mark=performance.mark('ready');return performance.getEntriesByType('navigation').length+'|'"
+        L"+mark.name+'|'+mark.entryType+'|'+(performance.now()>0);",
+        &semanticsResult,&error)&&semanticsResult==L"0|ready|mark|true",
+        L"Performance entry queries and user timing methods expose browser-compatible values");
     semanticsJs.SetDevicePixelRatio(1.5);
     Check(semanticsJs.Execute(
         L"return (window.document===document)+'|'+document.compatMode+'|'+document.readyState+'|'"
@@ -718,6 +1278,69 @@ int wmain(int argc,wchar_t** argv) {
         &semanticsResult,&error)&&
         semanticsResult==L"true|CSS1Compat|complete|1280|720|Netscape|true|false|true",
         L"browser globals and media queries reflect CSS viewport units and device scale");
+    semanticsJs.SetLocation(L"https://example.test/path?q=1#part");
+    Check(semanticsJs.Execute(
+        L"return document.URL+'|'+document.documentURI+'|'+document.baseURI+'|'+document.referrer;",
+        &semanticsResult,&error)&&semanticsResult==
+        L"https://example.test/path?q=1#part|https://example.test/path?q=1#part|https://example.test/path?q=1#part|",
+        L"document URL properties expose the active browsing-context location");
+    Check(semanticsJs.Execute(
+        L"var anchor=document.createElement('a');anchor.href='https://cdn.example.test:8443/ad?x=1#bid';"
+        L"return location.protocol+'|'+location.host+'|'+location.hostname+'|'+location.port+'|'"
+        L"+location.pathname+'|'+location.search+'|'+location.hash+'|'+location.origin+'|'"
+        L"+anchor.href+'|'+anchor.protocol+'|'+anchor.host+'|'+anchor.hostname+'|'"
+        L"+anchor.port+'|'+anchor.pathname+'|'+anchor.search+'|'+anchor.hash+'|'+anchor.origin;",
+        &semanticsResult,&error)&&semanticsResult==
+        L"https:|example.test|example.test||/path|?q=1|#part|https://example.test|"
+        L"https://cdn.example.test:8443/ad?x=1#bid|https:|cdn.example.test:8443|cdn.example.test|8443|/ad|?x=1|#bid|https://cdn.example.test:8443",
+        error.c_str());
+    Check(semanticsResult==
+        L"https:|example.test|example.test||/path|?q=1|#part|https://example.test|"
+        L"https://cdn.example.test:8443/ad?x=1#bid|https:|cdn.example.test:8443|cdn.example.test|8443|/ad|?x=1|#bid|https://cdn.example.test:8443",
+        L"Location and HTML anchor elements expose parsed URL components");
+    Document currentScriptDoc;
+    Check(currentScriptDoc.Parse(
+        L"<html><head><script id='loader' src='library.js'></script></head><body></body></html>",
+        &error),L"currentScript DOM fixture parses");
+    JavaScriptRuntime currentScriptJs(currentScriptDoc);
+    const auto currentScriptNode=currentScriptDoc.GetElementById(L"loader");
+    currentScriptJs.SetCurrentScript(currentScriptNode);
+    Check(currentScriptJs.Execute(
+        L"return (document.currentScript===document.getElementById('loader'))+'|'"
+        L"+(document.currentScript instanceof HTMLScriptElement)+'|'"
+        L"+(document.currentScript instanceof HTMLElement)+'|'"
+        L"+(document.currentScript instanceof Element)+'|'"
+        L"+(document.currentScript instanceof Node)+'|'"
+        L"+(document instanceof Document)+'|'+Node.ELEMENT_NODE;",
+        &semanticsResult,&error)&&semanticsResult==L"true|true|true|true|true|true|1",
+        L"classic scripts expose document.currentScript and standard DOM constructor identity");
+    currentScriptJs.SetCurrentScript({});
+    Check(currentScriptJs.Execute(L"return document.currentScript===null;",
+                                  &semanticsResult,&error)&&semanticsResult==L"true",
+          L"document.currentScript is cleared outside script evaluation");
+    semanticsJs.SetGeometryProvider([](const std::shared_ptr<Node>& node){
+        JavaScriptRuntime::NodeGeometry geometry;
+        if(node&&node->Attribute(L"id")==L"hit-back")geometry={10,10,100,100,100,100,100,100};
+        if(node&&node->Attribute(L"id")==L"hit-front")geometry={20,20,50,50,50,50,50,50};
+        return geometry;
+    });
+    Check(semanticsJs.Execute(
+        L"var back=document.createElement('div'),front=document.createElement('span');"
+        L"back.id='hit-back';front.id='hit-front';back.appendChild(front);document.body.appendChild(back);"
+        L"var topHit=document.elementFromPoint(30,30),hits=document.elementsFromPoint(30,30);"
+        L"var result=topHit.id+'|'+hits.map(node=>node.id).join(',')+'|'"
+        L"+(document.elementFromPoint(-1,30)===null);back.remove();return result;",
+        &semanticsResult,&error)&&semanticsResult==L"hit-front|hit-front,hit-back|true",error.c_str());
+    semanticsJs.SetGeometryProvider({});
+    Check(semanticsResult==L"hit-front|hit-front,hit-back|true",
+        L"document point queries return the topmost laid-out element in paint order");
+    Check(semanticsJs.Execute(
+        L"document.write('<div id=written-node>ready</div><script>window.documentWriteRan=7;<\\/script>');"
+        L"var result=document.getElementById('written-node').textContent+'|'+documentWriteRan;"
+        L"document.getElementById('written-node').remove();return result;",
+        &semanticsResult,&error)&&semanticsResult==L"ready|7",error.c_str());
+    Check(semanticsResult==L"ready|7",
+        L"document.write appends parsed markup and executes connected inline scripts");
     Check(semanticsJs.Execute(
         L"window.libraryExport=()=>41;var declaredGlobal=1;"
         L"function assignUndeclared(){undeclaredGlobal=2;}assignUndeclared();"
@@ -725,6 +1348,375 @@ int wmain(int argc,wchar_t** argv) {
         L"+('libraryExport' in window)+'|'+(window.Object===Object);",
         &semanticsResult,&error)&&semanticsResult==L"41|1|2|true|true",
         L"the Window object and global identifier environment share reusable browser script exports");
+    Check(semanticsJs.Execute(
+        L"function ordinaryThis(){return this===window;}"
+        L"return ordinaryThis()+'|'+(function(){return this===window;})();",
+        &semanticsResult,&error)&&semanticsResult==L"true|true",
+        L"plain calls in classic scripts bind ordinary function this to Window");
+    Check(semanticsJs.Execute(
+        L"function strictThis(){'use strict';return this===undefined;}"
+        L"function strictOuter(){'use strict';return function(){return this===undefined;};}"
+        L"class StrictMethod{value(){return this===undefined;}}"
+        L"var method=(new StrictMethod()).value;"
+        L"return strictThis()+'|'+strictOuter()()+'|'+method();",
+        &semanticsResult,&error)&&semanticsResult==L"true|true|true",
+        L"strict directives, nested functions and class methods preserve an undefined this value");
+    Check(semanticsJs.Execute(
+        L"var outerChoice=()=>99;"
+        L"function chooseLocal(){var outerChoice=outerChoice===undefined?()=>7:outerChoice;return outerChoice();}"
+        L"function keepAssignment(){value=4;var value;return value;}"
+        L"function blockVar(){if(true){var inside=6;}return inside;}"
+        L"return chooseLocal()+'|'+keepAssignment()+'|'+blockVar();",
+        &semanticsResult,&error)&&semanticsResult==L"7|4|6",
+        L"var bindings are hoisted to function scope without resetting assignments at declaration sites");
+    Check(semanticsJs.Execute(
+        L"var shared={marker:17};"
+        L"function chooseExisting(){var local;return (local=shared)!=null?local:shared={marker:99};}"
+        L"var chosen=chooseExisting();return (chosen===shared)+'|'+chosen.marker+'|'+shared.marker;",
+        &semanticsResult,&error)&&semanticsResult==L"true|17|17",
+        L"conditional false arms retain assignment-expression precedence without capturing the whole ternary");
+    Check(semanticsJs.Execute(
+        L"function finiteDepth(value){return value===0?0:1+finiteDepth(value-1);}"
+        L"return finiteDepth(96);",
+        &semanticsResult,&error)&&semanticsResult==L"96",
+        L"ordinary library call chains can exceed sixty-four interpreter frames");
+    Check(semanticsJs.Execute(
+        L"function recurse(){return recurse();}"
+        L"try{recurse();}catch(error){return error.name+'|'+error.message;}",
+        &semanticsResult,&error)&&
+        semanticsResult==L"RangeError|Maximum call stack size exceeded",
+        L"excessive script recursion becomes a catchable RangeError before native stack exhaustion");
+    Check(semanticsJs.Execute(
+        L"var applied=Function.prototype.apply.call(function(a,b){return this.base+a+b;},"
+        L"{base:2},[3,4]);"
+        L"var called=Function.prototype.call.call(function(a){return this.base+a;},{base:5},6);"
+        L"return typeof Function+'|'+applied+'|'+called;",
+        &semanticsResult,&error)&&semanticsResult==L"function|9|11",
+        L"Function prototype call and apply invoke arbitrary callable receivers");
+    Check(semanticsJs.Execute(
+        L"return typeof String.prototype+'|'+typeof RegExp.prototype+'|'"
+        L"+RegExp.prototype.hasOwnProperty('sticky');",
+        &semanticsResult,&error)&&semanticsResult==L"object|object|false",
+        L"native constructors expose ordinary prototype objects");
+    Check(semanticsJs.Execute(
+        L"var words=new Uint32Array(4),bytes=new Uint8Array([257,-1,3]);"
+        L"var same=crypto.getRandomValues(words)===words;"
+        L"return typeof Uint32Array+'|'+words.length+'|'+Uint32Array.BYTES_PER_ELEMENT+'|'"
+        L"+bytes.join(',')+'|'+same+'|'+(words[0]>=0&&words[0]<=4294967295)+'|'"
+        L"+(window.crypto===crypto);",
+        &semanticsResult,&error)&&semanticsResult==L"function|4|4|1,255,3|true|true|true",
+        L"integer typed arrays and Web Crypto random filling expose browser-compatible globals");
+    Check(semanticsJs.Execute(
+        L"var id=crypto.randomUUID();return typeof crypto.randomUUID+'|'+id.length+'|'"
+        L"+id[8]+id[13]+id[18]+id[23]+'|'+id[14]+'|'"
+        L"+('89ab'.indexOf(id[19])>=0)+'|'+(/^[0-9a-f-]+$/.test(id));",
+        &semanticsResult,&error)&&semanticsResult==L"function|36|----|4|true|true",
+        L"crypto.randomUUID returns a lowercase RFC 4122 version 4 identifier");
+    Check(semanticsJs.Execute(
+        L"var bytes=new Uint8Array([1,2,3,4,5,6]);var view=new DataView(bytes.buffer);"
+        L"bytes[1]=9;return view.getUint32(0)+'|'+view.getUint16(4)+'|'"
+        L"+view.getUint32(0,true)+'|'+view.byteLength+'|'"
+        L"+ArrayBuffer.isView(bytes)+'|'+ArrayBuffer.isView(view);",
+        &semanticsResult,&error)&&semanticsResult==L"17367812|1286|67307777|6|true|true",
+        L"typed-array buffers remain live through DataView integer reads and report view identity");
+    Check(semanticsJs.Execute(
+        L"var controller=new AbortController(),calls=0,reason='';"
+        L"controller.signal.addEventListener('abort',function(){calls++;reason=controller.signal.reason;});"
+        L"controller.abort('stopped');controller.abort('again');"
+        L"return typeof controller.abort+'|'+controller.signal.aborted+'|'+calls+'|'+reason;",
+        &semanticsResult,&error)&&semanticsResult==L"function|true|1|stopped",
+        L"AbortController aborts once, records its reason and notifies signal listeners");
+    Check(semanticsJs.Execute(
+        L"function Inherited(){} function Base(){} Inherited.__proto__=Base;"
+        L"Base.marker=7;var ordinary={};ordinary.__proto__=Base;"
+        L"return (Inherited.__proto__===Base)+'|'+typeof Inherited.__proto__+'|'"
+        L"+(ordinary.__proto__===Base)+'|'+ordinary.marker;",
+        &semanticsResult,&error)&&semanticsResult==L"true|function|true|7",
+        L"callable and ordinary objects preserve explicit __proto__ inheritance used by compiled libraries");
+    Check(semanticsJs.Execute(
+        L"var timestamp=new Date(1000);var returned=timestamp.setTime(timestamp.getTime()+2500);"
+        L"var epoch=new Date(0);return returned+'|'+timestamp.getTime()+'|'+epoch.toUTCString()+'|'"
+        L"+epoch.getUTCFullYear()+'|'+epoch.getUTCMonth()+'|'+epoch.getUTCDate()+'|'"
+        L"+epoch.getUTCHours()+'|'+epoch.getUTCMinutes()+'|'+epoch.getUTCSeconds()+'|'"
+        L"+typeof epoch.getTimezoneOffset()+'|'+Number.isInteger(epoch.getTimezoneOffset());",
+        &semanticsResult,&error)&&semanticsResult==L"3500|3500|Thu, 01 Jan 1970 00:00:00 GMT|1970|0|1|0|0|0|number|true",
+        L"Date mutation and UTC serialization follow browser timestamp semantics");
+    Check(semanticsJs.Execute(
+        L"Object.defineProperty(Array.prototype,'genericIterator',{value:function(){return 3;}});"
+        L"var values=[];return ('genericIterator' in values)+'|'+values.genericIterator();",
+        &semanticsResult,&error)&&semanticsResult==L"true|3",
+        L"array instances inherit properties dynamically installed on Array.prototype");
+    Check(semanticsJs.Execute(
+        L"return isNaN(undefined)+'|'+isNaN('12')+'|'+isFinite(null)+'|'"
+        L"+isFinite('Infinity')+'|'+parseInt('08')+'|'+parseInt('0x10')+'|'"
+        L"+parseInt('-101tail',2)+'|'+Number.isNaN(parseInt('xyz'))+'|'"
+        L"+(window.isNaN===isNaN)+'|'+(window.parseInt===parseInt);",
+        &semanticsResult,&error)&&
+        semanticsResult==L"true|false|true|false|8|16|-5|true|true|true",
+        L"global numeric conversion functions follow browser coercion and radix rules");
+    Check(semanticsJs.Execute(
+        L"var uri='https://example.test/a b?q=\\uD55C\\uAE00&x=1#part';"
+        L"return encodeURI(uri)+'|'+decodeURI('%2F%ED%95%9C%EA%B8%80')+'|'"
+        L"+(window.decodeURI===decodeURI);",
+        &semanticsResult,&error)&&
+        semanticsResult==L"https://example.test/a%20b?q=%ED%95%9C%EA%B8%80&x=1#part|%2F\xD55C\xAE00|true",
+        L"URI globals preserve reserved delimiters while encoding and decoding UTF-8");
+    Check(semanticsJs.Execute(
+        L"var sample='ABCZ';return sample.charAt(0)+'|'"
+        L"+sample.charAt(20)+'|'+sample.charCodeAt(0)+'|'"
+        L"+Number.isNaN(sample.charCodeAt(20))+'|'+sample.codePointAt(1)+'|'"
+        L"+sample.substring(4,1).length+'|'+sample.substring(-2,1)+'|'"
+        L"+'alpha42'.search(/\\d+/)+'|'+'alpha'.search('ph');",
+        &semanticsResult,&error)&&semanticsResult==L"A||65|true|66|3|A|5|2",
+        L"string character and substring methods follow browser index rules");
+    Check(semanticsJs.Execute(
+        L"var target={cmd:[]};function setOnce(name,value){var local=target;"
+        L"local.hasOwnProperty(name)||(local[name]=value);}"
+        L"setOnce('_loaded_',true);setOnce('_loaded_',false);"
+        L"return target._loaded_+'|'+target.hasOwnProperty('_loaded_');",
+        &semanticsResult,&error)&&semanticsResult==L"true|true",
+        L"short-circuit expressions preserve computed property assignment references");
+    Check(semanticsJs.Execute(
+        L"function rotate(Q,q,qB,Bb,F,Oo){"
+        L"for(qB={Q:751,q:606,F:628},Bb=function(value){return value;},F=Q();true;)"
+        L"try{Oo=parseInt(Bb(qB.q))/2;return q+'|'+Oo+'|'+arguments[1]+'|'+qB.q;}"
+        L"catch(error){return error.name;}}"
+        L"return rotate(function(){return [];},954289);",
+        &semanticsResult,&error)&&semanticsResult==L"954289|303|954289|606",error.c_str());
+    Check(semanticsResult==L"954289|303|954289|606",
+          L"object property names remain separate from same-named function parameters in for initializers");
+    Check(semanticsJs.Execute(
+        L"function decoderTable(value){return value='unusedB606B628'.split('B'),"
+        L"decoderTable=function(){return value;},decoderTable();}"
+        L"function decode(index,q,entries,result){return index=index-438,entries=decoderTable(),"
+        L"result=entries[index],result;}"
+        L"return (function(tableFactory,target,keys,decoder,table,computed){"
+        L"for(keys={q:439},decoder=decode,table=tableFactory();true;)"
+        L"try{computed=parseInt(decoder(keys.q))/2;"
+        L"return target+'|'+computed+'|'+arguments[1]+'|'+decoder(keys.q);}"
+        L"catch(error){return error.name;}}(decoderTable,954289));",
+        &semanticsResult,&error)&&semanticsResult==L"954289|303|954289|606",error.c_str());
+    Check(semanticsResult==L"954289|303|954289|606",
+          L"nested decoders do not corrupt same-position parameters in an enclosing rotation function");
+    Check(semanticsJs.Execute(
+        L"function memoizedTable(value){return value='firstBsecondBthird'.split('B'),"
+        L"memoizedTable=function(){return value;},memoizedTable();}"
+        L"var first=memoizedTable();first.push(first.shift());var second=memoizedTable();"
+        L"return (first===second)+'|'+second.join(',')+'|'+(memoizedTable===second);",
+        &semanticsResult,&error)&&semanticsResult==L"true|second,third,first|false",error.c_str());
+    Check(semanticsResult==L"true|second,third,first|false",
+          L"a function declaration can replace its outer binding for self-memoizing decoders");
+    Check(semanticsJs.Execute(
+        L"var receiver={};receiver.hasOwnProperty=function(name){"
+        L"window.methodTrace=(window.methodTrace||'')+name;return false;};"
+        L"receiver.hasOwnProperty('x')||(receiver['x']=true);"
+        L"return window.methodTrace+'|'+receiver.x;",
+        &semanticsResult,&error)&&semanticsResult==L"x|true",
+        L"method calls preserve property assignments made by nested execution frames");
+    Check(semanticsJs.Execute(
+        L"function Constructor(){}Constructor.cached=7;"
+        L"return Constructor.hasOwnProperty('cached')+'|'"
+        L"+Constructor.hasOwnProperty('missing')+'|'"
+        L"+Object.prototype.hasOwnProperty.call(Constructor,'cached')+'|'"
+        L"+[1].hasOwnProperty('0')+'|'+[1].hasOwnProperty('length');",
+        &semanticsResult,&error)&&semanticsResult==L"true|false|true|true|true",
+        L"Object prototype ownership checks apply to functions and arrays");
+    Check(semanticsJs.Execute(
+        L"var value={visible:1};"
+        L"Object.defineProperty(value,'hidden',{value:2});"
+        L"Object.defineProperty(value,'shown',{value:3,enumerable:true});"
+        L"var names=Object.keys(value).sort().join(',');"
+        L"return typeof Object.prototype.propertyIsEnumerable+'|'"
+        L"+value.propertyIsEnumerable('visible')+'|'"
+        L"+value.propertyIsEnumerable('hidden')+'|'"
+        L"+Object.prototype.propertyIsEnumerable.call(value,'shown')+'|'"
+        L"+[1].propertyIsEnumerable('length')+'|'"
+        L"+[1].propertyIsEnumerable('0')+'|'"
+        L"+Object('z').propertyIsEnumerable(0)+'|'+names;",
+        &semanticsResult,&error)&&
+        semanticsResult==L"function|true|false|true|false|true|true|shown,visible",
+        error.c_str());
+    Check(semanticsResult==L"function|true|false|true|false|true|true|shown,visible",
+          L"propertyIsEnumerable and Object.keys honor own descriptor enumerability");
+    Check(semanticsJs.Execute(
+        L"function LegacyComponent(){}"
+        L"Object.defineProperty(LegacyComponent.prototype,'componentWillMount',{"
+        L"configurable:true,get:function(){return this.UNSAFE_componentWillMount;},"
+        L"set:function(value){Object.defineProperty(this,'componentWillMount',{"
+        L"configurable:true,writable:true,value:value});}});"
+        L"var component=new LegacyComponent();"
+        L"component.componentWillMount=function(){return 9;};"
+        L"return component.hasOwnProperty('componentWillMount')+'|'"
+        L"+component.componentWillMount()+'|'"
+        L"+(LegacyComponent.prototype.componentWillMount===undefined);",
+        &semanticsResult,&error)&&semanticsResult==L"true|9|true",error.c_str());
+    Check(semanticsResult==L"true|9|true",
+          L"defineProperty creates an own data property without re-entering an inherited setter");
+    Check(semanticsJs.Execute(
+        L"var jsonValue={visible:1};Object.defineProperty(jsonValue,'hidden',{value:2});"
+        L"return JSON.stringify(jsonValue)+'|'"
+        L"+(JSON.stringify(jsonValue).indexOf('$enumerable:')<0);",
+        &semanticsResult,&error)&&semanticsResult==L"{\"visible\":1}|true",
+        L"JSON.stringify omits non-enumerable properties and internal descriptor metadata");
+    Check(semanticsJs.Execute(
+        L"var sized=new Image(120.9,45.8),empty=Image();"
+        L"return typeof Image+'|'+(window.Image===Image)+'|'"
+        L"+(sized instanceof Image)+'|'+(sized instanceof HTMLImageElement)+'|'"
+        L"+sized.tagName+'|'+sized.width+'|'+sized.height+'|'"
+        L"+empty.complete+'|'+empty.naturalWidth;",
+        &semanticsResult,&error)&&
+        semanticsResult==L"function|true|true|true|IMG|120|45|true|0",
+        error.c_str());
+    Check(semanticsResult==L"function|true|true|true|IMG|120|45|true|0",
+          L"Image constructs detached HTMLImageElement instances with optional dimensions");
+    Check(semanticsJs.Execute(
+        L"window.messageProbe='';window.addEventListener('message',function(event){"
+        L"window.messageProbe=event.data.value+'|'+(event.source===window);});"
+        L"postMessage({value:7},'*');return typeof postMessage+'|'"
+        L"+(window.postMessage===postMessage);",
+        &semanticsResult,&error)&&semanticsResult==L"function|true",error.c_str());
+    semanticsJs.RunTimers();
+    Check(semanticsJs.Execute(L"return window.messageProbe;",&semanticsResult,&error)&&
+          semanticsResult==L"7|true",
+          L"global postMessage queues a same-window message event with source and data");
+    Check(semanticsJs.Execute(
+        L"function stackOuter(){return stackInner();}"
+        L"function stackInner(){return Error('boom').stack;}var value={},base={inherited:3};"
+        L"var child=Object.create(base);Object.defineProperties(child,{own:{value:4}});"
+        L"return Object.isExtensible(value)+'|'+Object.isFrozen(value)+'|'"
+        L"+(Object.freeze(value)===value)+'|'"
+        L"+(stackOuter().indexOf('at stackInner')>=0)+'|'"
+        L"+(stackOuter().indexOf('at stackOuter')>=0)+'|'"
+        L"+child.inherited+'|'+child.own+'|'"
+        L"+(Object.getPrototypeOf(child)===base);",
+        &semanticsResult,&error)&&
+        semanticsResult==L"true|false|true|true|true|3|4|true",
+        L"Object integrity methods and named Error stack frames follow browser semantics");
+    Check(semanticsJs.Execute(
+        L"function Base(){this.base=1;}Base.answer=42;"
+        L"function Child(){return Reflect.construct(Base,[],Object.getPrototypeOf(this).constructor);}"
+        L"Object.setPrototypeOf(Child,Base);"
+        L"Child.prototype=Object.create(Base.prototype,{constructor:{value:Child}});"
+        L"Child.prototype.own=function(){return this.base+6;};"
+        L"function CustomError(message){return Reflect.construct(Error,[message],CustomError);}"
+        L"Object.setPrototypeOf(CustomError,Error);"
+        L"CustomError.prototype=Object.create(Error.prototype,{constructor:{value:CustomError}});"
+        L"var reflected=Reflect.construct(Boolean,[],function(){});"
+        L"return (Object.getPrototypeOf(Child)===Base)+'|'"
+        L"+Child.answer+'|'+typeof Object.getPrototypeOf(Child).apply+'|'"
+        L"+Boolean.prototype.valueOf.call(reflected)+'|'+new Child().own()+'|'"
+        L"+(new CustomError('broken') instanceof CustomError)+'|'"
+        L"+new CustomError('broken').message;",
+        &semanticsResult,&error)&&semanticsResult==L"true|42|function|false|7|true|broken",
+        L"callable prototype chains and Boolean reflection support transpiled inheritance helpers");
+    Check(semanticsJs.Execute(
+        L"function EventBase(){this.listeners={};}"
+        L"EventBase.prototype.add=function(){this.listeners.ready=true;};"
+        L"function finish(receiver,result){if(result&&('object'==typeof result||'function'==typeof result))"
+        L"return result;if(result!==undefined)throw new TypeError();return receiver;}"
+        L"function inherit(receiver,child,args){var parent=Object.getPrototypeOf(child);"
+        L"return finish(receiver,Reflect.construct(parent,args||[],Object.getPrototypeOf(receiver).constructor));}"
+        L"function Logger(storage){var value;return(value=inherit(this,Logger)).patterns=[],value.namespaces={},"
+        L"storage&&(value.patterns=value.read(storage)),value.add(),value;}"
+        L"Object.setPrototypeOf(Logger,EventBase);"
+        L"Logger.prototype=Object.create(EventBase.prototype,{constructor:{value:Logger}});"
+        L"Logger.prototype.read=function(){return ['one'];};"
+        L"Logger.prototype.check=function(){return this.patterns.length;};"
+        L"Logger.prototype.info=function(key){return key in this.namespaces||"
+        L"(this.namespaces[key]={value:this.check()}),this.namespaces[key];};"
+        L"var logger=new Logger({});return Object.keys(logger).sort().join(',')+'|'"
+        L"+logger.patterns.join(',')+'|'+logger.listeners.ready+'|'+logger.info('ready').value;",
+        &semanticsResult,&error)&&
+        semanticsResult==L"listeners,namespaces,patterns|one|true|1",
+        L"transpiled comma-expression constructors retain fields across inherited method calls");
+    Check(semanticsJs.Execute(LR"JS(
+        function defineMembers(target,members){
+          for(var index=0;index<members.length;index++){
+            var descriptor=members[index];descriptor.enumerable=descriptor.enumerable||false;
+            descriptor.configurable=true;if('value' in descriptor)descriptor.writable=true;
+            Object.defineProperty(target,descriptor.key,descriptor);
+          }
+        }
+        function defineClass(constructor,members){
+          if(members)defineMembers(constructor.prototype,members);
+          Object.defineProperty(constructor,'prototype',{writable:false});return constructor;
+        }
+        function inherit(child,parent){
+          child.prototype=Object.create(parent&&parent.prototype,
+            {constructor:{value:child,writable:true,configurable:true}});
+          Object.defineProperty(child,'prototype',{writable:false});
+          if(parent)Object.setPrototypeOf(child,parent);
+        }
+        function getPrototype(value){return Object.getPrototypeOf(value);}
+        function finish(receiver,result){
+          if(result&&('object'==typeof result||'function'==typeof result))return result;
+          if(result!==undefined)throw new TypeError();return receiver;
+        }
+        function constructBase(receiver){
+          var parent=getPrototype(DerivedLogger);
+          return finish(receiver,Reflect.construct(parent,[],getPrototype(receiver).constructor));
+        }
+        var EventSource=function(){return defineClass(function(){this.listeners={};},[
+          {key:'add',value:function(){this.listeners.ready=true;}}
+        ]);}();
+        var Storage=function(){return defineClass(function(callback){this.callback=callback;},[
+          {key:'read',value:function(){return ['active'];}}
+        ]);}();
+        var DerivedLogger=function(parent){
+          function DerivedLogger(storage){var value;
+            return(value=constructBase(this)).patterns=[],value.storage=storage,
+              value.patterns=value.storage.read(),value.add(),value;
+          }
+          inherit(DerivedLogger,parent);
+          return defineClass(DerivedLogger,[
+            {key:'count',value:function(){return this.patterns.length;}}
+          ]);
+        }(EventSource);
+        var logger=new DerivedLogger(new Storage(function(){}));
+        return Object.keys(logger).sort().join(',')+'|'+logger.patterns.join(',')+'|'
+          +logger.listeners.ready+'|'+logger.count()+'|'+(logger instanceof DerivedLogger);
+    )JS",&semanticsResult,&error)&&
+        semanticsResult==L"listeners,patterns,storage|active|true|1|true",error.c_str());
+    Check(semanticsResult==L"listeners,patterns,storage|active|true|1|true",
+          L"nested construction preserves objects returned by transpiled derived constructors");
+    Check(semanticsJs.Execute(LR"JS(
+        function defineMethod(target,name,value,hidden){
+          function install(name,mode){
+            defineMethod(target,name,function(argument){return this._invoke(name,mode,argument);});
+          }
+          if(name)Object.defineProperty(target,name,
+            {value:value,enumerable:!hidden,configurable:!hidden,writable:!hidden});
+          else {install('next',0);install('throw',1);install('return',2);}
+        }
+        var iteratorPrototype={};function Generator(){}function GeneratorFunction(){}
+        function GeneratorFunctionPrototype(){}
+        var generatorPrototype=GeneratorFunctionPrototype.prototype=Generator.prototype=
+          Object.create(iteratorPrototype);
+        GeneratorFunction.prototype=GeneratorFunctionPrototype;
+        defineMethod(generatorPrototype);
+        function mark(generatorFunction){
+          Object.setPrototypeOf(generatorFunction,GeneratorFunctionPrototype);
+          generatorFunction.prototype=Object.create(generatorPrototype);
+          return generatorFunction;
+        }
+        function wrap(inner,outer){
+          var constructor=outer&&outer.prototype instanceof Generator?outer:Generator;
+          var generator=Object.create(constructor.prototype);
+          defineMethod(generator,'_invoke',function(){return {value:7,done:true};},true);
+          return generator;
+        }
+        function task(){return wrap(function(){},task);}
+        mark(task);var generated=task.apply(null,[]);
+        var step=generated.next();
+        return (Object.getPrototypeOf(generated)!==null)+'|'+typeof generated.next+'|'
+          +typeof generated._invoke+'|'+step.value+'|'+step.done;
+    )JS",&semanticsResult,&error)&&semanticsResult==L"true|function|function|7|true",error.c_str());
+    Check(semanticsResult==L"true|function|function|7|true",
+          L"regenerator-style prototypes expose defineProperty-installed iterator methods");
+    Check(semanticsJs.Execute(
+        L"try{({}).missing();}catch(error){return error.name;}return 'missed';",
+        &semanticsResult,&error)&&semanticsResult==L"TypeError",
+        L"calling a non-callable value throws TypeError");
     Check(semanticsJs.Execute(
         L"const objectTag=({}).toString;"
         L"return objectTag.call(function(){})+'|'+objectTag.call([])+'|'"
@@ -739,16 +1731,30 @@ int wmain(int argc,wchar_t** argv) {
         L"var copied=detachedSlice.call(arrayLike,0),flattened=detachedConcat.apply([],[[1],[2]]);"
         L"return (Object(arrayLike)===arrayLike)+'|'+typeof Object+'|'"
         L"+({}).toString.call(Object)+'|'+arrayLike.length+'|'+copied.join(',')+'|'"
-        L"+detachedIndexOf.call(arrayLike,'second')+'|'+flattened.join(',');",
+        L"+detachedIndexOf.call(arrayLike,'second')+'|'+flattened.join(',')+'|'"
+        L"+Array.prototype.slice.call(arrayLike).join(',');",
         &semanticsResult,&error)&&
-        semanticsResult==L"true|function|[object Function]|2|first,second|1|1,2",
+        semanticsResult==L"true|function|[object Function]|2|first,second|1|1,2|first,second",
         L"Object coercion and detached Array methods preserve generic array-like receivers");
+    Check(semanticsJs.Execute(
+        L"return [1,2,3].reduce((total,value)=>total+value,4)+'|'"
+        L"+[1,2,3].reduceRight((total,value)=>total+value)+'|'"
+        L"+[7].reduce((total,value)=>total+value);",
+        &semanticsResult,&error)&&semanticsResult==L"10|6|7",
+        L"Array reduce methods preserve accumulator and traversal semantics");
     Check(semanticsJs.Execute(
         L"window.classBodyExecutions=0;var singleton=new class {"
         L"value(){return 7;} dormant(){window.classBodyExecutions++;}};"
         L"return singleton.value()+'|'+classBodyExecutions;",
         &semanticsResult,&error)&&semanticsResult==L"7|0",
         L"anonymous class expressions construct instances without executing dormant method bodies");
+    Check(semanticsJs.Execute(
+        L"var immediate=function(){return 3;}(),"
+        L"composed=(function(){return 4;})()+5,"
+        L"callable=function(){return 6;}||null;"
+        L"return immediate+'|'+composed+'|'+callable();",
+        &semanticsResult,&error)&&semanticsResult==L"3|9|6",
+        L"variable initializers retain IIFE calls and following expression operators");
     Check(semanticsJs.Execute(
         L"var placeholder=new RegExp('{memo}','g');"
         L"return 'x{memo}{memo}'.replace(placeholder,'ok')+'|'"
@@ -805,12 +1811,13 @@ int wmain(int argc,wchar_t** argv) {
         L"function throwAcrossFrame(){throw {message:'boom'};}"
         L"function catchAcrossFrame(){try{throwAcrossFrame();exceptionLog+='bad';}catch(error){exceptionLog+=error.message;}finally{exceptionLog+=':finally';}return exceptionLog;}"
         L"function finallyOverridesReturn(){try{return 'try';}finally{return 'finally';}}"
+        L"function finallyPreservesReturn(){try{return 'kept';}finally{try{Math.random();}catch(ignored){}}}"
         L"function loopFinally(){let value='';for(let i=0;i<3;i++){try{if(i===1)continue;if(i===2)break;value+=i;}finally{value+='f';}}return value;}"
         L"let thrownIdentity=new TypeError('typed');let sameThrown=false;try{throw thrownIdentity;}catch(error){sameThrown=error===thrownIdentity&&error.name==='TypeError'&&error.message==='typed'&&error.stack==='TypeError: typed';}"
         L"let catchShadow='outer';let capturedCatch;try{throw 'inner';}catch(catchShadow){capturedCatch=()=>catchShadow;}",
         &error),error.c_str());
-    Check(semanticsJs.Execute(L"return catchAcrossFrame()+'|'+finallyOverridesReturn()+'|'+loopFinally()+'|'+sameThrown+'|'+catchShadow+'|'+capturedCatch();",&semanticsResult,&error),error.c_str());
-    Check(semanticsResult==L"boom:finally|finally|0fff|true|outer|inner",
+    Check(semanticsJs.Execute(L"return catchAcrossFrame()+'|'+finallyOverridesReturn()+'|'+finallyPreservesReturn()+'|'+loopFinally()+'|'+sameThrown+'|'+catchShadow+'|'+capturedCatch();",&semanticsResult,&error),error.c_str());
+    Check(semanticsResult==L"boom:finally|finally|kept|0fff|true|outer|inner",
           L"VM exceptions preserve values and catch scope across calls while abrupt completions run finally");
     Check(semanticsJs.Execute(
         L"let compound=3;compound*=4;compound/=2;compound%=5;compound**=3;"
@@ -822,6 +1829,15 @@ int wmain(int argc,wchar_t** argv) {
         &semanticsResult,&error),error.c_str());
     Check(semanticsResult==L"1|8|keep|7|yes|0|1,3|2|true|true|gamma",
           L"basic compound and logical assignments, unary plus, do-while and for-in syntax execute correctly");
+    Check(semanticsJs.Execute(
+        L"let labeled='';outerBlock:{labeled+='a';break outerBlock;labeled+='bad';}"
+        L"outerLoop:for(let row=0;row<3;row++){for(let column=0;column<3;column++){"
+        L"if(column===1)continue outerLoop;labeled+=row;}}"
+        L"first:second:do{labeled+='d';break first;}while(true);"
+        L"return labeled;",
+        &semanticsResult,&error),error.c_str());
+    Check(semanticsResult==L"a012d",
+          L"statement labels route labeled break and continue across blocks and nested loops");
     Check(semanticsJs.Execute(
         L"let bits=5;bits&=3;bits|=8;bits^=1;bits<<=2;bits>>=1;bits>>>=2;"
         L"let precedence=1|2&4;let unsigned=-1>>>0;let inverted=~0;"
@@ -845,6 +1861,12 @@ int wmain(int argc,wchar_t** argv) {
         &semanticsResult,&error),error.c_str());
     Check(semanticsResult==L"<p data-kind=\"block\">x</p>",
           L"regular-expression replacement strings expand capture references");
+    Check(semanticsJs.Execute(
+        L"return /^[^:/?#]*(?:[/?#]|$)/.test('folder/file')+'|'"
+        L"+/^[^:/?#]*(?:[/?#]|$)/.test('scheme:value');",
+        &semanticsResult,&error),error.c_str());
+    Check(semanticsResult==L"true|false",
+          L"regular-expression literals retain slash characters inside character classes");
     Check(semanticsJs.Execute(
         L"const marker=`\\u0000${7}\\u0000`;"
         L"return '\\u0041\\x42'+'|'+marker.replace(/\\u0000(\\d+)\\u0000/g,(_,index)=>`token-${index}`);",
@@ -895,6 +1917,14 @@ int wmain(int argc,wchar_t** argv) {
     Check(semanticsResult==L"all1-2,fulfilled-no,any-winner",
           L"Promise aggregate combinators retain input order and settlement semantics");
     Check(semanticsJs.Execute(
+        L"let resolverResult=[];let deferred=Promise.withResolvers.call(Promise);"
+        L"deferred.promise.then((value)=>resolverResult.push(value));deferred.resolve(43);",
+        nullptr,&error),error.c_str());
+    Check(semanticsJs.Execute(
+        L"return resolverResult.join(',')+'|'+typeof deferred.resolve+'|'+typeof deferred.reject;",
+        &semanticsResult,&error)&&semanticsResult==L"43|function|function",
+          L"Promise.withResolvers exposes a callable deferred promise capability");
+    Check(semanticsJs.Execute(
         L"let rejectionEvents=[];window.addEventListener('unhandledrejection',(event)=>rejectionEvents.push('unhandled-'+event.reason));window.addEventListener('rejectionhandled',()=>rejectionEvents.push('handled'));let lateRejection=Promise.reject('late');",
         nullptr,&error),error.c_str());
     Check(semanticsJs.Execute(L"lateRejection.catch(()=>rejectionEvents.push('caught'));",nullptr,&error),error.c_str());
@@ -917,6 +1947,15 @@ int wmain(int argc,wchar_t** argv) {
         nullptr,&error),error.c_str());
     Check(semanticsJs.Execute(L"return fetchValue;",&semanticsResult,&error)&&semanticsResult==L"true:9",
           L"fetch and response.json compose as promises across consecutive await suspension points");
+    semanticsJs.SetResourceLoader([](const std::wstring& resource,std::wstring& body){
+        if(resource!=L"stream.txt")return false;body=L"first \uD55C\uAE00\nsecond";return true;
+    });
+    Check(semanticsJs.Execute(
+        L"let streamValue='';fetch('stream.txt').then((response)=>{const reader=response.body.getReader();const decoder=new TextDecoder();return reader.read().then((first)=>reader.read().then((second)=>streamValue=decoder.decode(first.value)+'|'+first.done+'|'+second.done));});",
+        nullptr,&error),error.c_str());
+    Check(semanticsJs.Execute(L"return streamValue;",&semanticsResult,&error)&&
+          semanticsResult==L"first \uD55C\uAE00\nsecond|false|true",
+          L"fetch response bodies expose UTF-8 readable streams with terminating reader results");
     Check(semanticsJs.Execute(
         L"let taskOrder=[];setTimeout(()=>taskOrder.push('timer'),0);Promise.resolve().then(()=>taskOrder.push('microtask'));taskOrder.push('script');",
         nullptr,&error),error.c_str());
@@ -925,6 +1964,18 @@ int wmain(int argc,wchar_t** argv) {
     semanticsJs.RunTimers();
     Check(semanticsJs.Execute(L"return taskOrder.join(',');",&semanticsResult,&error)&&semanticsResult==L"script,microtask,timer",
           L"timer callbacks run as later tasks after the microtask checkpoint");
+    Check(semanticsJs.Execute(
+        L"taskOrder=[];setTimeout(()=>taskOrder.push('first'),0);"
+        L"setTimeout(()=>taskOrder.push('second'),0);",
+        nullptr,&error),error.c_str());
+    semanticsJs.RunTimers();
+    Check(semanticsJs.Execute(L"return taskOrder.join(',');",&semanticsResult,&error)&&
+          semanticsResult==L"first",
+          L"a timer wake processes one event-loop task so the host can service UI work");
+    semanticsJs.RunTimers();
+    Check(semanticsJs.Execute(L"return taskOrder.join(',');",&semanticsResult,&error)&&
+          semanticsResult==L"first,second",
+          L"the next timer wake processes the following queued task");
     Document eventDoc;Check(eventDoc.Parse(L"<button id='event-button'>go</button><button id='compat-button'>compat</button>",&error),L"event fixture parses");
     JavaScriptRuntime eventJs(eventDoc);std::wstring eventResult;bool focusRequested=false;
     eventJs.SetFocusSink([&](const std::shared_ptr<Node>& node){focusRequested=node==eventDoc.GetElementById(L"event-button");node->focused=true;});
@@ -1009,6 +2060,8 @@ int wmain(int argc,wchar_t** argv) {
         L"<body><form name='search'><input name='query' class='field primary'><span class='field'></span></form></body>",
         &error),L"browser compatibility DOM fixture parses");
     JavaScriptRuntime compatibilityDomJs(compatibilityDomDoc);std::wstring compatibilityDomResult;
+    bool compatibilityDocumentFocused=false;
+    compatibilityDomJs.SetDocumentFocusProvider([&]{return compatibilityDocumentFocused;});
     Check(compatibilityDomJs.Execute(
         L"const form=document.getElementsByTagName('form')[0];const input=form.query;"
         L"const marker=document.createEvent('Event');marker.initEvent('ready',true,true);"
@@ -1023,6 +2076,29 @@ int wmain(int argc,wchar_t** argv) {
         &compatibilityDomResult,&error)&&
         compatibilityDomResult==L"true|true|1|2|2|2|true|true|name|query|query|2|true|true|ready|true|true|true",
         L"legacy document collections, named form access and event initialization compose through the common DOM bridge");
+    Check(compatibilityDomJs.Execute(L"return document.hasFocus();",&compatibilityDomResult,&error)&&
+          compatibilityDomResult==L"false",L"document.hasFocus reflects an unfocused host document");
+    compatibilityDocumentFocused=true;
+    Check(compatibilityDomJs.Execute(L"return document.hasFocus();",&compatibilityDomResult,&error)&&
+          compatibilityDomResult==L"true",L"document.hasFocus reflects a focused host document");
+    Check(compatibilityDomJs.Execute(LR"JS(
+        var attributeMap=input.attributes,initialAttributeCount=attributeMap.length;
+        var attributeIterator=attributeMap[Symbol.iterator](),attributeNames=[],attributeStep;
+        while(!(attributeStep=attributeIterator.next()).done)attributeNames.push(attributeStep.value.name);
+        var namedAttribute=attributeMap.getNamedItem('NAME');namedAttribute.value='term';
+        input.setAttribute('data-extra','ok');var countAfterAdd=attributeMap.length;
+        var extraValue=attributeMap['data-extra'].value;
+        var removedAttribute=attributeMap.removeNamedItem('data-extra'),countAfterRemove=attributeMap.length;
+        var createdAttribute=document.createAttribute('DATA-CREATED');createdAttribute.value='yes';
+        var replacedAttribute=attributeMap.setNamedItem(createdAttribute);
+        return [Object.prototype.toString.call(attributeMap),Array.isArray(attributeMap),
+          initialAttributeCount,attributeMap.item(0).nodeType,attributeNames.sort().join(','),
+          input.getAttribute('name'),countAfterAdd,extraValue,countAfterRemove,
+          removedAttribute.ownerElement===null,removedAttribute.value,replacedAttribute===null,
+          input.getAttribute('data-created'),createdAttribute.ownerElement===input].join('|');
+    )JS",&compatibilityDomResult,&error)&&
+        compatibilityDomResult==L"[object NamedNodeMap]|false|2|2|class,name|term|3|ok|2|true|ok|true|yes|true",
+        L"element attributes expose a live iterable NamedNodeMap with mutable Attr nodes");
     Document appDomDoc;Check(appDomDoc.Parse(
         L"<div id='root'><span id='replace' class='alpha beta'>ab</span><em>cd</em></div>"
         L"<input id='source' value='abcdef'><button id='activate'>go</button>"
@@ -1043,6 +2119,20 @@ int wmain(int argc,wchar_t** argv) {
         &appDomResult,&error),error.c_str());
     Check(appDomResult==L"1|11|XY:2;cd:2;|XYcd|XZcd|aZZdef|1-3-backward|false|true-false-false|1|2-1-1",
           L"tree walking, fragments, ranges, form controls, activation and table DOM APIs compose for MdViewer editing");
+    Check(appDomJs.Execute(
+        L"const contextualRange=document.createRange(),rootNode=document.getElementById('root');"
+        L"contextualRange.selectNode(rootNode);const contextual=contextualRange.createContextualFragment('<strong id=\"range-fragment\">range</strong>');"
+        L"rootNode.appendChild(contextual);return contextualRange.commonAncestorContainer.tagName+'|'+contextual.nodeType+'|'+document.getElementById('range-fragment').textContent;",
+        &appDomResult,&error)&&appDomResult==L"BODY|11|range",
+        L"Range.selectNode and createContextualFragment insert parsed markup through generic DOM rules");
+    Check(appDomJs.Execute(
+        L"const scriptRange=document.createRange(),rootNode=document.getElementById('root');"
+        L"scriptRange.selectNode(rootNode);const contextual=scriptRange.createContextualFragment("
+        L"'<section id=\"range-script-parent\"><script>document.currentScript.parentElement.setAttribute(\"data-ran\",\"yes\")</script></section>');"
+        L"rootNode.replaceChildren(contextual);const parent=document.getElementById('range-script-parent');"
+        L"return parent.getAttribute('data-ran')+'|'+parent.children.length;",
+        &appDomResult,&error)&&appDomResult==L"yes|1",
+        L"scripts nested in a contextual fragment execute when replaceChildren connects the fragment");
     Document dialogDisplayDoc;Check(dialogDisplayDoc.Parse(L"<body><dialog id='closed' class='modal'></dialog><dialog id='opened' class='modal' open></dialog><div id='hidden' hidden></div></body>",&error),L"dialog display fixture parses");
     StyleSheet dialogDisplayCss;Check(dialogDisplayCss.Parse(L".modal{width:300px}",&error),L"dialog display CSS parses");
     LayoutEngine dialogDisplayLayout(dialogDisplayDoc,dialogDisplayCss);dialogDisplayLayout.Layout(800,600);
@@ -1119,6 +2209,29 @@ int wmain(int argc,wchar_t** argv) {
     Check(borderScaleBox&&std::abs((borderScaleBox->content.x-borderScaleBox->rect.x)-(2.0f/3.0f))<0.001f&&
           std::abs(borderScaleBox->rect.width-100.0f)<0.001f,
           L"one CSS-pixel border snaps to one physical pixel at 150% scale");
+
+    Document viewportAbsoluteDoc;
+    Check(viewportAbsoluteDoc.Parse(
+          L"<style>iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0}</style>"
+          L"<iframe id='viewport-absolute'></iframe>",&error),
+          L"initial containing block fixture parses");
+    StyleSheet viewportAbsoluteCss;
+    Check(viewportAbsoluteCss.Parse(viewportAbsoluteDoc.StyleText(),&error),
+          L"initial containing block CSS parses");
+    LayoutEngine viewportAbsoluteLayout(viewportAbsoluteDoc,viewportAbsoluteCss);
+    bool viewportAbsoluteValid=true;
+    for(const float scale:{1.0f,1.5f}){
+        viewportAbsoluteLayout.Relayout(728,90,scale);
+        const auto* absolute=viewportAbsoluteLayout.BoxFor(
+            viewportAbsoluteDoc.GetElementById(L"viewport-absolute"));
+        viewportAbsoluteValid=viewportAbsoluteValid&&absolute&&
+            std::abs(absolute->rect.x)<0.01f&&std::abs(absolute->rect.y)<0.01f&&
+            std::abs(absolute->rect.width-728.0f)<0.01f&&
+            std::abs(absolute->rect.height-90.0f)<0.01f&&
+            std::abs(absolute->style.deviceScale-scale)<0.01f;
+    }
+    Check(viewportAbsoluteValid,
+          L"an absolute percentage-sized child without a positioned ancestor uses the initial containing block at 100 and 150 percent DPI");
 
     Document basicCssDoc;
     Check(basicCssDoc.Parse(
@@ -1398,11 +2511,11 @@ int wmain(int argc,wchar_t** argv) {
                     sample.clicked=message.find(L"dpi-click")!=std::wstring::npos;
                 });
                 sample.loaded=view->NavigateToString(
-                    L"<style>*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0}.probe{position:absolute;left:10vw;top:10vh;width:50vw;height:25vh;font-size:4vw}</style><button id='dpi-probe' class='probe'>DPI</button><script>document.getElementById('dpi-probe').addEventListener('click',()=>window.chrome.webview.postMessage('dpi-click'));</script>",
+                    L"<style>*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0}.probe{position:absolute;left:10vw;top:10vh;width:50vw;height:25vh;font-size:4vw}</style><button id='dpi-probe' class='probe'>DPI</button><script>const probe=document.getElementById('dpi-probe'),rect=probe.getBoundingClientRect();window.initialGeometry=[rect.x,rect.y,rect.width,rect.height,getComputedStyle(probe).fontSize,probe.offsetWidth,probe.offsetHeight,document.documentElement.clientWidth,document.documentElement.clientHeight].join(',');probe.addEventListener('click',()=>window.chrome.webview.postMessage('dpi-click'));</script>",
                     L"https://dpi.test/");
                 std::wstring value,errorText;
                 if(sample.loaded&&view->ExecuteScript(
-                    L"let r=document.getElementById('dpi-probe').getBoundingClientRect();return [r.x,r.y,r.width,r.height,getComputedStyle(document.getElementById('dpi-probe')).fontSize].join(',');",
+                    L"return window.initialGeometry;",
                     &value,&errorText)){
                     size_t start=0;
                     while(start<=value.size()){
@@ -1431,7 +2544,7 @@ int wmain(int argc,wchar_t** argv) {
     const auto dpi100=captureDpiLayout(DPI_AWARENESS_CONTEXT_UNAWARE);
     const auto dpiMonitor=captureDpiLayout(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     const auto matchesCssViewport=[](const DpiLayoutSample& sample){
-        const double expected[]={132.8,85.2,664.0,213.0,53.12};
+        const double expected[]={132.8,85.2,664.0,213.0,53.12,664.0,213.0,1328.0,852.0};
         if(!sample.loaded||!sample.clicked||sample.geometry.size()!=std::size(expected))return false;
         for(size_t index=0;index<std::size(expected);++index)
             if(std::abs(sample.geometry[index]-expected[index])>0.02)return false;
@@ -1439,7 +2552,7 @@ int wmain(int argc,wchar_t** argv) {
     };
     Check(dpi100.dpi==96&&dpiMonitor.dpi>=96&&matchesCssViewport(dpi100)&&
           matchesCssViewport(dpiMonitor),
-          L"96-DPI and per-monitor views preserve CSS geometry and hit testing across physical coordinates");
+          L"loading scripts see current CSS geometry and offset metrics while hit testing remains correct at 96 DPI and per-monitor DPI");
 
     Document basicHtmlDoc;
     Check(basicHtmlDoc.Parse(
@@ -3071,6 +4184,71 @@ int wmain(int argc,wchar_t** argv) {
         RECT inputBounds{0,0,320,120};auto inputView=TWebFrame::View::Create(inputHost,inputBounds);
         Check(inputView!=nullptr,L"TWebFrame input test view is created");
         if(inputView){
+            const DWORD asyncUiThread=GetCurrentThreadId();
+            std::atomic<DWORD> asyncResourceThread{0};
+            std::atomic<DWORD> asyncFetchThread{0};
+            bool asyncCompleted=false,asyncSucceeded=false;DWORD asyncCallbackThread=0;
+            int asyncCompletionCount=0;
+            inputView->SetParallelResourceLoading(true);
+            inputView->SetResourceLoader([&](const std::wstring& path,std::wstring& source){
+                if(path==L"https://async.test/theme.css"){
+                    asyncResourceThread.store(GetCurrentThreadId(),std::memory_order_relaxed);
+                    source=L"#async-winner{color:rgb(1,2,3)}";return true;
+                }
+                if(path==L"https://async.test/payload.txt"){
+                    asyncFetchThread.store(GetCurrentThreadId(),std::memory_order_relaxed);
+                    Sleep(20);source=L"worker-fetch";return true;
+                }
+                return false;
+            });
+            inputView->SetLoadHandler([&](bool success,const std::wstring&){
+                asyncSucceeded=success;asyncCompleted=true;++asyncCompletionCount;
+                asyncCallbackThread=GetCurrentThreadId();
+            });
+            std::wstring superseded=L"<title>superseded</title>";
+            for(int index=0;index<5000;++index)
+                superseded+=L"<div>stale "+std::to_wstring(index)+L"</div>";
+            Check(inputView->NavigateToStringAsync(superseded,L"https://async.test/old.html"),
+                  L"asynchronous HTML parse is accepted");
+            Check(inputView->NavigateToStringAsync(
+                L"<title>async-winner</title><link rel='stylesheet' href='theme.css'>"
+                L"<main id='async-winner'>ready</main>",L"https://async.test/index.html"),
+                L"newer asynchronous navigation supersedes an older parse");
+            Check(!asyncCompleted,L"asynchronous navigation does not complete inline on the UI thread");
+            const auto asyncDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+            while(!asyncCompleted&&std::chrono::steady_clock::now()<asyncDeadline){
+                MSG asyncMessage{};
+                if(PeekMessageW(&asyncMessage,nullptr,0,0,PM_REMOVE)){
+                    TranslateMessage(&asyncMessage);DispatchMessageW(&asyncMessage);
+                }else Sleep(1);
+            }
+            Check(asyncCompleted&&asyncSucceeded&&inputView->DocumentTitle()==L"async-winner",
+                  L"the newest worker-parsed document is adopted on the view");
+            Check(asyncCompletionCount==1&&asyncCallbackThread==asyncUiThread,
+                  L"stale parse completion is discarded and load completion stays on the UI thread");
+            Check(asyncResourceThread.load(std::memory_order_relaxed)!=0&&
+                  asyncResourceThread.load(std::memory_order_relaxed)!=asyncUiThread,
+                  L"external stylesheet loading and parsing run on the CPU worker path");
+            std::wstring asyncFetchMessage;
+            inputView->SetMessageHandler([&](const std::wstring& value){asyncFetchMessage=value;});
+            std::wstring asyncFetchError;
+            Check(inputView->ExecuteScript(
+                L"fetch('payload.txt').then(response=>response.text()).then(value=>window.chrome.webview.postMessage(value));",
+                nullptr,&asyncFetchError),asyncFetchError.c_str());
+            Check(asyncFetchMessage.empty(),L"fetch returns a pending promise without blocking the UI thread");
+            const auto fetchDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+            while(asyncFetchMessage.empty()&&std::chrono::steady_clock::now()<fetchDeadline){
+                MSG fetchMessage{};
+                if(PeekMessageW(&fetchMessage,nullptr,0,0,PM_REMOVE)){
+                    TranslateMessage(&fetchMessage);DispatchMessageW(&fetchMessage);
+                }else Sleep(1);
+            }
+            Check(asyncFetchMessage==L"worker-fetch"&&
+                  asyncFetchThread.load(std::memory_order_relaxed)!=0&&
+                  asyncFetchThread.load(std::memory_order_relaxed)!=asyncUiThread,
+                  L"fetch I/O resolves its promise on the UI thread after worker completion");
+            inputView->SetLoadHandler({});inputView->SetResourceLoader({});
+            inputView->SetParallelResourceLoading(false);
             std::wstring inputMessage;inputView->SetMessageHandler([&](const std::wstring& value){inputMessage=value;});
             const wchar_t* inputHtml=LR"HTML(<style>*{margin:0;padding:0;box-sizing:border-box}input{width:120px;height:32px;padding:0 4px;border:1px solid #ccc;font-size:13px}</style><input id="editor" type="text" value="abc" maxlength="5"><script>document.addEventListener('DOMContentLoaded',function(){const editor=document.getElementById('editor');editor.addEventListener('input',function(){window.chrome.webview.postMessage('input:'+this.value);});editor.addEventListener('change',function(){window.chrome.webview.postMessage('change:'+this.value);});});</script>)HTML";
             Check(inputView->NavigateToString(inputHtml),L"text input fixture loads in a real view");
@@ -3301,21 +4479,219 @@ int wmain(int argc,wchar_t** argv) {
                 }
                 Check(inputMessage==L"TWebFrameTests.exe",L"native file drop reaches the DOM drop event at the pointer location");
             }
+            Check(inputView->NavigateToString(L"<iframe id='sized-frame'></iframe>"),
+                  L"replaced iframe sizing fixture loads in a real view");
+            Check(inputView->ExecuteScript(
+                L"const frame=document.getElementById('sized-frame');frame.width=240;frame.height=180;"
+                L"frame.srcdoc='<main>inline frame</main>';const rect=frame.getBoundingClientRect();"
+                L"return frame.width+'|'+frame.height+'|'+frame.srcdoc+'|'+rect.width+'|'+rect.height;",
+                &selectionResult,&selectionError)&&
+                selectionResult==L"240|180|<main>inline frame</main>|240|180",
+                L"iframe width, height and srcdoc properties reflect into layout and child-frame navigation");
+            if(selectionResult!=L"240|180|<main>inline frame</main>|240|180")
+                std::wcerr<<L"iframe reflected sizing actual: "<<selectionResult<<L'\n';
+            inputMessage.clear();
+            Check(inputView->NavigateToString(
+                L"<style>*{margin:0}iframe{width:160px;height:90px;border:0}</style>"
+                L"<iframe id='friendly-frame'></iframe>"),
+                L"friendly iframe document fixture loads in a real view");
+            Check(inputView->ExecuteScript(
+                L"const frame=document.getElementById('friendly-frame');"
+                L"const childDocument=frame.contentWindow.document;"
+                L"const sameDocument=childDocument===frame.contentDocument;"
+                L"childDocument.open('text/html','replace');"
+                L"childDocument.write('<style>html,body{margin:0;background:#0a5}</style>'"
+                L"+'<main>painted child</main><script>window.chrome.webview.postMessage(\"friendly-frame-painted\")<\\/script>');"
+                L"childDocument.close();return sameDocument+'|'+typeof childDocument.write;",
+                &selectionResult,&selectionError)&&selectionResult==L"true|function",
+                selectionError.c_str());
+            Check(inputMessage==L"friendly-frame-painted"&&
+                      FindWindowExW(inputWindow,nullptr,L"TWebFrame.View.1",nullptr)!=nullptr,
+                  L"contentWindow.document write and close load and render a friendly iframe document");
+            inputMessage.clear();
+            Check(inputView->NavigateToString(L"<main id='old-document'>old</main>"),
+                  L"document replacement fixture loads in a real view");
+            Check(inputView->ExecuteScript(
+                L"window.replacementState='preserved';"
+                L"document.open('text/html','replace');"
+                L"document.write('<style>html,body{margin:0;background:#174}</style>'"
+                L"+'<main id=\"new-document\">new</main>'"
+                L"+'<script>window.chrome.webview.postMessage(window.replacementState)<\\/script>');"
+                L"document.close();"
+                L"return document.getElementById('new-document').textContent+'|'"
+                L"+window.replacementState+'|'+(document.getElementById('old-document')===null);",
+                &selectionResult,&selectionError)&&
+                selectionResult==L"new|preserved|true"&&inputMessage==L"preserved",
+                selectionError.c_str());
+            if(selectionResult!=L"new|preserved|true")
+                std::wcerr<<L"document replacement actual: "<<selectionResult<<L'\n';
+            Check(inputView->NavigateToString(
+                L"<style>*{margin:0;padding:0;box-sizing:border-box}"
+                L"#frame-scroll{width:300px;height:100px;overflow-y:scroll}"
+                L"#frame-spacer{height:180px}iframe{display:block;width:120px;height:60px;border:0}</style>"
+                L"<div id='frame-scroll'><div id='frame-spacer'></div><iframe srcdoc='<main>scroll child</main>'></iframe></div>"),
+                L"scrolling iframe fixture loads in a real view");
+            (void)inputView->DumpLayoutJson();
+            const HWND scrollingFrame=FindWindowExW(inputWindow,nullptr,L"TWebFrame.View.1",nullptr);
+            RECT frameBeforeScroll{},frameAfterScroll{};
+            if(scrollingFrame)GetWindowRect(scrollingFrame,&frameBeforeScroll);
+            Check(scrollingFrame!=nullptr&&inputView->ExecuteScript(
+                L"document.getElementById('frame-scroll').scrollTop=140;",
+                nullptr,&selectionError),selectionError.c_str());
+            if(scrollingFrame)GetWindowRect(scrollingFrame,&frameAfterScroll);
+            const auto frameScrollScale=static_cast<double>(GetDpiForWindow(inputWindow))/96.0;
+            if(!scrollingFrame||frameAfterScroll.top>=
+                   frameBeforeScroll.top-static_cast<LONG>(100.0*frameScrollScale)){
+                std::wstring scrollState;
+                inputView->ExecuteScript(
+                    L"const s=document.getElementById('frame-scroll'),f=s.querySelector('iframe'),r=f.getBoundingClientRect();"
+                    L"return s.scrollTop+'|'+s.scrollHeight+'|'+s.clientHeight+'|'+r.y;",
+                    &scrollState,&selectionError);
+                std::wcerr<<L"iframe scroll placement actual: before="<<frameBeforeScroll.top
+                          <<L" after="<<frameAfterScroll.top<<L" scale="<<frameScrollScale
+                          <<L" dom="<<scrollState<<L'\n';
+            }
+            Check(scrollingFrame&&frameAfterScroll.top<
+                      frameBeforeScroll.top-static_cast<LONG>(100.0*frameScrollScale),
+                  L"iframe child windows follow common CSS scroll coordinates at the active DPI");
+            Check(inputView->NavigateToString(L"<main id='frame-host'></main>"),
+                  L"generic iframe attribute assignment fixture loads");
+            Check(inputView->ExecuteScript(
+                L"function mergeAttributes(target){for(var key,source,index=1;index<arguments.length;index++){source=arguments[index];for(key in source)target[key]=source[key];}}"
+                L"function assignAttributes(target,attributes){for(var key in attributes)target[key]=attributes[key];}"
+                L"const frame=document.createElement('iframe'),attributes={frameborder:0,style:'border:0',src:'about:blank'};"
+                L"mergeAttributes(attributes,{id:'safe-frame',title:'creative',name:'serialized-content',scrolling:'no',width:'240',height:'600',src:'child.html'});"
+                L"assignAttributes(frame,attributes);"
+                L"document.getElementById('frame-host').appendChild(frame);"
+                L"return frame.id+'|'+frame.name+'|'+frame.getAttribute('name')+'|'+frame.width+'|'+frame.height;",
+                &selectionResult,&selectionError)&&
+                selectionResult==L"safe-frame|serialized-content|serialized-content|240|600",
+                L"generic property enumeration reflects iframe startup attributes");
+            if(selectionResult!=L"safe-frame|serialized-content|serialized-content|240|600")
+                std::wcerr<<L"iframe enumerated attributes actual: "<<selectionResult<<L'\n';
+            Check(inputView->NavigateToString(
+                L"<iframe id='first-frame' name='named-frame'></iframe><iframe id='second-frame'></iframe>"),
+                L"Window frames collection fixture loads in a real view");
+            Check(inputView->ExecuteScript(
+                L"const first=document.getElementById('first-frame');const second=document.getElementById('second-frame');"
+                L"return (frames===window)+'|'+frames.length+'|'+(frames[0]===first.contentWindow)+'|'"
+                L"+(frames[1]===second.contentWindow)+'|'+(frames['named-frame']===first.contentWindow)+'|'"
+                L"+(window['named-frame']===first.contentWindow)+'|'+('named-frame' in window);",
+                &selectionResult,&selectionError)&&selectionResult==L"true|2|true|true|true|true|true",
+                L"window.frames exposes a live indexed and named WindowProxy collection");
+            if(selectionResult!=L"true|2|true|true|true|true|true")
+                std::wcerr<<L"Window frames collection actual: "<<selectionResult<<L'\n';
             std::vector<std::wstring> frameEvents;
             inputView->SetMessageHandler([&](const std::wstring& value){frameEvents.push_back(value);});
             inputView->SetResourceLoader([](const std::wstring& path,std::wstring& source){
-                if(path!=L"child.html")return false;
-                source=L"<script>window.addEventListener('message',event=>{if(event.source===parent&&event.data.kind==='reply')parent.postMessage({kind:'ack'},'*');});parent.postMessage({kind:'ready'},'*');</script>";
+                if(path!=L"https://child.frames.test/child.html")return false;
+                source=L"<script>window.addEventListener('message',event=>{if(event.source===parent&&event.data.kind==='reply')parent.postMessage({kind:'ack',replyOrigin:event.origin,nested:event.data.nested,contextName:window.name},'*');});parent.postMessage({kind:'ready',nested:top!==window&&top===parent,contextName:window.name},'*');</script>";
                 return true;
             });
-            const wchar_t* frameHtml=LR"HTML(<style>*{margin:0}iframe{width:150px;height:80px;border:0}</style><iframe id="child" src="child.html"></iframe><script>const frame=document.getElementById('child');window.addEventListener('message',event=>{if(event.source!==frame.contentWindow)return;if(event.data.kind==='ready')frame.contentWindow.postMessage({kind:'reply'},'*');if(event.data.kind==='ack')window.chrome.webview.postMessage('iframe-ok');});frame.addEventListener('load',()=>window.chrome.webview.postMessage('iframe-loaded'));</script>)HTML";
-            Check(inputView->NavigateToString(frameHtml),inputView->LastError().c_str());
-            Check(frameEvents.size()==2&&frameEvents[0]==L"iframe-ok"&&frameEvents[1]==L"iframe-loaded",
-                  L"iframe documents exchange structured messages with parent and dispatch load");
+            const wchar_t* frameHtml=LR"HTML(<style>*{margin:0}iframe{width:150px;height:80px;border:0}</style><main id="frame-host"></main><script>const frame=document.createElement('iframe');frame.id='child';frame.name='serialized-context';frame.contentWindow.name='serialized-payload';window.addEventListener('message',event=>{if(event.source!==frame.contentWindow)return;if(event.data.kind==='ready')frame.contentWindow.postMessage({kind:'reply',nested:event.data.nested},'*');if(event.data.kind==='ack')window.chrome.webview.postMessage('iframe-ok|'+event.origin+'|'+event.data.replyOrigin+'|'+event.data.nested+'|'+event.data.contextName);});frame.addEventListener('load',()=>window.chrome.webview.postMessage('iframe-loaded'));frame.src='https://child.frames.test/child.html';document.getElementById('frame-host').appendChild(frame);</script>)HTML";
+            Check(inputView->NavigateToString(frameHtml,L"https://parent.frames.test/index.html"),inputView->LastError().c_str());
+            Check(frameEvents.size()==2&&
+                      frameEvents[0]==L"iframe-ok|https://child.frames.test|https://parent.frames.test|true|serialized-payload"&&
+                      frameEvents[1]==L"iframe-loaded",
+                  L"iframe messages expose source identity and serialized sender origins");
+            if(frameEvents.size()!=2||
+               frameEvents[0]!=L"iframe-ok|https://child.frames.test|https://parent.frames.test|true|serialized-payload"){
+                std::wcerr<<L"iframe message events:";
+                for(const auto& event:frameEvents)std::wcerr<<L" ["<<event<<L"]";
+                std::wcerr<<L'\n';
+            }
             Check(FindWindowExW(inputWindow,nullptr,L"TWebFrame.View.1",nullptr)!=nullptr,
                   L"iframe has a separately rendered TWebFrame child window");
+            frameEvents.clear();
             inputView->SetResourceLoader([](const std::wstring& path,std::wstring& source){
-                if(path!=L"https://app.examples/index.html")return false;
+                if(path==L"https://middle.frames.test/child.html"){
+                    source=L"<iframe src='https://deep.frames.test/grandchild.html'></iframe>";
+                    return true;
+                }
+                if(path==L"https://deep.frames.test/grandchild.html"){
+                    source=L"<script>top.postMessage({kind:'top-route',separate:top!==parent},'*');parent.parent.postMessage({kind:'chain-route'},'*');</script>";
+                    return true;
+                }
+                return false;
+            });
+            Check(inputView->NavigateToString(
+                L"<iframe id='middle' src='https://middle.frames.test/child.html'></iframe><script>const middle=document.getElementById('middle');window.addEventListener('message',event=>{if(event.source===middle.contentWindow)window.chrome.webview.postMessage(event.data.kind+(event.data.separate===undefined?'':'|'+event.data.separate));});</script>",
+                L"https://top.frames.test/index.html"),
+                L"nested iframe messaging fixture loads");
+            Check(std::find(frameEvents.begin(),frameEvents.end(),L"top-route|true")!=frameEvents.end()&&
+                      std::find(frameEvents.begin(),frameEvents.end(),L"chain-route")!=frameEvents.end(),
+                  L"nested WindowProxy top and parent chains route messages to the top context");
+            frameEvents.clear();
+            inputView->SetResourceLoader([](const std::wstring& path,std::wstring& source){
+                if(path==L"https://dynamic-frames.test/first.html"||
+                   path==L"https://dynamic-frames.test/second.html"){
+                    source=L"<main>dynamic child</main>";return true;
+                }
+                return false;
+            });
+            Check(inputView->NavigateToString(
+                L"<main id='frame-host'></main><script>window.dynamicFrameEvents=[];</script>",
+                L"https://dynamic-frames.test/index.html"),
+                L"dynamic iframe parent fixture loads");
+            Check(inputView->ExecuteScript(
+                L"const frame=document.createElement('iframe');frame.id='dynamic-frame';"
+                L"frame.addEventListener('load',()=>window.chrome.webview.postMessage(frame.src));"
+                L"frame.src='first.html';document.getElementById('frame-host').appendChild(frame);",
+                nullptr,&selectionError),selectionError.c_str());
+            MSG dynamicFrameMessage{};
+            while(PeekMessageW(&dynamicFrameMessage,nullptr,0,0,PM_REMOVE)){
+                TranslateMessage(&dynamicFrameMessage);DispatchMessageW(&dynamicFrameMessage);
+            }
+            Check(frameEvents.size()==1&&frameEvents[0]==L"first.html"&&
+                  FindWindowExW(inputWindow,nullptr,L"TWebFrame.View.1",nullptr)!=nullptr,
+                  L"a script-appended iframe loads and creates a rendered child view");
+            Check(inputView->ExecuteScript(
+                L"document.getElementById('dynamic-frame').src='second.html';",
+                nullptr,&selectionError),selectionError.c_str());
+            while(PeekMessageW(&dynamicFrameMessage,nullptr,0,0,PM_REMOVE)){
+                TranslateMessage(&dynamicFrameMessage);DispatchMessageW(&dynamicFrameMessage);
+            }
+            Check(frameEvents.size()==2&&frameEvents[1]==L"second.html",
+                  L"changing a connected iframe source reloads its child view");
+            Check(inputView->ExecuteScript(L"document.getElementById('dynamic-frame').remove();",
+                                           nullptr,&selectionError),selectionError.c_str());
+            while(PeekMessageW(&dynamicFrameMessage,nullptr,0,0,PM_REMOVE)){
+                TranslateMessage(&dynamicFrameMessage);DispatchMessageW(&dynamicFrameMessage);
+            }
+            Check(FindWindowExW(inputWindow,nullptr,L"TWebFrame.View.1",nullptr)==nullptr,
+                  L"removing a dynamic iframe destroys its child view");
+            frameEvents.clear();std::atomic<DWORD> asyncFrameLoaderThread{0};
+            bool asyncFrameParentLoaded=false;
+            inputView->SetParallelResourceLoading(true);
+            inputView->SetLoadHandler([&](bool success,const std::wstring&){
+                asyncFrameParentLoaded=success;
+            });
+            inputView->SetResourceLoader([&](const std::wstring& path,std::wstring& source){
+                if(path!=L"https://frames.test/child.html")return false;
+                asyncFrameLoaderThread.store(GetCurrentThreadId(),std::memory_order_relaxed);
+                source=L"<main id='async-child'>child</main>";return true;
+            });
+            Check(inputView->NavigateToStringAsync(
+                L"<iframe id='async-frame' src='child.html'></iframe>"
+                L"<script>document.getElementById('async-frame').addEventListener('load',()=>window.chrome.webview.postMessage('async-frame-loaded'));</script>",
+                L"https://frames.test/index.html"),
+                L"parallel iframe parent navigation starts");
+            const auto frameDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+            while((!asyncFrameParentLoaded||frameEvents.empty())&&
+                  std::chrono::steady_clock::now()<frameDeadline){
+                MSG frameMessage{};
+                if(PeekMessageW(&frameMessage,nullptr,0,0,PM_REMOVE)){
+                    TranslateMessage(&frameMessage);DispatchMessageW(&frameMessage);
+                }else Sleep(1);
+            }
+            Check(asyncFrameParentLoaded&&frameEvents.size()==1&&
+                  frameEvents[0]==L"async-frame-loaded"&&
+                  asyncFrameLoaderThread.load(std::memory_order_relaxed)!=0&&
+                  asyncFrameLoaderThread.load(std::memory_order_relaxed)!=GetCurrentThreadId(),
+                  L"iframe source loading and child parsing complete through the worker pipeline");
+            inputView->SetLoadHandler({});inputView->SetParallelResourceLoading(false);
+            inputView->SetResourceLoader([](const std::wstring& path,std::wstring& source){
+                if(path.rfind(L"https://app.examples/index.html",0)!=0)return false;
                 source=L"<main id='language-view'></main><script>document.getElementById('language-view').textContent=new URLSearchParams(location.search).get('lang');</script>";
                 return true;
             });
@@ -3334,14 +4710,41 @@ int wmain(int argc,wchar_t** argv) {
                 &selectionResult,&selectionError)&&selectionResult==L"ja-JP|?lang=ja-JP",
                 L"location.replace reloads the current resource with updated URL search parameters");
             std::wstring submittedUrl;
-            inputView->SetBrowserMode(true);
+            inputView->SetPageScriptsEnabled(false);
+            const auto scriptsDisabledExceptionHandler=
+                AddVectoredExceptionHandler(1,CountFirstChanceCppExceptions);
+            InterlockedExchange(&firstChanceCppExceptions,0);
+            Check(inputView->NavigateToString(
+                L"<main id='script-mode'>safe</main>"
+                L"<script>const broken = ;</script>"
+                L"<script>throw new Error('must not run');</script>"
+                L"<button id='inline-mode' "
+                L"onclick=\"document.getElementById('script-mode').textContent='unsafe'\">press</button>",
+                L"https://app.examples/untrusted.html"),
+                L"scripts-disabled mode accepts a page containing unsupported scripts");
+            Check(InterlockedCompareExchange(&firstChanceCppExceptions,0,0)==0,
+                  L"scripts-disabled mode skips script elements without first-chance C++ exceptions");
+            InterlockedExchange(&firstChanceCppExceptions,0);
+            Check(inputView->ExecuteScript(
+                L"return document.getElementById('script-mode').textContent;",
+                &selectionResult,&selectionError)&&selectionResult==L"safe",
+                L"scripts-disabled mode leaves script elements unexecuted");
+            Check(InterlockedCompareExchange(&firstChanceCppExceptions,0,0)==0,
+                  L"scripts-disabled DOM inspection does not throw first-chance C++ exceptions");
+            if(scriptsDisabledExceptionHandler)
+                RemoveVectoredExceptionHandler(scriptsDisabledExceptionHandler);
+            Check(inputView->ExecuteScript(
+                L"document.getElementById('inline-mode').click();"
+                L"return document.getElementById('script-mode').textContent;",
+                &selectionResult,&selectionError)&&selectionResult==L"safe",
+                L"scripts-disabled mode dispatches native clicks without running inline handlers");
             inputView->SetNavigationHandler([&](const std::wstring& url,bool){submittedUrl=url;});
             Check(inputView->NavigateToString(
                 L"<meta charset='euc-kr'><form method='get' action='/find'>"
                 L"<input id='query' name='q' value='\xD55C\xAE00'>"
                 L"<input type='hidden' name='id' value='freeboard'></form>",
                 L"https://app.examples/search?existing=1"),
-                L"browser-mode GET form fixture loads");
+                L"scripts-disabled GET form fixture loads");
             Check(inputView->ExecuteScript(L"document.getElementById('query').focus()",
                                            nullptr,&selectionError),selectionError.c_str());
             SendMessageW(inputView->Window(),WM_KEYDOWN,VK_RETURN,0);
@@ -3351,7 +4754,18 @@ int wmain(int argc,wchar_t** argv) {
             Check(submittedUrl.find(L"https://app.examples/find?")==0&&
                   submittedUrl.find(L"q=%C7%D1%B1%DB")!=std::wstring::npos&&
                   submittedUrl.find(L"id=freeboard")!=std::wstring::npos,
-                  L"browser-mode GET form submits named controls using the page charset");
+                  L"scripts-disabled GET form submits named controls using the page charset");
+            inputView->SetPageScriptsEnabled(true);
+            Check(inputView->NavigateToString(
+                L"<link rel='stylesheet' href='/unavailable.css'>"
+                L"<main id='external-script-mode'>waiting</main>"
+                L"<script>document.getElementById('external-script-mode').textContent='executed';</script>",
+                L"https://app.examples/scripts-enabled.html"),
+                L"scripts-enabled external page tolerates an unavailable stylesheet");
+            Check(inputView->ExecuteScript(
+                L"return document.getElementById('external-script-mode').textContent;",
+                &selectionResult,&selectionError)&&selectionResult==L"executed",
+                L"page script execution is independent of external-page resource handling");
         }
         DestroyWindow(inputHost);
     }

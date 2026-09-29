@@ -276,8 +276,10 @@ void SetDefault(const std::shared_ptr<Node>& node, ComputedStyle& style) {
              node->tag == L"small" || node->tag == L"span" || node->tag == L"strong" ||
              node->tag == L"sub" || node->tag == L"sup" || node->tag == L"time" ||
              node->tag == L"u" || node->tag == L"var" || node->tag == L"wbr") display = L"inline";
-    else if (node->tag == L"button" || node->tag == L"canvas" || node->tag == L"img" || node->tag == L"input" ||
-             node->tag == L"select" || node->tag == L"textarea" || node->tag == L"svg")
+    else if (node->tag == L"button" || node->tag == L"canvas" || node->tag == L"embed" ||
+             node->tag == L"iframe" || node->tag == L"img" || node->tag == L"input" ||
+             node->tag == L"object" || node->tag == L"select" || node->tag == L"textarea" ||
+             node->tag == L"video" || node->tag == L"svg")
         display = L"inline-block";
     else if (node->tag == L"table") display = L"table";
     else if (node->tag == L"thead") display = L"table-header-group";
@@ -753,7 +755,7 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
     }
     for(const auto& pair:node->inlineStyle){
         if(pair.first.rfind(L"--",0)!=0)continue;
-        const Winner candidate{false,1000,0};const auto previous=customWinners.find(pair.first);
+        const Winner candidate{node->inlineStylePriority.count(pair.first)!=0,1000,0};const auto previous=customWinners.find(pair.first);
         if(previous==customWinners.end()||wins(candidate,previous->second))variables[pair.first]=pair.second;
     }
     for(const auto& pair:variables)(*result.values)[pair.first]=pair.second;
@@ -976,7 +978,8 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
     }
     if(pseudo.empty())for (const auto& pair : node->inlineStyle) {
         if(pair.first.rfind(L"--",0)==0)continue;
-        applyDeclaration(pair.first, pair.second, {false, 1000, 0});
+        applyDeclaration(pair.first, pair.second,
+                         {node->inlineStylePriority.count(pair.first)!=0, 1000, 0});
     }
     // HTML hidden-state inputs are non-rendered controls. Chromium enforces
     // this as a user-agent !important rule, so even a broad author rule such

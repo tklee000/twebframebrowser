@@ -10,7 +10,7 @@
 
 namespace TWebFrame::Internal {
 
-enum class NodeType { Document, Element, Text };
+enum class NodeType { Document, Element, Text, Comment };
 
 class Document;
 struct CanvasSurface;
@@ -28,6 +28,7 @@ struct Node : std::enable_shared_from_this<Node> {
     std::wstring text;
     FastMap<std::wstring, std::wstring> attributes;
     FastMap<std::wstring, std::wstring> inlineStyle;
+    FastMap<std::wstring, std::wstring> inlineStylePriority;
     std::vector<std::shared_ptr<Node>> children;
     std::vector<FileInfo> files;
     std::weak_ptr<Node> parent;
@@ -48,6 +49,11 @@ struct Node : std::enable_shared_from_this<Node> {
     size_t selectionStart = 0;
     size_t selectionEnd = 0;
     std::wstring selectionDirection = L"none";
+    // Browsing-context state is not an HTML attribute.  In particular,
+    // assigning iframe.contentWindow.name must survive after a transient
+    // WindowProxy wrapper is released and across navigation of that iframe.
+    std::wstring frameWindowName;
+    bool frameWindowNameInitialized = false;
     std::shared_ptr<CanvasSurface> canvas;
     std::shared_ptr<RasterImage> image;
     std::wstring imageSource;
@@ -74,6 +80,9 @@ public:
     Document(Document&&) = delete;
     Document& operator=(Document&&) = delete;
     bool Parse(const std::wstring& html, std::wstring* error = nullptr);
+    // Replaces this document with a tree parsed in an isolated worker-owned
+    // Document, rebinding every node to this stable UI-thread owner.
+    void AdoptParsed(Document& source);
     std::vector<std::shared_ptr<Node>> ParseFragment(const std::wstring& html,
                                                      std::wstring* error = nullptr);
 

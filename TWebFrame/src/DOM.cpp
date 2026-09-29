@@ -149,7 +149,8 @@ void CloseOpenElement(std::vector<std::shared_ptr<Node>>& stack,
 }
 
 void ParseStyleAttribute(const std::wstring& source,
-                         FastMap<std::wstring, std::wstring>& out) {
+                         FastMap<std::wstring, std::wstring>& out,
+                         FastMap<std::wstring, std::wstring>* priorities = nullptr) {
     size_t start = 0;
     while (start < source.size()) {
         size_t end = source.find(L';', start);
@@ -159,6 +160,13 @@ void ParseStyleAttribute(const std::wstring& source,
         if (colon != std::wstring::npos) {
             auto name = ToLower(Trim(part.substr(0, colon)));
             auto value = Trim(part.substr(colon + 1));
+            const auto lowerValue = ToLower(value);
+            constexpr auto important = L"!important";
+            if (lowerValue.size() >= 10 &&
+                lowerValue.compare(lowerValue.size() - 10, 10, important) == 0) {
+                value = Trim(value.substr(0, value.size() - 10));
+                if (priorities && !name.empty()) (*priorities)[name] = L"important";
+            } else if (priorities && !name.empty()) priorities->erase(name);
             if (!name.empty()) out[name] = value;
         }
         start = end + 1;
@@ -544,6 +552,7 @@ bool MatchesQuerySelector(const std::shared_ptr<Node>& node,
 
 void AppendInnerText(const Node& node, std::wstring& output) {
     if (node.type == NodeType::Text) { output += node.text; return; }
+    if (node.type == NodeType::Comment) return;
     if (node.tag == L"br") { output += L'\n'; return; }
     for (const auto& child : node.children) AppendInnerText(*child, output);
 }
@@ -575,6 +584,13 @@ public:
             }
             if (Starts(L"<!--")) {
                 const size_t end = html_.find(L"-->", position_ + 4);
+                auto node = std::make_shared<Node>();
+                node->type = NodeType::Comment;
+                node->tag = L"#comment";
+                node->text = html_.substr(position_ + 4,
+                    (end == std::wstring::npos ? html_.size() : end) - position_ - 4);
+                node->parent = stack.back();
+                stack.back()->children.push_back(node);
                 position_ = end == std::wstring::npos ? html_.size() : end + 3;
                 continue;
             }
@@ -633,7 +649,8 @@ public:
             node->checked = node->attributes.count(L"checked") != 0;
             node->disabled = node->attributes.count(L"disabled") != 0;
             const auto style = node->Attribute(L"style");
-            if (!style.empty()) ParseStyleAttribute(style, node->inlineStyle);
+            if (!style.empty()) ParseStyleAttribute(style, node->inlineStyle,
+                                                     &node->inlineStylePriority);
             node->parent = stack.back();
             stack.back()->children.push_back(node);
 
@@ -739,7 +756,10 @@ void Node::SetAttribute(const std::wstring& name, const std::wstring& value) {
     attributes[key] = value;
     if (key == L"checked") checked = true;
     if (key == L"disabled") disabled = true;
-    if (key == L"style") { inlineStyle.clear(); ParseStyleAttribute(value, inlineStyle); }
+    if (key == L"style") {
+        inlineStyle.clear(); inlineStylePriority.clear();
+        ParseStyleAttribute(value, inlineStyle, &inlineStylePriority);
+    }
     if (key == L"class" && ownerDocument)
         ownerDocument->UpdateElementClass(shared_from_this(), oldClass, value);
     if (key == L"name" && ownerDocument)
@@ -753,7 +773,7 @@ void Node::RemoveAttribute(const std::wstring& name) {
     attributes.erase(key);
     if (key == L"checked") checked = false;
     if (key == L"disabled") disabled = false;
-    if (key == L"style") inlineStyle.clear();
+    if (key == L"style") { inlineStyle.clear(); inlineStylePriority.clear(); }
     if (key == L"class" && ownerDocument)
         ownerDocument->UpdateElementClass(shared_from_this(), oldClass, L"");
     if (key == L"name" && ownerDocument)
@@ -853,6 +873,21 @@ Document::~Document() {
     for (const auto& entry : ownedNodes_)
         if (const auto node = entry.second.lock(); node && node->ownerDocument == this)
             node->ownerDocument = nullptr;
+}
+
+void Document::AdoptParsed(Document& source) {
+    if (&source == this) return;
+    for (const auto& entry : ownedNodes_)
+        if (const auto node = entry.second.lock(); node && node->ownerDocument == this)
+            node->ownerDocument = nullptr;
+    ownedNodes_.clear();ids_.clear();idCounts_.clear();nameCounts_.clear();
+    tags_.clear();classes_.clear();
+    root_ = std::move(source.root_);
+    if (!root_) {
+        root_ = std::make_shared<Node>();
+        root_->type = NodeType::Document;root_->tag = L"#document";
+    }
+    Reindex();
 }
 
 bool Document::Parse(const std::wstring& html, std::wstring* error) {
@@ -1023,7 +1058,29 @@ std::shared_ptr<Node> Document::CreateElement(const std::wstring& tag) const {
 void Document::SetInnerHtml(const std::shared_ptr<Node>& node, const std::wstring& html,
                             bool reindex) {
     if (!node) return;
-    auto children = ParseFragment(html);
+    std::vector<std::shared_ptr<Node>> children;
+    // The innerHTML setter parses in the context of the target element.  Raw
+    // text elements do not treat '<' or '&' as markup; RCDATA elements only
+    // expand character references.  Parsing these values as an ordinary HTML
+    // fragment corrupts JavaScript comparisons such as `a < b` and CSS text.
+    static const std::unordered_set<std::wstring> rawTextElements = {
+        L"script", L"style", L"xmp", L"iframe", L"noembed", L"noframes", L"plaintext"
+    };
+    const bool rawText = node->type == NodeType::Element &&
+                         rawTextElements.count(node->tag) != 0;
+    const bool rcdata = node->type == NodeType::Element &&
+                       (node->tag == L"title" || node->tag == L"textarea");
+    if (rawText || rcdata) {
+        if (!html.empty()) {
+            auto text = std::make_shared<Node>();
+            text->type = NodeType::Text;
+            text->tag = L"#text";
+            text->text = rcdata ? DecodeEntities(html) : html;
+            children.push_back(std::move(text));
+        }
+    } else {
+        children = ParseFragment(html);
+    }
     for (auto& child : children) child->parent = node;
     std::function<void(const std::shared_ptr<Node>&)> disconnect = [&](const auto& current) {
         current->ownerDocument = nullptr;
