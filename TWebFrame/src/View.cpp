@@ -438,6 +438,25 @@ struct View::Impl {
     bool parallelResourceLoading=false;
     std::uint64_t navigationGeneration=0;
     std::uint64_t resourceGeneration=0;
+    struct InitialDocumentScript {
+        std::shared_ptr<Node> node;
+        std::wstring resource;
+        std::wstring program;
+        bool asynchronous=false;
+        bool deferred=false;
+        bool ready=false;
+        bool loaded=false;
+        bool finished=false;
+    };
+    std::vector<std::shared_ptr<InitialDocumentScript>> initialDocumentScripts;
+    std::vector<std::pair<std::shared_ptr<Node>,std::wstring>> initialImageEvents;
+    size_t nextOrderedInitialScript=0;
+    size_t nextDeferredInitialScript=0;
+    size_t remainingInitialScripts=0;
+    std::uint64_t initialScriptGeneration=0;
+    bool initialBlockingScriptsDrained=false;
+    bool initialDomContentLoaded=false;
+    bool initialLoadDispatched=false;
     std::unordered_map<std::wstring,std::shared_ptr<RasterImage>> rasterImageCache;
     std::unordered_set<std::wstring> pendingRasterImages;
     std::unordered_map<std::wstring,std::vector<std::shared_ptr<Node>>> pendingImageNodes;
@@ -3346,13 +3365,163 @@ struct View::Impl {
                 delete reinterpret_cast<AsyncFrameSourceResult*>(pending.lParam);
             pendingNavigation.clear();HideTooltip();if(tooltip){DestroyWindow(tooltip);tooltip=nullptr;}if(tooltipFont){DeleteObject(tooltipFont);tooltipFont=nullptr;}KillTimer(hwnd,kAnimationFrameTimer);KillTimer(hwnd,kJavaScriptTimer);KillTimer(hwnd,kCssTransitionTimer);KillTimer(hwnd,kCaretBlinkTimer);KillTimer(hwnd,kImageAnimationTimer);caretBlinkTimerActive=false;cssTransitionTimerActive=false;imageAnimationTimerActive=false;childFrames.clear();textInput.Cancel(nullptr);if(accessibility)accessibility->Disconnect();ResetRenderTargets();return 0;}
         default:break;}return DefWindowProcW(hwnd,message,wParam,lParam);}
+    void ResetInitialDocumentLoad(){
+        initialDocumentScripts.clear();initialImageEvents.clear();
+        nextOrderedInitialScript=0;nextDeferredInitialScript=0;
+        remainingInitialScripts=0;initialScriptGeneration=0;
+        initialBlockingScriptsDrained=false;initialDomContentLoaded=false;
+        initialLoadDispatched=false;
+    }
+    void DispatchReadyInitialImages(){
+        auto images=std::move(initialImageEvents);initialImageEvents.clear();
+        for(const auto& item:images)if(item.first->imageSource==item.second&&
+            !item.second.empty()&&item.first->imageComplete){
+            JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
+            javascript.DispatchNodeEvent(item.first,item.first->image?L"load":L"error",event);
+        }
+    }
+    void FinishInitialDocumentLoad(){
+        if(initialLoadDispatched||!initialDomContentLoaded||remainingInitialScripts)return;
+        initialLoadDispatched=true;
+        javascript.SetDocumentReadyState(L"complete");
+        javascript.DispatchWindowEvent(L"load");
+        layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);
+        if(loadHandler)loadHandler(true,L"");
+    }
+    bool ExecuteInitialDocumentScript(const std::shared_ptr<InitialDocumentScript>& script,
+                                      std::uint64_t generation){
+        if(!script||script->finished||generation!=resourceGeneration||
+           generation!=initialScriptGeneration)return false;
+        bool executed=script->loaded;
+        if(executed&&!script->program.empty()){
+            std::wstring scriptError;
+            javascript.SetCurrentScript(script->node);
+            executed=javascript.Execute(script->program,nullptr,&scriptError);
+            javascript.SetCurrentScript({});
+            if(generation!=resourceGeneration||generation!=initialScriptGeneration)return false;
+        }
+        if(!executed){
+            JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
+            javascript.DispatchNodeEvent(script->node,L"error",event);
+        }else if(!script->resource.empty()){
+            JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
+            javascript.DispatchNodeEvent(script->node,L"load",event);
+        }
+        script->finished=true;
+        if(remainingInitialScripts)--remainingInitialScripts;
+        FinishInitialDocumentLoad();
+        return true;
+    }
+    void DrainOrderedInitialScripts(){
+        const auto generation=initialScriptGeneration;
+        if(!initialBlockingScriptsDrained){
+            while(nextOrderedInitialScript<initialDocumentScripts.size()){
+                const auto script=initialDocumentScripts[nextOrderedInitialScript];
+                if(script->asynchronous||script->deferred||script->finished){
+                    ++nextOrderedInitialScript;continue;
+                }
+                if(!script->ready)return;
+                if(!ExecuteInitialDocumentScript(script,generation))return;
+                ++nextOrderedInitialScript;
+            }
+            initialBlockingScriptsDrained=true;
+        }
+        while(nextDeferredInitialScript<initialDocumentScripts.size()){
+            const auto script=initialDocumentScripts[nextDeferredInitialScript];
+            if(!script->deferred||script->finished){
+                ++nextDeferredInitialScript;continue;
+            }
+            if(!script->ready)return;
+            if(!ExecuteInitialDocumentScript(script,generation))return;
+            ++nextDeferredInitialScript;
+        }
+        if(initialDomContentLoaded||generation!=resourceGeneration||
+           generation!=initialScriptGeneration)return;
+        initialDomContentLoaded=true;
+        javascript.SetDocumentReadyState(L"interactive");
+        DispatchReadyInitialImages();
+        javascript.DispatchDocumentEvent(L"DOMContentLoaded");
+        if(generation!=resourceGeneration||generation!=initialScriptGeneration)return;
+        SyncChildFrames();
+        FinishInitialDocumentLoad();
+    }
+    void CompleteInitialScriptLoad(const std::shared_ptr<InitialDocumentScript>& script,
+                                   std::uint64_t generation,bool loaded,
+                                   std::wstring program){
+        if(!script||generation!=resourceGeneration||generation!=initialScriptGeneration)return;
+        script->loaded=loaded;script->program=std::move(program);script->ready=true;
+        if(script->asynchronous){
+            ExecuteInitialDocumentScript(script,generation);
+            DrainOrderedInitialScripts();
+        }else DrainOrderedInitialScripts();
+    }
+    void BeginInitialDocumentScripts(
+        const std::unordered_map<std::wstring,std::wstring>& preparedText,
+        const std::unordered_set<std::wstring>& failedText){
+        initialScriptGeneration=resourceGeneration;
+        const auto generation=initialScriptGeneration;
+        const auto scripts=pageScriptsEnabled?document.QuerySelectorAll(L"script"):
+                                              std::vector<std::shared_ptr<Node>>{};
+        for(const auto& node:scripts){
+            if(!IsClassicJavaScriptType(node->Attribute(L"type")))continue;
+            node->scriptStarted=true;
+            auto script=std::make_shared<InitialDocumentScript>();
+            script->node=node;script->resource=node->Attribute(L"src");
+            script->asynchronous=!script->resource.empty()&&
+                                 node->attributes.count(L"async")!=0;
+            script->deferred=!script->asynchronous&&!script->resource.empty()&&
+                             node->attributes.count(L"defer")!=0;
+            if(script->resource.empty()){
+                script->program=node->InnerText();script->loaded=true;script->ready=true;
+            }else{
+                const auto key=ResolveResourceReference(script->resource);
+                const auto ready=preparedText.find(key);
+                if(ready!=preparedText.end()){
+                    script->program=ready->second;script->loaded=true;script->ready=true;
+                }else if(failedText.count(key)>0)script->ready=true;
+            }
+            initialDocumentScripts.push_back(std::move(script));
+        }
+        remainingInitialScripts=initialDocumentScripts.size();
+        for(const auto& script:initialDocumentScripts)if(script->asynchronous&&script->ready)
+            ExecuteInitialDocumentScript(script,generation);
+        for(const auto& script:initialDocumentScripts){
+            if(script->ready||script->resource.empty())continue;
+            const auto resource=script->resource;const auto loader=resourceLoader;
+            const auto base=basePath;const auto lifetime=asyncLifetime;
+            ImageWorkers().Submit(BackgroundWorkQueue::Priority::Critical,
+                [this,script,resource,loader,base,lifetime,generation]{
+                    {
+                        std::lock_guard<std::mutex> lock(lifetime->mutex);
+                        if(!lifetime->alive||!lifetime->hwnd||
+                           lifetime->resourceGeneration!=generation)return;
+                    }
+                    auto result=std::make_unique<AsyncTextResult>();
+                    result->generation=generation;
+                    result->loaded=LoadTextResourceForBase(
+                        loader,base,resource,result->content);
+                    result->completion=[this,script,generation]
+                        (bool loaded,std::wstring program){
+                        CompleteInitialScriptLoad(script,generation,loaded,
+                                                  std::move(program));
+                    };
+                    std::lock_guard<std::mutex> lock(lifetime->mutex);
+                    if(!lifetime->alive||!lifetime->hwnd||
+                       lifetime->resourceGeneration!=generation)return;
+                    if(PostMessageW(lifetime->hwnd,kAsyncTextReadyMessage,0,
+                                    reinterpret_cast<LPARAM>(result.get())))result.release();
+                });
+        }
+        DrainOrderedInitialScripts();
+    }
     bool LoadHtmlInternal(const std::wstring* html,std::unique_ptr<Document> parsed,
                           std::unique_ptr<StyleSheet> parsedStyles,
                           std::unordered_map<std::wstring,std::wstring> preparedText,
                           std::unordered_set<std::wstring> failedText,
                           const std::wstring& base,const std::wstring& location,
-                          bool preserveJavaScriptWindow=false){
-        HideTooltip();lastError.clear();childFrames.clear();childFrameSyncPending=false;basePath=base;currentLocation=location;++resourceGeneration;PublishAsyncGenerations();rasterImageCache.clear();pendingRasterImages.clear();ClearPendingImageLoads();textInput.Cancel(nullptr);focused.reset();editingNode.reset();ClearEditingBoundary();textSelectionDragging=false;if(GetCapture()==hwnd)ReleaseCapture();StopCaretBlink();hovered.reset();hoverPath.clear();hasPointerPosition=false;pointerX=pointerY=0;scrollbarDragNode.reset();scrollbarDragOffset=0;scrollbarDragHorizontal=false;openSelectPopup.reset();selectPopupHotIndex=-1;selectPopupScrollOffset=0;selectPopupShowAll=false;selectPopupScrollDragging=false;selectPopupScrollDragOffset=0;selectionAnchor=caretPosition=0;textEditDirty=false;liveRegions.clear();liveRegionText.clear();KillTimer(hwnd,kCssTransitionTimer);KillTimer(hwnd,kImageAnimationTimer);cssTransitionTimerActive=false;imageAnimationTimerActive=false;layout.ClearTransitions();if(!preserveJavaScriptWindow)javascript.Clear();javascript.SetDocumentReadyState(L"loading");UpdateJavaScriptViewport();if(parsed)document.AdoptParsed(*parsed);else if(!html||!document.Parse(*html,&lastError)){if(loadHandler)loadHandler(false,lastError);return false;}
+                          bool preserveJavaScriptWindow=false,
+                          bool deferInitialScripts=false){
+        HideTooltip();lastError.clear();childFrames.clear();childFrameSyncPending=false;basePath=base;currentLocation=location;++resourceGeneration;ResetInitialDocumentLoad();PublishAsyncGenerations();rasterImageCache.clear();pendingRasterImages.clear();ClearPendingImageLoads();textInput.Cancel(nullptr);focused.reset();editingNode.reset();ClearEditingBoundary();textSelectionDragging=false;if(GetCapture()==hwnd)ReleaseCapture();StopCaretBlink();hovered.reset();hoverPath.clear();hasPointerPosition=false;pointerX=pointerY=0;scrollbarDragNode.reset();scrollbarDragOffset=0;scrollbarDragHorizontal=false;openSelectPopup.reset();selectPopupHotIndex=-1;selectPopupScrollOffset=0;selectPopupShowAll=false;selectPopupScrollDragging=false;selectPopupScrollDragOffset=0;selectionAnchor=caretPosition=0;textEditDirty=false;liveRegions.clear();liveRegionText.clear();KillTimer(hwnd,kCssTransitionTimer);KillTimer(hwnd,kImageAnimationTimer);cssTransitionTimerActive=false;imageAnimationTimerActive=false;layout.ClearTransitions();if(!preserveJavaScriptWindow)javascript.Clear();javascript.SetDocumentReadyState(L"loading");UpdateJavaScriptViewport();if(parsed)document.AdoptParsed(*parsed);else if(!html||!document.Parse(*html,&lastError)){if(loadHandler)loadHandler(false,lastError);return false;}
         const bool externalPage=base.find(L"://")!=std::wstring::npos;
         const auto loadText=[&](const std::wstring& reference,std::wstring& content){
             const auto key=ResolveResourceReference(reference);
@@ -3383,6 +3552,21 @@ struct View::Impl {
         for(const auto& image:document.QuerySelectorAll(L"img"))
             initialImages.push_back({image,image->imageSource});
         javascript.SetLocation(location);
+        if(deferInitialScripts){
+            initialImageEvents=std::move(initialImages);
+            layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);
+            JavaScriptRuntime::Mutation initialMutation;
+            initialMutation.kind=JavaScriptRuntime::MutationKind::Tree;
+            initialMutation.targets.push_back(document.Root());
+            NotifyAccessibilityMutation(initialMutation,true);
+            // Publish a complete DOM/CSS frame before any initial page script
+            // can monopolize the UI thread. Script execution begins only after
+            // the render target has had this explicit first-paint checkpoint.
+            RedrawWindow(hwnd,nullptr,nullptr,
+                         RDW_INVALIDATE|RDW_UPDATENOW|RDW_ALLCHILDREN);
+            BeginInitialDocumentScripts(preparedText,failedText);
+            return true;
+        }
         // Each classic script is its own JavaScript Script Record. A load or
         // syntax/runtime error in one script must not prevent later scripts
         // from running, and function declarations are hoisted only within the
@@ -3435,16 +3619,16 @@ struct View::Impl {
     bool LoadHtmlAsync(const std::wstring& html,const std::wstring& base,
                        const std::wstring& location){
         const auto generation=++navigationGeneration;
-        ++resourceGeneration;pendingRasterImages.clear();ClearPendingImageLoads();
+        ++resourceGeneration;ResetInitialDocumentLoad();
+        pendingRasterImages.clear();ClearPendingImageLoads();
         PublishAsyncGenerations();
         const auto lifetime=asyncLifetime;
         const auto loader=resourceLoader;
         const bool loadStylesInWorker=parallelResourceLoading;
-        const bool executePageScripts=pageScriptsEnabled;
         const bool externalPage=base.find(L"://")!=std::wstring::npos;
         ImageWorkers().Submit(BackgroundWorkQueue::Priority::Critical,
             [html,base,location,generation,lifetime,loader,
-             loadStylesInWorker,executePageScripts,externalPage]{
+             loadStylesInWorker,externalPage]{
             {
                 std::lock_guard<std::mutex> lock(lifetime->mutex);
                 if(!lifetime->alive||!lifetime->hwnd||
@@ -3482,13 +3666,6 @@ struct View::Impl {
                         else{result->styles->Parse(L"",nullptr);result->error.clear();}
                     }
                 }
-                if(result->document){
-                    if(executePageScripts)for(const auto& script:
-                        result->document->QuerySelectorAll(L"script[src]")){
-                        if(!IsClassicJavaScriptType(script->Attribute(L"type")))continue;
-                        std::wstring ignored;loadPrepared(script->Attribute(L"src"),ignored);
-                    }
-                }
             }
             std::lock_guard<std::mutex> lock(lifetime->mutex);
             if(!lifetime->alive||!lifetime->hwnd||
@@ -3500,7 +3677,8 @@ struct View::Impl {
     }
     void CancelPendingLoads(){
         ++navigationGeneration;++resourceGeneration;
-        pendingRasterImages.clear();ClearPendingImageLoads();PublishAsyncGenerations();
+        ResetInitialDocumentLoad();pendingRasterImages.clear();ClearPendingImageLoads();
+        PublishAsyncGenerations();
     }
     void CompleteAsyncDocument(std::unique_ptr<AsyncDocumentResult> result){
         if(!result||result->generation!=navigationGeneration)return;
@@ -3512,7 +3690,7 @@ struct View::Impl {
         LoadHtmlInternal(nullptr,std::move(result->document),std::move(result->styles),
                          std::move(result->textResources),
                          std::move(result->failedTextResources),
-                         result->base,result->location);
+                         result->base,result->location,false,true);
     }
 };
 

@@ -4218,6 +4218,7 @@ int wmain(int argc,wchar_t** argv) {
             std::atomic<DWORD> asyncResourceThread{0};
             std::atomic<DWORD> asyncFetchThread{0};
             std::atomic<DWORD> asyncScriptThread{0};
+            std::atomic<DWORD> initialScriptThread{0};
             bool asyncCompleted=false,asyncSucceeded=false;DWORD asyncCallbackThread=0;
             int asyncCompletionCount=0;
             inputView->SetParallelResourceLoading(true);
@@ -4233,6 +4234,18 @@ int wmain(int argc,wchar_t** argv) {
                 if(path==L"https://async.test/dynamic.js"){
                     asyncScriptThread.store(GetCurrentThreadId(),std::memory_order_relaxed);
                     Sleep(40);source=L"window.dynamicWorkerValue='worker-script';";return true;
+                }
+                if(path==L"https://async.test/ordered-slow.js"){
+                    initialScriptThread.store(GetCurrentThreadId(),std::memory_order_relaxed);
+                    Sleep(120);source=L"initialOrder.push('slow');";return true;
+                }
+                if(path==L"https://async.test/async-fast.js"){
+                    initialScriptThread.store(GetCurrentThreadId(),std::memory_order_relaxed);
+                    Sleep(5);source=L"initialOrder.push('async');";return true;
+                }
+                if(path==L"https://async.test/defer-fast.js"){
+                    initialScriptThread.store(GetCurrentThreadId(),std::memory_order_relaxed);
+                    Sleep(10);source=L"initialOrder.push('defer');";return true;
                 }
                 return false;
             });
@@ -4302,6 +4315,54 @@ int wmain(int argc,wchar_t** argv) {
                   asyncScriptThread.load(std::memory_order_relaxed)!=0&&
                   asyncScriptThread.load(std::memory_order_relaxed)!=asyncUiThread,
                   L"DOM-inserted external scripts load on a worker and execute on the UI thread");
+            asyncCompleted=false;asyncSucceeded=false;
+            std::vector<std::wstring> initialScriptMessages;
+            inputView->SetMessageHandler([&](const std::wstring& value){
+                initialScriptMessages.push_back(value);
+            });
+            Check(inputView->NavigateToStringAsync(
+                LR"HTML(<title>progressive-script-page</title>
+                <style>html,body{margin:0;background:#123456}</style>
+                <script>
+                var initialOrder=['inline'];
+                document.addEventListener('DOMContentLoaded',()=>window.chrome.webview.postMessage('D:'+initialOrder.join(',')));
+                window.addEventListener('load',()=>window.chrome.webview.postMessage('L:'+initialOrder.join(',')));
+                </script>
+                <script src="ordered-slow.js"></script>
+                <script async src="async-fast.js"></script>
+                <script defer src="defer-fast.js"></script>
+                <script>initialOrder.push('tail');</script>)HTML",
+                L"https://async.test/progressive.html"),
+                L"progressive initial-script navigation is accepted");
+            const auto adoptionDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+            while(inputView->DocumentTitle()!=L"progressive-script-page"&&
+                  std::chrono::steady_clock::now()<adoptionDeadline){
+                MSG adoptionMessage{};
+                if(PeekMessageW(&adoptionMessage,nullptr,0,0,PM_REMOVE)){
+                    TranslateMessage(&adoptionMessage);DispatchMessageW(&adoptionMessage);
+                }else Sleep(1);
+            }
+            Check(inputView->DocumentTitle()==L"progressive-script-page"&&!asyncCompleted,
+                  L"DOM and CSS publish before a slow initial external script completes");
+            const auto initialScriptDeadline=std::chrono::steady_clock::now()+
+                std::chrono::seconds(5);
+            while(!asyncCompleted&&std::chrono::steady_clock::now()<initialScriptDeadline){
+                MSG initialMessage{};
+                if(PeekMessageW(&initialMessage,nullptr,0,0,PM_REMOVE)){
+                    TranslateMessage(&initialMessage);DispatchMessageW(&initialMessage);
+                }else Sleep(1);
+            }
+            std::wstring initialOrder,initialOrderError;
+            Check(inputView->ExecuteScript(L"return initialOrder.join(',');",
+                                           &initialOrder,&initialOrderError)&&
+                  initialOrder==L"inline,async,slow,tail,defer",initialOrderError.c_str());
+            Check(asyncCompleted&&asyncSucceeded&&
+                  initialScriptThread.load(std::memory_order_relaxed)!=0&&
+                  initialScriptThread.load(std::memory_order_relaxed)!=asyncUiThread&&
+                  initialScriptMessages.size()==2&&
+                  initialScriptMessages[0]==L"D:inline,async,slow,tail,defer"&&
+                  initialScriptMessages[1]==L"L:inline,async,slow,tail,defer",
+                  L"initial async scripts run on completion while ordered and defer scripts preserve DOM order");
             inputView->SetLoadHandler({});inputView->SetResourceLoader({});
             inputView->SetParallelResourceLoading(false);
             std::wstring inputMessage;inputView->SetMessageHandler([&](const std::wstring& value){inputMessage=value;});
