@@ -1622,8 +1622,7 @@ struct View::Impl {
         if(framesMayHaveChanged)ScheduleChildFrameSync();
         bool imageChanged=false;
         if(mutation.kind==JavaScriptRuntime::MutationKind::Tree||
-           mutation.kind==JavaScriptRuntime::MutationKind::Layout||
-           mutation.kind==JavaScriptRuntime::MutationKind::Style){
+           mutation.kind==JavaScriptRuntime::MutationKind::Layout){
             imageChanged=LoadImages(true);
             // Image() and document.createElement('img') may begin fetching
             // before they are connected to the document tree.
@@ -1631,10 +1630,12 @@ struct View::Impl {
                 imageChanged=LoadImageNode(target,true)||imageChanged;
         }
         if(imageChanged){layoutDirty=true;viewportOnlyDirty=false;}
+        const bool declarationOnly=mutation.kind==JavaScriptRuntime::MutationKind::Style&&
+            !mutation.selectorMatchingChanged&&!styles.AttributeAffectsStyle(L"style");
         LayoutRect dirtyBounds{};bool hasDirtyBounds=false,canTarget=!layoutDirty&&
             !mutation.targets.empty()&&(mutation.kind==JavaScriptRuntime::MutationKind::Paint||
                                         mutation.kind==JavaScriptRuntime::MutationKind::Style);
-        if(canTarget&&mutation.kind==JavaScriptRuntime::MutationKind::Style&&
+        if(canTarget&&mutation.kind==JavaScriptRuntime::MutationKind::Style&&!declarationOnly&&
            (styles.HasPseudoRules(L"before")||styles.HasPseudoRules(L"after")||
             styles.MutationRequiresBroadInvalidation()))canTarget=false;
         if(canTarget)for(const auto& target:mutation.targets){
@@ -1654,14 +1655,21 @@ struct View::Impl {
             // A selector change can add or remove generated boxes. Restyling
             // updates existing boxes, so generated-content styles retain the
             // conservative tree-rebuild path.
-            if(styles.HasPseudoRules(L"before")||styles.HasPseudoRules(L"after")){
+            if(!declarationOnly&&
+               (styles.HasPseudoRules(L"before")||styles.HasPseudoRules(L"after"))){
                 layoutChanged=true;
-            }else if(styles.MutationRequiresBroadInvalidation()||mutation.targets.empty()){
+            }else if((!declarationOnly&&styles.MutationRequiresBroadInvalidation())||
+                     mutation.targets.empty()){
                 const auto* root=layout.Root();
                 layoutChanged=!root||!root->node||layout.Restyle(root->node);
             }else{
-                for(const auto& target:mutation.targets)
-                    layoutChanged=layout.Restyle(target)||layoutChanged;
+                bool geometryChanged=false;
+                for(const auto& target:mutation.targets){
+                    bool targetGeometryChanged=false;
+                    layoutChanged=layout.Restyle(target,&targetGeometryChanged)||layoutChanged;
+                    geometryChanged=geometryChanged||targetGeometryChanged;
+                }
+                if(geometryChanged)UpdateFrameBounds();
             }
             layoutDirty=layoutChanged;
             if(layoutDirty)viewportOnlyDirty=false;
@@ -3249,13 +3257,30 @@ struct View::Impl {
             if(layoutDirty)Rebuild();POINT point{GET_X_LPARAM(lParam),GET_Y_LPARAM(lParam)};ScreenToClient(hwnd,&point);
             const float x=PixelToDip(static_cast<float>(point.x)),y=PixelToDip(static_cast<float>(point.y));
             if(openSelectPopup){SelectPopupGeometry popup;if(GetSelectPopupGeometry(openSelectPopup,popup)&&popup.bounds.Contains(x,y)){ScrollSelectPopup(-static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam))/WHEEL_DELTA*popup.rowHeight*3.0f);return 0;}CloseSelectPopup();}
-            std::shared_ptr<Node> scrolled;if(layout.ScrollAt(x,y,static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)),&scrolled)){javascript.DispatchNodeEvent(scrolled,L"scroll");if(accessibility)accessibility->Invalidate();textInput.UpdateCandidateWindow(hwnd);InvalidateScrollViewport(scrolled);}return 0;
+            std::shared_ptr<Node> scrolled;
+            if(layout.ScrollAt(x,y,static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)),&scrolled)){
+                if(accessibility)accessibility->Invalidate();
+                textInput.UpdateCandidateWindow(hwnd);InvalidateScrollViewport(scrolled);
+                // Present the native scroll offset before running author scroll
+                // callbacks. A long callback may delay its own style changes,
+                // but it must not hold the already-scrolled document frame.
+                UpdateWindow(hwnd);
+                javascript.DispatchNodeEvent(scrolled,L"scroll");
+            }
+            return 0;
         }
         case WM_MOUSEHWHEEL:{
             HideTooltip();
             if(layoutDirty)Rebuild();POINT point{GET_X_LPARAM(lParam),GET_Y_LPARAM(lParam)};ScreenToClient(hwnd,&point);
             const float x=PixelToDip(static_cast<float>(point.x)),y=PixelToDip(static_cast<float>(point.y));
-            std::shared_ptr<Node> scrolled;if(layout.ScrollAt(x,y,-static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)),&scrolled,true)){javascript.DispatchNodeEvent(scrolled,L"scroll");if(accessibility)accessibility->Invalidate();textInput.UpdateCandidateWindow(hwnd);InvalidateScrollViewport(scrolled);}return 0;
+            std::shared_ptr<Node> scrolled;
+            if(layout.ScrollAt(x,y,-static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)),&scrolled,true)){
+                if(accessibility)accessibility->Invalidate();
+                textInput.UpdateCandidateWindow(hwnd);InvalidateScrollViewport(scrolled);
+                UpdateWindow(hwnd);
+                javascript.DispatchNodeEvent(scrolled,L"scroll");
+            }
+            return 0;
         }
         case WM_MOUSEMOVE:{
             if(!trackingMouseLeave){TRACKMOUSEEVENT tracking{sizeof(TRACKMOUSEEVENT),TME_LEAVE,hwnd,0};trackingMouseLeave=TrackMouseEvent(&tracking)!=FALSE;}

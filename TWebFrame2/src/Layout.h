@@ -113,7 +113,7 @@ public:
     bool DragScrollbar(const std::shared_ptr<Node>& node, float x, float y,
                        float dragOffset, bool horizontal);
     bool DragScrollbar(const std::shared_ptr<Node>& node, float y, float dragOffset);
-    bool Restyle(const std::shared_ptr<Node>& node);
+    bool Restyle(const std::shared_ptr<Node>& node, bool* geometryChanged = nullptr);
     std::shared_ptr<Node> HitTest(float x, float y) const;
     bool HitTestText(const std::shared_ptr<Node>& scope, float x, float y,
                      std::shared_ptr<Node>& textNode, size_t& textOffset);
@@ -171,7 +171,9 @@ private:
                            std::shared_ptr<Node>& dragNode, float& dragOffset,
                            bool& horizontal);
     void DumpBox(const LayoutBox& box, std::wstring& output, bool& first) const;
-    bool RestyleBox(LayoutBox& box, const ComputedStyle* parentStyle);
+    bool RestyleBox(LayoutBox& box, const ComputedStyle* parentStyle,
+                    LayoutBox* localizedRoot = nullptr,
+                    bool* fixedOffsetOnly = nullptr);
     void ApplyTransitions(LayoutBox& box);
     void RefreshTransitionFrame(LayoutBox& box);
     void InvalidateMeasurements(LayoutBox& box);

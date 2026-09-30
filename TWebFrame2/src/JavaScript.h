@@ -23,6 +23,10 @@ public:
         MutationKind kind = MutationKind::Paint;
         std::vector<std::shared_ptr<Node>> targets;
         bool liveRegionMembershipChanged = false;
+        // Inline declaration updates normally change computed values without
+        // changing which selectors match. Keep that distinction so the view
+        // does not conservatively invalidate unrelated sibling subtrees.
+        bool selectorMatchingChanged = false;
     };
     using MessageSink = std::function<void(const std::wstring&)>;
     using MutationSink = std::function<void(const Mutation&)>;

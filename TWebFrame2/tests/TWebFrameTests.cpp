@@ -132,7 +132,8 @@ int RunFrameBenchmark() {
     UpdateWindow(view->Window());
     const double initialLoad=std::chrono::duration<double,std::milli>(Clock::now()-loadStart).count();
 
-    FrameStats hover,style,scroll,scrollNoopClass,scrollHeavySibling;
+    FrameStats hover,style,scroll,scrollNoopClass,scrollHeavySibling,scrollNoopStyle,
+        scrollChangingStyle;
     const bool hoverOk=MeasureFrames(view->Window(),sampleCount,[&](size_t index){
         const int y=11+static_cast<int>(index%28)*22;
         SendMessageW(view->Window(),WM_MOUSEMOVE,0,MAKELPARAM(80,y));return true;
@@ -179,6 +180,40 @@ int RunFrameBenchmark() {
             MAKELPARAM(wheelPoint.x,wheelPoint.y));return true;
     },scrollHeavySibling);
 
+    // Large production stylesheets commonly contain a sibling combinator or
+    // :has(), which deliberately puts real style changes on the conservative
+    // whole-document restyle path. Reassigning an already-identical inline
+    // declaration from a scroll listener is not a style change and must not
+    // make that cost proportional to a dynamically appended list.
+    std::wstring commentLikeHtml=LR"HTML(<style>
+        *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;font:12px Segoe UI}
+        #viewport{height:680px;overflow:auto}.comment{min-height:24px;border-bottom:1px solid #ddd}
+        .comment + .comment{color:#222}#navigator{position:fixed;top:8px;right:8px}
+        </style><div id='viewport'>)HTML";
+    for(size_t index=0;index<3000;++index)
+        commentLikeHtml+=L"<div class='comment'><span>Comment "+std::to_wstring(index)+
+            L"</span><span> dynamically inserted reply text</span></div>";
+    commentLikeHtml+=L"</div><div id='navigator'>navigation</div><script>"
+        L"const viewport=document.getElementById('viewport'),navigator=document.getElementById('navigator');"
+        L"viewport.addEventListener('scroll',()=>{navigator.style.position='fixed';navigator.style.top='8px';});"
+        L"</script>";
+    const bool commentLikeOk=view->NavigateToString(commentLikeHtml);
+    UpdateWindow(view->Window());
+    const bool scrollNoopStyleOk=commentLikeOk&&MeasureFrames(view->Window(),sampleCount,[&](size_t index){
+        const short delta=index%2?WHEEL_DELTA:-WHEEL_DELTA;
+        SendMessageW(view->Window(),WM_MOUSEWHEEL,MAKEWPARAM(0,delta),
+            MAKELPARAM(wheelPoint.x,wheelPoint.y));return true;
+    },scrollNoopStyle);
+    const bool changingStyleListenerOk=view->ExecuteScript(
+        L"viewport.addEventListener('scroll',()=>{navigator.style.top=(8+viewport.scrollTop)+'px';});",
+        nullptr,&error);
+    const bool scrollChangingStyleOk=changingStyleListenerOk&&
+        MeasureFrames(view->Window(),sampleCount,[&](size_t index){
+            const short delta=index%2?WHEEL_DELTA:-WHEEL_DELTA;
+            SendMessageW(view->Window(),WM_MOUSEWHEEL,MAKEWPARAM(0,delta),
+                MAKELPARAM(wheelPoint.x,wheelPoint.y));return true;
+        },scrollChangingStyle);
+
     std::wcout<<std::fixed<<std::setprecision(3)
         <<L"TWebFrame 10k-node frame benchmark (milliseconds)\n"
         <<L"initial_load_and_paint="<<initialLoad<<L"\n"
@@ -190,9 +225,12 @@ int RunFrameBenchmark() {
     print(L"hover",hover);print(L"style_toggle",style);print(L"wheel_scroll",scroll);
     print(L"wheel_scroll_noop_class",scrollNoopClass);
     print(L"wheel_scroll_heavy_sibling",scrollHeavySibling);
+    print(L"wheel_scroll_noop_style_large_dom",scrollNoopStyle);
+    print(L"wheel_scroll_changing_inline_style_large_dom",scrollChangingStyle);
     view.reset();DestroyWindow(host);
     if(!hoverOk||!styleOk||!scrollOk||!scrollListenerOk||!scrollNoopClassOk||
-       !splitPaneOk||!scrollHeavySiblingOk){
+       !splitPaneOk||!scrollHeavySiblingOk||!commentLikeOk||!scrollNoopStyleOk||
+       !changingStyleListenerOk||!scrollChangingStyleOk){
         std::wcerr<<L"benchmark action failed: "<<error<<L'\n';return 1;
     }
     return 0;
@@ -458,6 +496,8 @@ int RunJQueryCompatibility(const std::wstring& sourcePath) {
     if(!runtime.Execute(LR"JS(
         function check(value,label){if(!value)throw new Error(label);}
         check(jQuery.fn.jquery==='1.11.2','version');
+        check(jQuery.find.support.getElementsByClassName&&jQuery.find.support.qsa&&
+              jQuery.find.support.matchesSelector,'native selector feature detection');
         check(jQuery('.item').length===2,'class selector');
         const target=jQuery('#fixture');
         check(target.find('li').length===2&&target.find('li').first().text()==='one',
@@ -699,8 +739,9 @@ int wmain(int argc,wchar_t** argv) {
           L"scroll mutations remain paint-only and retain their target");
     mutationNotifications=0;
     Check(mutationJs.Execute(L"const node=document.getElementById('scroll');node.scrollTop=8;node.style.color='red';",nullptr,&error)&&
-          mutationNotifications==1&&lastMutation.kind==JavaScriptRuntime::MutationKind::Style,
-          L"batched mutations retain the strongest invalidation level");
+          mutationNotifications==1&&lastMutation.kind==JavaScriptRuntime::MutationKind::Style&&
+          !lastMutation.selectorMatchingChanged,
+          L"batched inline declarations retain the strongest invalidation level without reporting a selector change");
     std::wstring cssomResult;
     Check(mutationJs.Execute(
               L"const style=document.getElementById('scroll').style;"
@@ -714,6 +755,14 @@ int wmain(int argc,wchar_t** argv) {
               L"const style=document.getElementById('scroll').style;style.width='';style.cssText='height: 45px; color: blue !important';return style.length+'|'+style.height+'|'+style.getPropertyPriority('color');",
               &cssomResult,&error)&&cssomResult==L"2|45px|important",
           L"CSSStyleDeclaration empty assignment removes declarations and cssText reparses priorities");
+    mutationNotifications=0;
+    Check(mutationJs.Execute(
+              L"const style=document.getElementById('scroll').style;"
+              L"style.height='45px';"
+              L"style.setProperty('height','45px');"
+              L"style.setProperty('color','blue','important');",
+              nullptr,&error)&&mutationNotifications==0,
+          L"reassigning identical CSSOM declarations does not invalidate a large document");
     mutationNotifications=0;
     Check(mutationJs.Execute(L"document.getElementById('scroll').setAttribute('width','240');",nullptr,&error)&&
           mutationNotifications==1&&lastMutation.kind==JavaScriptRuntime::MutationKind::Layout,
@@ -730,7 +779,8 @@ int wmain(int argc,wchar_t** argv) {
     Check(mutationJs.Execute(
               L"const node=document.getElementById('scroll');node.classList.add('hidden');",
               nullptr,&error)&&mutationNotifications==1&&
-          lastMutation.kind==JavaScriptRuntime::MutationKind::Style,
+          lastMutation.kind==JavaScriptRuntime::MutationKind::Style&&
+          lastMutation.selectorMatchingChanged,
           L"classList reports an actual class change once");
     mutationNotifications=0;
     Check(mutationJs.Execute(
@@ -1423,6 +1473,14 @@ int wmain(int argc,wchar_t** argv) {
         L"return typeof Function+'|'+applied+'|'+called;",
         &semanticsResult,&error)&&semanticsResult==L"function|9|11",
         L"Function prototype call and apply invoke arbitrary callable receivers");
+    Check(semanticsJs.Execute(
+        L"var method=document.getElementsByClassName;"
+        L"function userFunction(){};"
+        L"return /\\[native code\\]/.test(String(method))+'|'"
+        L"+/\\[native code\\]/.test(Function.prototype.toString.call(method))+'|'"
+        L"+/\\[native code\\]/.test(userFunction.toString());",
+        &semanticsResult,&error)&&semanticsResult==L"true|true|false",
+        L"native DOM functions expose the standard source form used by feature detection");
     Check(semanticsJs.Execute(
         L"return typeof String.prototype+'|'+typeof RegExp.prototype+'|'"
         L"+RegExp.prototype.hasOwnProperty('sticky');",
@@ -3668,6 +3726,16 @@ int wmain(int argc,wchar_t** argv) {
     const auto* fixedInset=FindLayout(fixedInsetLayout.Root(),L"fixed-inset");
     Check(fixedInset&&std::lround(fixedInset->rect.x)==232&&std::lround(fixedInset->rect.y)==162,
           L"fixed descendants of grid containers honor right and bottom insets");
+    const auto fixedInsetNode=fixedInsetDoc.GetElementById(L"fixed-inset");
+    const auto* fixedInsetRoot=fixedInsetLayout.Root();bool fixedInsetGeometryChanged=false;
+    if(fixedInsetNode)fixedInsetNode->inlineStyle[L"bottom"]=L"28px";
+    const bool fixedInsetRequiresLayout=
+        fixedInsetLayout.Restyle(fixedInsetNode,&fixedInsetGeometryChanged);
+    fixedInset=FindLayout(fixedInsetLayout.Root(),L"fixed-inset");
+    Check(!fixedInsetRequiresLayout&&fixedInsetGeometryChanged&&
+          fixedInsetLayout.Root()==fixedInsetRoot&&fixedInset&&
+          std::lround(fixedInset->rect.x)==232&&std::lround(fixedInset->rect.y)==152,
+          L"changing a fixed box inset translates only that laid-out subtree");
 
     Document transitionDoc;
     Check(transitionDoc.Parse(

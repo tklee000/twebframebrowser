@@ -3170,6 +3170,23 @@ bool HasLayoutStyleChange(const ComputedStyle& before,const ComputedStyle& after
     return false;
 }
 
+bool HasOnlyFixedOffsetLayoutStyleChange(const ComputedStyle& before,
+                                         const ComputedStyle& after){
+    bool changed=false;
+    const auto inspect=[&](const auto& values,const auto& other){
+        for(const auto& item:*values){
+            const auto found=other->find(item.first);
+            if(found!=other->end()&&found->second==item.second)continue;
+            if(IsPaintOnlyProperty(item.first))continue;
+            if(item.first!=L"top"&&item.first!=L"right"&&
+               item.first!=L"bottom"&&item.first!=L"left")return false;
+            changed=true;
+        }
+        return true;
+    };
+    return inspect(before.values,after.values)&&inspect(after.values,before.values)&&changed;
+}
+
 D2D1_COLOR_F D2DColor(unsigned int color) {
     return D2D1::ColorF(((color>>16)&255)/255.0f,((color>>8)&255)/255.0f,(color&255)/255.0f,((color>>24)&255)/255.0f);
 }
@@ -6397,8 +6414,51 @@ bool LayoutEngine::VisualBounds(const std::shared_ptr<Node>& node,LayoutRect& bo
     };
     visit(*found->second);return safe&&initialized;
 }
-bool LayoutEngine::Restyle(const std::shared_ptr<Node>& node){if(!root_||!node)return false;const auto found=boxIndex_.find(node.get());if(found==boxIndex_.end())return true;auto* box=found->second;const ComputedStyle* parentStyle=nullptr;if(auto parent=node->parent.lock()){const auto parentBox=boxIndex_.find(parent.get());if(parentBox!=boxIndex_.end())parentStyle=&parentBox->second->style;}return RestyleBox(*box,parentStyle);}
-bool LayoutEngine::RestyleBox(LayoutBox& box,const ComputedStyle* parentStyle){auto updated=box.generatedFrom?styleSheet_.Compute(box.generatedFrom,parentStyle,box.pseudo):styleSheet_.Compute(box.node,parentStyle);updated.deviceScale=deviceScale_;bool layoutChanged=HasLayoutStyleChange(box.style,updated);box.style=updated;for(auto& child:box.children)layoutChanged=RestyleBox(*child,&box.style)||layoutChanged;return layoutChanged;}
+bool LayoutEngine::Restyle(const std::shared_ptr<Node>& node,bool* geometryChanged){
+    if(geometryChanged)*geometryChanged=false;
+    if(!root_||!node)return false;
+    const auto found=boxIndex_.find(node.get());if(found==boxIndex_.end())return true;
+    auto* box=found->second;const ComputedStyle* parentStyle=nullptr;
+    if(auto parent=node->parent.lock()){
+        const auto parentBox=boxIndex_.find(parent.get());
+        if(parentBox!=boxIndex_.end())parentStyle=&parentBox->second->style;
+    }
+    const bool wasFixed=box->style.Is(L"position",L"fixed");
+    bool fixedOffsetOnly=wasFixed;
+    const bool layoutChanged=RestyleBox(*box,parentStyle,box,&fixedOffsetOnly);
+    if(!layoutChanged)return false;
+    if(!fixedOffsetOnly||!box->style.Is(L"position",L"fixed"))return true;
+
+    // A fixed box is outside every ancestor's normal flow. Changing only its
+    // inset values cannot alter the layout of the document behind it, so move
+    // the already-laid-out subtree instead of rebuilding the entire page.
+    const auto positioned=PositionedRect(*box,{0,0,viewportWidth_,viewportHeight_},
+                                          viewportWidth_,viewportHeight_);
+    if(std::abs(positioned.width-box->rect.width)>=0.001f||
+       std::abs(positioned.height-box->rect.height)>=0.001f)return true;
+    const float dx=positioned.x-box->rect.x,dy=positioned.y-box->rect.y;
+    if(std::abs(dx)>=0.001f||std::abs(dy)>=0.001f){
+        TranslateBox(*box,dx,dy);
+        for(auto* ancestor=box->parent;ancestor;ancestor=ancestor->parent)
+            UpdateSubtreeBounds(*ancestor);
+        if(geometryChanged)*geometryChanged=true;
+    }
+    return false;
+}
+bool LayoutEngine::RestyleBox(LayoutBox& box,const ComputedStyle* parentStyle,
+                              LayoutBox* localizedRoot,bool* fixedOffsetOnly){
+    auto updated=box.generatedFrom?styleSheet_.Compute(box.generatedFrom,parentStyle,box.pseudo):
+        styleSheet_.Compute(box.node,parentStyle);
+    updated.deviceScale=deviceScale_;
+    const bool ownLayoutChanged=HasLayoutStyleChange(box.style,updated);
+    if(ownLayoutChanged&&fixedOffsetOnly&&
+       (&box!=localizedRoot||!HasOnlyFixedOffsetLayoutStyleChange(box.style,updated)))
+        *fixedOffsetOnly=false;
+    box.style=updated;bool layoutChanged=ownLayoutChanged;
+    for(auto& child:box.children)
+        layoutChanged=RestyleBox(*child,&box.style,localizedRoot,fixedOffsetOnly)||layoutChanged;
+    return layoutChanged;
+}
 bool LayoutEngine::SyncScroll(const std::shared_ptr<Node>& node){
     if(!root_||!node)return false;
     const auto found=boxIndex_.find(node.get());if(found==boxIndex_.end())return false;

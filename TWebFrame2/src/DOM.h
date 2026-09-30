@@ -90,6 +90,12 @@ public:
     std::shared_ptr<Node> Body() const;
     std::shared_ptr<Node> GetElementById(const std::wstring& id) const;
     std::vector<std::shared_ptr<Node>> GetElementsByName(const std::wstring& name) const;
+    std::vector<std::shared_ptr<Node>> GetElementsByTagName(
+        const std::wstring& tag, const std::shared_ptr<Node>& scope = {},
+        bool includeScope = true) const;
+    std::vector<std::shared_ptr<Node>> GetElementsByClassName(
+        const std::wstring& classNames, const std::shared_ptr<Node>& scope = {},
+        bool includeScope = true) const;
     std::shared_ptr<Node> QuerySelector(const std::wstring& selector,
                                         const std::shared_ptr<Node>& scope = {}) const;
     std::vector<std::shared_ptr<Node>> QuerySelectorAll(

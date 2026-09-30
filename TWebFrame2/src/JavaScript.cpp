@@ -2071,6 +2071,24 @@ void SyncInlineStyleAttribute(const std::shared_ptr<Node>& node){
     const auto text=SerializeInlineStyle(node);
     if(text.empty())node->attributes.erase(L"style");else node->attributes[L"style"]=text;
 }
+bool SetInlineStyleDeclaration(const std::shared_ptr<Node>& node,const std::wstring& name,
+                               const std::wstring& value,bool important){
+    if(!node||name.empty())return false;
+    const auto found=node->inlineStyle.find(name);
+    const bool hadValue=found!=node->inlineStyle.end();
+    const bool hadImportant=node->inlineStylePriority.count(name)!=0;
+    if(value.empty()){
+        if(!hadValue&&!hadImportant)return false;
+        node->inlineStyle.erase(name);node->inlineStylePriority.erase(name);
+    }else{
+        if(hadValue&&found->second==value&&hadImportant==important)return false;
+        node->inlineStyle[name]=value;
+        if(important)node->inlineStylePriority[name]=L"important";
+        else node->inlineStylePriority.erase(name);
+    }
+    SyncInlineStyleAttribute(node);
+    return true;
+}
 std::wstring DatasetAttributeName(const std::wstring& value){return L"data-"+CamelToKebab(value);}
 bool AttributeRequiresLayout(const std::wstring& name){
     return name==L"value"||name==L"placeholder"||name==L"type"||name==L"rows"||
@@ -2215,6 +2233,7 @@ struct RuntimeCore {
     JavaScriptRuntime::MutationKind mutationKind=JavaScriptRuntime::MutationKind::Paint;
     std::vector<std::shared_ptr<Node>> mutationTargets;
     bool liveRegionMembershipChanged=false;
+    bool selectorMatchingChanged=false;
     bool indexDirty=false;
     double viewportWidth=0;
     double viewportHeight=0;
@@ -2250,12 +2269,8 @@ struct RuntimeCore {
     ~RuntimeCore(){ReleaseManagedGraph();}
 
     std::shared_ptr<Reference> CreateReference(){
-        // References are short-lived evaluation results.  A persistent PMR
-        // pool retained every high-water chunk reached by a large or repeating
-        // script for the lifetime of the browsing context, so an otherwise
-        // idle page could grow without returning that storage.  The process
-        // heap already caches these uniform allocations and can trim them once
-        // the last reference value is released.
+        // References are short-lived evaluation results. The process heap can
+        // return their storage after the final value releases its ownership.
         return std::make_shared<Reference>();
     }
 
@@ -2600,7 +2615,7 @@ struct RuntimeCore {
         return false;
     }
     std::wstring String(const Value& value){
-        const auto v=Deref(value);switch(v.type){case Value::Type::Undefined:return L"undefined";case Value::Type::Null:return L"null";case Value::Type::Boolean:return v.boolean?L"true":L"false";case Value::Type::Number:return NumberString(v.number);case Value::Type::String:return v.string;case Value::Type::Function:case Value::Type::Native:return L"function";case Value::Type::Object:if(v.object&&v.object->kind==ObjectKind::Array){std::wstring result;for(size_t index=0;index<v.object->items.size();++index){if(index)result+=L',';const auto item=Deref(v.object->items[index]);if(item.type!=Value::Type::Undefined&&item.type!=Value::Type::Null)result+=String(item);}return result;}if(v.object&&v.object->kind==ObjectKind::Promise)return L"[object Promise]";if(v.object&&v.object->kind==ObjectKind::Url){const auto href=v.object->props.find(L"href");return href==v.object->props.end()?L"":String(href->second);}if(v.object&&v.object->kind==ObjectKind::Error){const auto name=v.object->props.find(L"name"),message=v.object->props.find(L"message");const auto n=name==v.object->props.end()?L"Error":String(name->second);const auto m=message==v.object->props.end()?L"":String(message->second);return m.empty()?n:n+L": "+m;}return L"[object Object]";default:return L"undefined";}
+        const auto v=Deref(value);switch(v.type){case Value::Type::Undefined:return L"undefined";case Value::Type::Null:return L"null";case Value::Type::Boolean:return v.boolean?L"true":L"false";case Value::Type::Number:return NumberString(v.number);case Value::Type::String:return v.string;case Value::Type::Function:{const auto name=v.function&&v.function->prototype?v.function->prototype->name:L"";return L"function "+name+L"() { }";}case Value::Type::Native:{std::wstring name;if(v.native){const auto found=v.native->props.find(L"name");if(found!=v.native->props.end()&&found->second.type==Value::Type::String)name=found->second.string;}return L"function "+name+L"() { [native code] }";}case Value::Type::Object:if(v.object&&v.object->kind==ObjectKind::Array){std::wstring result;for(size_t index=0;index<v.object->items.size();++index){if(index)result+=L',';const auto item=Deref(v.object->items[index]);if(item.type!=Value::Type::Undefined&&item.type!=Value::Type::Null)result+=String(item);}return result;}if(v.object&&v.object->kind==ObjectKind::Promise)return L"[object Promise]";if(v.object&&v.object->kind==ObjectKind::Url){const auto href=v.object->props.find(L"href");return href==v.object->props.end()?L"":String(href->second);}if(v.object&&v.object->kind==ObjectKind::Error){const auto name=v.object->props.find(L"name"),message=v.object->props.find(L"message");const auto n=name==v.object->props.end()?L"Error":String(name->second);const auto m=message==v.object->props.end()?L"":String(message->second);return m.empty()?n:n+L": "+m;}return L"[object Object]";default:return L"undefined";}
     }
     Value PrimitiveForAddition(const Value& input){
         const auto value=Deref(input);
@@ -3682,13 +3697,14 @@ struct RuntimeCore {
             mutation.kind=mutationKind;
             mutation.targets=std::move(mutationTargets);
             mutation.liveRegionMembershipChanged=liveRegionMembershipChanged;
+            mutation.selectorMatchingChanged=selectorMatchingChanged;
             mutationPending=false;mutationKind=JavaScriptRuntime::MutationKind::Paint;
-            liveRegionMembershipChanged=false;
+            liveRegionMembershipChanged=false;selectorMatchingChanged=false;
             mutationSink(mutation);
         }else{
             mutationPending=false;mutationTargets.clear();
             mutationKind=JavaScriptRuntime::MutationKind::Paint;
-            liveRegionMembershipChanged=false;
+            liveRegionMembershipChanged=false;selectorMatchingChanged=false;
         }
     }
     void EndMutationBatch(){if(mutationBatchDepth>0&&--mutationBatchDepth==0)FlushMutations();}
@@ -3756,7 +3772,8 @@ struct RuntimeCore {
     }
     void Mutated(const std::shared_ptr<Node>& target,JavaScriptRuntime::MutationKind kind,
                  bool requiresIndex=false,bool liveRegionMembership=false,
-                 const std::wstring& attributeName=L""){
+                 const std::wstring& attributeName=L"",
+                 bool mayChangeSelectorMatching=true){
         QueueMutationObservers(target,kind,attributeName);
         mutationPending=true;
         if(static_cast<int>(kind)>static_cast<int>(mutationKind))mutationKind=kind;
@@ -3764,6 +3781,8 @@ struct RuntimeCore {
             [&](const auto& candidate){return candidate==target;}))mutationTargets.push_back(target);
         indexDirty=indexDirty||requiresIndex;
         liveRegionMembershipChanged=liveRegionMembershipChanged||liveRegionMembership;
+        if(kind==JavaScriptRuntime::MutationKind::Style&&mayChangeSelectorMatching)
+            selectorMatchingChanged=true;
         if(mutationBatchDepth==0)FlushMutations();
     }
     unsigned ScheduleAnimationFrame(const Value& callback){
@@ -4002,16 +4021,8 @@ struct RuntimeCore {
             });
         if((base.type==Value::Type::Function||base.type==Value::Type::Native)&&
            key==L"toString")
-            return Native([base](RuntimeCore&,const Value&,const std::vector<Value>&){
-                std::wstring name;
-                if(base.type==Value::Type::Function&&base.function&&base.function->prototype)
-                    name=base.function->prototype->name;
-                else if(base.type==Value::Type::Native&&base.native){
-                    const auto found=base.native->props.find(L"name");
-                    if(found!=base.native->props.end()&&found->second.type==Value::Type::String)
-                        name=found->second.string;
-                }
-                return Value::String(L"function "+name+L"() { [native code] }");
+            return Native([base](RuntimeCore& r,const Value&,const std::vector<Value>&){
+                return Value::String(r.String(base));
             });
         if(base.type==Value::Type::Number&&key==L"toFixed")return Native([value=base.number](RuntimeCore& r,const Value&,const std::vector<Value>& a){
             const int digits=a.empty()?0:std::max(0,std::min(100,static_cast<int>(r.Number(a[0]))));
@@ -5056,20 +5067,14 @@ struct RuntimeCore {
             if(key==L"getElementById")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){r.EnsureIndex();return r.NodeValue(r.document.GetElementById(a.empty()?L"":r.String(a[0])));});
             if(key==L"getElementsByName")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){std::vector<Value> out;for(auto& n:r.document.GetElementsByName(a.empty()?L"":r.String(a[0])))out.push_back(r.NodeValue(n));return r.ArrayValue(out);});
             if(key==L"getElementsByTagName")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
-                const auto tag=ToLower(a.empty()?L"*":r.String(a[0]));std::vector<Value> out;
-                std::function<void(const std::shared_ptr<Node>&)> collect=[&](const std::shared_ptr<Node>& current){
-                    if(!current)return;if(current->type==NodeType::Element&&(tag==L"*"||current->tag==tag))out.push_back(r.NodeValue(current));
-                    for(const auto& child:current->children)collect(child);
-                };collect(r.document.Root());return r.ArrayValue(out);
+                r.EnsureIndex();std::vector<Value> out;
+                for(auto& n:r.document.GetElementsByTagName(a.empty()?L"*":r.String(a[0])))out.push_back(r.NodeValue(n));
+                return r.ArrayValue(out);
             });
             if(key==L"getElementsByClassName")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
-                std::vector<std::wstring> classes;std::wistringstream input(a.empty()?L"":r.String(a[0]));std::wstring token;
-                while(input>>token)classes.push_back(token);std::vector<Value> out;
-                std::function<void(const std::shared_ptr<Node>&)> collect=[&](const std::shared_ptr<Node>& current){
-                    if(!current)return;if(current->type==NodeType::Element&&!classes.empty()&&
-                        std::all_of(classes.begin(),classes.end(),[&](const auto& name){return current->HasClass(name);}))out.push_back(r.NodeValue(current));
-                    for(const auto& child:current->children)collect(child);
-                };collect(r.document.Root());return r.ArrayValue(out);
+                r.EnsureIndex();std::vector<Value> out;
+                for(auto& n:r.document.GetElementsByClassName(a.empty()?L"":r.String(a[0])))out.push_back(r.NodeValue(n));
+                return r.ArrayValue(out);
             });
             if(key==L"querySelector"||key==L"querySelectorAll")return Native([key](RuntimeCore& r,const Value&,const std::vector<Value>& a){r.EnsureIndex();auto selector=a.empty()?L"":r.String(a[0]);if(key==L"querySelector")return r.NodeValue(r.document.QuerySelector(selector));std::vector<Value> out;for(auto& n:r.document.QuerySelectorAll(selector))out.push_back(r.NodeValue(n));return r.ArrayValue(out);});
             if(key==L"createElement")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){return r.NodeValue(r.document.CreateElement(a.empty()?L"div":r.String(a[0])));});
@@ -5690,21 +5695,13 @@ struct RuntimeCore {
             if(key==L"removeEventListener")return Native([node](RuntimeCore& r,const Value&,const std::vector<Value>& a){auto found=r.listeners.find(node.get());if(found!=r.listeners.end()){if(found->second.node.lock()!=node){r.listeners.erase(node.get());return Value::Undefined();}r.RemoveEventListener(found->second.events,a);if(found->second.events.empty())r.listeners.erase(node.get());}return Value::Undefined();});
             if(key==L"querySelector"||key==L"querySelectorAll")return Native([node,key](RuntimeCore& r,const Value&,const std::vector<Value>& a){r.EnsureIndex();auto selector=a.empty()?L"":r.String(a[0]);if(key==L"querySelector")return r.NodeValue(r.document.QuerySelector(selector,node));std::vector<Value> out;for(auto& n:r.document.QuerySelectorAll(selector,node))out.push_back(r.NodeValue(n));return r.ArrayValue(out);});
             if(key==L"getElementsByTagName"||key==L"getElementsByClassName")return Native([node,key](RuntimeCore& r,const Value&,const std::vector<Value>& a){
-                const auto argument=a.empty()?L"":r.String(a[0]);const auto tag=ToLower(argument);
-                std::vector<std::wstring> classes;if(key==L"getElementsByClassName"){
-                    std::wistringstream input(argument);std::wstring token;while(input>>token)classes.push_back(token);
-                }
-                std::vector<Value> out;std::function<void(const std::shared_ptr<Node>&)> collect=[&](const std::shared_ptr<Node>& current){
-                    for(const auto& child:current->children){
-                        const bool matches=child->type==NodeType::Element&&
-                            (key==L"getElementsByTagName"?(tag==L"*"||child->tag==tag):
-                             (!classes.empty()&&std::all_of(
-                                 classes.begin(),classes.end(),
-                                 [&](const auto& name){return child->HasClass(name);}))
-                            );
-                        if(matches)out.push_back(r.NodeValue(child));collect(child);
-                    }
-                };collect(node);return r.ArrayValue(out);
+                r.EnsureIndex();const auto argument=a.empty()?L"":r.String(a[0]);
+                const auto nodes=key==L"getElementsByTagName"
+                    ?r.document.GetElementsByTagName(argument.empty()?L"*":argument,node,false)
+                    :r.document.GetElementsByClassName(argument,node,false);
+                std::vector<Value> out;out.reserve(nodes.size());
+                for(const auto& match:nodes)out.push_back(r.NodeValue(match));
+                return r.ArrayValue(out);
             });
             if(key==L"closest")return Native([node](RuntimeCore& r,const Value&,const std::vector<Value>& a){return r.NodeValue(node->Closest(a.empty()?L"":r.String(a[0])));});
             if(key==L"matches")return Native([node](RuntimeCore& r,const Value&,const std::vector<Value>& a){return Value::Bool(!a.empty()&&Document::MatchesSelector(node,r.String(a[0])));});
@@ -5816,9 +5813,9 @@ struct RuntimeCore {
                     const auto value=r.String(a[1]);
                     const auto priority=a.size()>2?ToLower(Trim(r.String(a[2]))):L"";
                     if(!name.empty()&&(priority.empty()||priority==L"important")){
-                        if(value.empty()){object->node->inlineStyle.erase(name);object->node->inlineStylePriority.erase(name);}
-                        else{object->node->inlineStyle[name]=value;if(priority==L"important")object->node->inlineStylePriority[name]=priority;else object->node->inlineStylePriority.erase(name);}
-                        SyncInlineStyleAttribute(object->node);r.Mutated(object->node,JavaScriptRuntime::MutationKind::Style);
+                        if(SetInlineStyleDeclaration(object->node,name,value,priority==L"important"))
+                            r.Mutated(object->node,JavaScriptRuntime::MutationKind::Style,
+                                      false,false,L"style",false);
                     }
                 }
                 return Value::Undefined();
@@ -5841,7 +5838,8 @@ struct RuntimeCore {
                 if(found==object->node->inlineStyle.end())return Value::String(L"");
                 const auto previous=found->second;object->node->inlineStyle.erase(name);
                 object->node->inlineStylePriority.erase(name);SyncInlineStyleAttribute(object->node);
-                r.Mutated(object->node,JavaScriptRuntime::MutationKind::Style);
+                r.Mutated(object->node,JavaScriptRuntime::MutationKind::Style,
+                          false,false,L"style",false);
                 return Value::String(previous);
             });
             if(!object->node)return Value::String(L"");const auto name=CamelToKebab(key);if(object->props.count(L"$computed"))return Value::String(stylePropertyProvider?stylePropertyProvider(object->node,name):computedFallback(name));const auto found=object->node->inlineStyle.find(name);return Value::String(found==object->node->inlineStyle.end()?L"":found->second);
@@ -6495,9 +6493,16 @@ struct RuntimeCore {
             return;
         }
         if(object->kind==ObjectKind::Style&&object->node){
-            if(key==L"cssText")object->node->SetAttribute(L"style",String(v));
-            else{const auto name=CamelToKebab(key),propertyValue=String(v);if(propertyValue.empty()){object->node->inlineStyle.erase(name);object->node->inlineStylePriority.erase(name);}else{object->node->inlineStyle[name]=propertyValue;object->node->inlineStylePriority.erase(name);}SyncInlineStyleAttribute(object->node);}
-            Mutated(object->node,JavaScriptRuntime::MutationKind::Style);return;
+            bool changed=false;
+            if(key==L"cssText"){
+                const auto text=String(v);
+                if(object->node->Attribute(L"style")!=text){
+                    object->node->SetAttribute(L"style",text);changed=true;
+                }
+            }else changed=SetInlineStyleDeclaration(object->node,CamelToKebab(key),String(v),false);
+            if(changed)Mutated(object->node,JavaScriptRuntime::MutationKind::Style,
+                               false,false,L"style",false);
+            return;
         }
         if(object->kind==ObjectKind::Dataset&&object->node){object->node->SetAttribute(DatasetAttributeName(key),String(v));Mutated(object->node,JavaScriptRuntime::MutationKind::Style);return;}
         if(object->kind==ObjectKind::CanvasContext2D&&object->node){
@@ -7284,6 +7289,14 @@ struct RuntimeCore {
             const auto receiver=a.empty()?Value::Undefined():r.Deref(a[0]);std::vector<Value> forwarded;
             if(a.size()>1)forwarded.assign(a.begin()+1,a.end());return r.Call(thisValue,receiver,forwarded);
         });
+        functionPrototype.object->props[L"toString"]=Native(
+            [](RuntimeCore& r,const Value& thisValue,const std::vector<Value>&){
+                const auto value=r.Deref(thisValue);
+                if(!r.IsCallable(value))
+                    throw JavaScriptException{r.ErrorValue(
+                        L"TypeError",L"Function.prototype.toString called on incompatible receiver")};
+                return Value::String(r.String(value));
+            });
         functionConstructor.native->props[L"prototype"]=functionPrototype;
         global->values[L"Function"]=functionConstructor;window->props[L"Function"]=functionConstructor;
         global->values[L"Number"]=ObjectValue(ObjectKind::NumberConstructor);

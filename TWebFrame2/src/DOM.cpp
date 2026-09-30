@@ -56,6 +56,54 @@ bool IsWhitespaceText(const std::shared_ptr<Node>& node) {
     return node && node->type == NodeType::Text && Trim(node->text).empty();
 }
 
+bool IsWithinScope(const std::shared_ptr<Node>& node,
+                   const std::shared_ptr<Node>& scope,
+                   bool includeScope = true) {
+    if (!node) return false;
+    if (!scope) return true;
+    for (auto current = includeScope ? node : node->parent.lock(); current;
+         current = current->parent.lock())
+        if (current == scope) return true;
+    return false;
+}
+
+bool DocumentOrderLess(const std::shared_ptr<Node>& left,
+                       const std::shared_ptr<Node>& right) {
+    if (left == right) return false;
+    std::vector<const Node*> leftPath, rightPath;
+    for (auto current = left; current; current = current->parent.lock())
+        leftPath.push_back(current.get());
+    for (auto current = right; current; current = current->parent.lock())
+        rightPath.push_back(current.get());
+    std::reverse(leftPath.begin(), leftPath.end());
+    std::reverse(rightPath.begin(), rightPath.end());
+    if (leftPath.empty() || rightPath.empty() || leftPath.front() != rightPath.front())
+        return left.get() < right.get();
+    size_t index = 0;
+    while (index < leftPath.size() && index < rightPath.size() &&
+           leftPath[index] == rightPath[index]) ++index;
+    if (index == leftPath.size()) return true;
+    if (index == rightPath.size()) return false;
+    const auto* parent = leftPath[index - 1];
+    for (const auto& child : parent->children) {
+        if (child.get() == leftPath[index]) return true;
+        if (child.get() == rightPath[index]) return false;
+    }
+    return left.get() < right.get();
+}
+
+template<typename Predicate>
+std::vector<std::shared_ptr<Node>> OrderedIndexedNodes(
+    const std::vector<std::shared_ptr<Node>>& indexed,
+    const std::shared_ptr<Node>& scope, bool includeScope, Predicate&& matches) {
+    std::vector<std::shared_ptr<Node>> result;
+    result.reserve(indexed.size());
+    for (const auto& node : indexed)
+        if (IsWithinScope(node, scope, includeScope) && matches(node)) result.push_back(node);
+    std::sort(result.begin(), result.end(), DocumentOrderLess);
+    return result;
+}
+
 std::shared_ptr<Node> MakeElement(const wchar_t* tag,
                                   const std::shared_ptr<Node>& parent) {
     auto node = std::make_shared<Node>();
@@ -923,6 +971,67 @@ std::vector<std::shared_ptr<Node>> Document::GetElementsByName(const std::wstrin
     return result;
 }
 
+std::vector<std::shared_ptr<Node>> Document::GetElementsByTagName(
+    const std::wstring& requestedTag, const std::shared_ptr<Node>& scope,
+    bool includeScope) const {
+    const auto tag = ToLower(requestedTag);
+    std::vector<std::shared_ptr<Node>> result;
+    if (tag != L"*") {
+        const auto found = tags_.find(tag);
+        if (found == tags_.end()) return result;
+        // For the small buckets used by repeated library lookups, visiting the
+        // index is substantially cheaper than walking a comment-heavy page.
+        // Large buckets keep the linear tree walk, which naturally preserves
+        // document order without an O(k log k) sort.
+        constexpr size_t kDirectIndexLimit = 64;
+        if (found->second.size() <= kDirectIndexLimit) {
+            std::vector<std::shared_ptr<Node>> indexed;
+            indexed.reserve(found->second.size());
+            for (const auto& entry : found->second)
+                if (const auto node = entry.second.lock()) indexed.push_back(node);
+            return OrderedIndexedNodes(indexed, scope, includeScope,
+                                       [](const auto&) { return true; });
+        }
+    }
+    Walk(scope ? scope : root_, [&](const auto& node) {
+        if ((!includeScope && node == scope) || node->type != NodeType::Element) return;
+        if (tag == L"*" || node->tag == tag) result.push_back(node);
+    });
+    return result;
+}
+
+std::vector<std::shared_ptr<Node>> Document::GetElementsByClassName(
+    const std::wstring& classNames, const std::shared_ptr<Node>& scope,
+    bool includeScope) const {
+    std::vector<std::wstring> names;
+    ForEachClassToken(classNames, [&](const auto& token) { names.push_back(token); });
+    std::vector<std::shared_ptr<Node>> result;
+    if (names.empty()) return result;
+    const NodeIndexBucket* smallest = nullptr;
+    for (const auto& name : names) {
+        const auto found = classes_.find(name);
+        if (found == classes_.end()) return result;
+        if (!smallest || found->second.size() < smallest->size()) smallest = &found->second;
+    }
+    constexpr size_t kDirectIndexLimit = 64;
+    const auto matches = [&](const auto& node) {
+        return std::all_of(names.begin(), names.end(),
+                           [&](const auto& name) { return node->HasClass(name); });
+    };
+    if (smallest->size() <= kDirectIndexLimit) {
+        std::vector<std::shared_ptr<Node>> indexed;
+        indexed.reserve(smallest->size());
+        for (const auto& entry : *smallest)
+            if (const auto node = entry.second.lock()) indexed.push_back(node);
+        return OrderedIndexedNodes(indexed, scope, includeScope, matches);
+    }
+    Walk(scope ? scope : root_, [&](const auto& node) {
+        if ((!includeScope && node == scope) || node->type != NodeType::Element) return;
+        if (matches(node)) result.push_back(node);
+    });
+    return result;
+}
+
 bool Document::MatchesSelector(const std::shared_ptr<Node>& node, const std::wstring& selector) {
     // Element.matches() and Element.closest() accept a selector list.  Reuse
     // the same comma-aware compilation as querySelector(), and match when any
@@ -997,6 +1106,21 @@ std::shared_ptr<Node> Document::QuerySelector(const std::wstring& selector,
         }
     }
     if (filterCandidates && candidates.empty()) return {};
+    if (filterCandidates && candidates.size() <= 64) {
+        std::vector<std::shared_ptr<Node>> indexed;
+        indexed.reserve(candidates.size());
+        for (const auto* candidate : candidates) {
+            const auto found = ownedNodes_.find(candidate);
+            if (found != ownedNodes_.end())
+                if (const auto node = found->second.lock(); IsWithinScope(node, scope))
+                    indexed.push_back(node);
+        }
+        std::sort(indexed.begin(), indexed.end(), DocumentOrderLess);
+        for (const auto& node : indexed)
+            for (const auto& item : selectors)
+                if (MatchesQuerySelector(node, scope, item)) return node;
+        return {};
+    }
     std::shared_ptr<Node> result;
     WalkUntil(scope ? scope : root_, [&](const auto& node) {
         if (filterCandidates && candidates.count(node.get()) == 0) return false;
@@ -1040,6 +1164,21 @@ std::vector<std::shared_ptr<Node>> Document::QuerySelectorAll(
         }
     }
     if (filterCandidates && candidates.empty()) return result;
+    if (filterCandidates && candidates.size() <= 64) {
+        std::vector<std::shared_ptr<Node>> indexed;
+        indexed.reserve(candidates.size());
+        for (const auto* candidate : candidates) {
+            const auto found = ownedNodes_.find(candidate);
+            if (found != ownedNodes_.end())
+                if (const auto node = found->second.lock(); IsWithinScope(node, scope))
+                    indexed.push_back(node);
+        }
+        std::sort(indexed.begin(), indexed.end(), DocumentOrderLess);
+        for (const auto& node : indexed)
+            for (const auto& item : selectors)
+                if (MatchesQuerySelector(node, scope, item)) { result.push_back(node); break; }
+        return result;
+    }
     Walk(scope ? scope : root_, [&](const auto& node) {
         if (filterCandidates && candidates.count(node.get()) == 0) return;
         for (const auto& item : selectors) {
