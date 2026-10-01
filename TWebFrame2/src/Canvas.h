@@ -39,6 +39,9 @@ struct CanvasGradientStop {
 
 struct CanvasGradient {
     float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
+    bool radial = false;
+    float radius0 = 0.0f, radius1 = 0.0f;
+    CanvasTransform transform;
     std::vector<CanvasGradientStop> stops;
 };
 
@@ -47,11 +50,12 @@ struct CanvasPaint {
     std::shared_ptr<CanvasGradient> gradient;
 };
 
-enum class CanvasPathVerb { MoveTo, LineTo, Arc, Close };
+enum class CanvasPathVerb { MoveTo, LineTo, QuadraticCurveTo, BezierCurveTo, Arc, Close };
 
 struct CanvasPathSegment {
     CanvasPathVerb verb = CanvasPathVerb::MoveTo;
     CanvasPoint point;
+    CanvasPoint control1, control2;
     float centerX = 0.0f, centerY = 0.0f, radius = 0.0f;
     float startAngle = 0.0f, endAngle = 0.0f;
     bool counterClockwise = false;
@@ -82,7 +86,7 @@ inline CanvasDrawingState SnapshotCanvasState(const CanvasDrawingState& state) {
     return result;
 }
 
-enum class CanvasCommandKind { FillRect, ClearRect, FillPath, StrokePath, FillText };
+enum class CanvasCommandKind { FillRect, ClearRect, FillPath, StrokePath, FillText, StrokeText };
 
 struct CanvasDrawCommand {
     CanvasCommandKind kind = CanvasCommandKind::FillRect;
@@ -95,6 +99,9 @@ struct CanvasDrawCommand {
 struct CanvasSurface {
     unsigned width = 300;
     unsigned height = 150;
+    bool contextCreated = false;
+    bool alpha = true;
+    bool willReadFrequently = false;
     CanvasDrawingState state;
     std::vector<CanvasDrawingState> stateStack;
     std::vector<CanvasPathSegment> currentPath;
@@ -109,5 +116,19 @@ struct CanvasSurface {
         commands.clear();
     }
 };
+
+bool ReadCanvasPixels(const CanvasSurface& surface, std::vector<unsigned char>& rgba);
+bool EncodeCanvasPng(const CanvasSurface& surface, std::vector<unsigned char>& png);
+
+struct CanvasTextMetrics {
+    double width=0,actualBoundingBoxLeft=0,actualBoundingBoxRight=0;
+    double fontBoundingBoxAscent=0,fontBoundingBoxDescent=0;
+    double actualBoundingBoxAscent=0,actualBoundingBoxDescent=0;
+    double emHeightAscent=0,emHeightDescent=0;
+    double hangingBaseline=0,alphabeticBaseline=0,ideographicBaseline=0;
+};
+
+bool MeasureCanvasText(const CanvasDrawingState& state,const std::wstring& text,
+                       CanvasTextMetrics& metrics);
 
 } // namespace TWebFrame::Internal

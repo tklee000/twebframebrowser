@@ -4,6 +4,7 @@
 #include "RasterImage.h"
 
 #include <algorithm>
+#include <numeric>
 #include <array>
 #include <charconv>
 #include <cmath>
@@ -17,6 +18,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <wrl/client.h>
+#include <wincodec.h>
 
 namespace TWebFrame::Internal {
 namespace {
@@ -77,6 +79,7 @@ struct CachedStyleMetrics {
     bool inlineFontValid=false;
     float inlineFontScale=0;
     float inlineFontHeight=0;
+    float inlineFontXHeight=0;
     float inlineFontBaseline=0;
 };
 using StyleMetricsCache=FastMap<const void*,CachedStyleMetrics>;
@@ -177,10 +180,29 @@ struct HorizontalScrollbarMetrics {
 Edges BorderValues(const ComputedStyle& style);
 
 LayoutRect PaddingBox(const LayoutBox& box) {
+    if(box.viewportScrollContainer)return box.viewportScrollport;
     const auto border=BorderValues(box.style);
     return {box.rect.x+border.left,box.rect.y+border.top,
         std::max(0.0f,box.rect.width-border.left-border.right),
         std::max(0.0f,box.rect.height-border.top-border.bottom)};
+}
+
+std::wstring OverflowX(const LayoutBox& box) {
+    if(box.viewportScrollContainer)return box.viewportOverflowX;
+    return box.style.Get(L"overflow-x",box.style.Get(L"overflow",L"visible"));
+}
+
+std::wstring OverflowY(const LayoutBox& box) {
+    if(box.viewportScrollContainer)return box.viewportOverflowY;
+    return box.style.Get(L"overflow-y",box.style.Get(L"overflow",L"visible"));
+}
+
+float ScrollClientWidth(const LayoutBox& box) {
+    return box.viewportScrollContainer?box.viewportScrollport.width:box.content.width;
+}
+
+float ScrollClientHeight(const LayoutBox& box) {
+    return box.viewportScrollContainer?box.viewportScrollport.height:box.content.height;
 }
 
 VerticalScrollbarMetrics VerticalScrollbarMetricsFor(const LayoutBox& box,const StyleSheet& styleSheet) {
@@ -245,26 +267,29 @@ HorizontalScrollbarMetrics HorizontalScrollbarMetricsFor(const LayoutBox& box,co
 }
 
 bool VerticalScrollbarFor(const LayoutBox& box,const StyleSheet& styleSheet,VerticalScrollbarGeometry& geometry) {
-    const auto overflowY=box.style.Get(L"overflow-y",box.style.Get(L"overflow",L"visible"));
-    if((overflowY!=L"auto"&&overflowY!=L"scroll")||box.children.empty()||
-       box.scrollHeight<=box.content.height+1)return false;
+    const auto overflowY=OverflowY(box);
+    if(overflowY!=L"auto"&&overflowY!=L"scroll")return false;
+    if(overflowY==L"auto"&&(box.children.empty()||
+       box.scrollHeight<=ScrollClientHeight(box)+1))return false;
     const auto metrics=VerticalScrollbarMetricsFor(box,styleSheet);
     const float trackWidth=metrics.width;
     if(trackWidth<=0)return false;
     const auto paddingBox=PaddingBox(box);
-    const auto overflowX=box.style.Get(L"overflow-x",box.style.Get(L"overflow",L"visible"));
-    const bool horizontal=(overflowX==L"auto"||overflowX==L"scroll")&&box.scrollWidth>box.content.width+1;
+    const auto overflowX=OverflowX(box);
+    const bool horizontal=overflowX==L"scroll"||
+        (overflowX==L"auto"&&box.scrollWidth>ScrollClientWidth(box)+1);
     const float horizontalHeight=horizontal?HorizontalScrollbarMetricsFor(box,styleSheet).height:0;
     const float arrowHeight=metrics.arrowHeight;
     const float minimumThumbHeight=metrics.minimumThumbHeight;
     const float trackHeight=std::max(0.0f,paddingBox.height-horizontalHeight);
     const float available=std::max(0.0f,trackHeight-2*arrowHeight);
     if(available<=0)return false;
-    const float paddingHeight=std::max(0.0f,paddingBox.height-box.content.height);
+    const float paddingHeight=box.viewportScrollContainer?0.0f:
+        std::max(0.0f,paddingBox.height-box.content.height);
     const float scrollExtent=box.scrollHeight+paddingHeight;
     const float thumbHeight=std::min(available,std::max(minimumThumbHeight,
         available*paddingBox.height/std::max(paddingBox.height,scrollExtent)));
-    const float maximum=std::max(0.0f,box.scrollHeight-box.content.height);
+    const float maximum=std::max(0.0f,box.scrollHeight-ScrollClientHeight(box));
     const float travel=std::max(0.0f,available-thumbHeight);
     const float trackStart=paddingBox.y+arrowHeight;
     const float thumbY=trackStart+(maximum>0?travel*(box.node->scrollTop/maximum):0);
@@ -276,23 +301,26 @@ bool VerticalScrollbarFor(const LayoutBox& box,const StyleSheet& styleSheet,Vert
 }
 
 bool HorizontalScrollbarFor(const LayoutBox& box,const StyleSheet& styleSheet,HorizontalScrollbarGeometry& geometry) {
-    const auto overflowX=box.style.Get(L"overflow-x",box.style.Get(L"overflow",L"visible"));
-    if((overflowX!=L"auto"&&overflowX!=L"scroll")||box.children.empty()||
-       box.scrollWidth<=box.content.width+1)return false;
+    const auto overflowX=OverflowX(box);
+    if(overflowX!=L"auto"&&overflowX!=L"scroll")return false;
+    if(overflowX==L"auto"&&(box.children.empty()||
+       box.scrollWidth<=ScrollClientWidth(box)+1))return false;
     const auto metrics=HorizontalScrollbarMetricsFor(box,styleSheet);
     const float trackHeight=metrics.height;if(trackHeight<=0)return false;
     const auto paddingBox=PaddingBox(box);
-    const auto overflowY=box.style.Get(L"overflow-y",box.style.Get(L"overflow",L"visible"));
-    const bool vertical=(overflowY==L"auto"||overflowY==L"scroll")&&box.scrollHeight>box.content.height+1;
+    const auto overflowY=OverflowY(box);
+    const bool vertical=overflowY==L"scroll"||
+        (overflowY==L"auto"&&box.scrollHeight>ScrollClientHeight(box)+1);
     const float verticalWidth=vertical?VerticalScrollbarMetricsFor(box,styleSheet).width:0;
     const float trackWidth=std::max(0.0f,paddingBox.width-verticalWidth);
     const float arrowWidth=metrics.arrowWidth;
     const float available=std::max(0.0f,trackWidth-2*arrowWidth);if(available<=0)return false;
-    const float paddingWidth=std::max(0.0f,paddingBox.width-box.content.width);
+    const float paddingWidth=box.viewportScrollContainer?0.0f:
+        std::max(0.0f,paddingBox.width-box.content.width);
     const float scrollExtent=box.scrollWidth+paddingWidth;
     const float thumbWidth=std::min(available,std::max(metrics.minimumThumbWidth,
         available*paddingBox.width/std::max(paddingBox.width,scrollExtent)));
-    const float maximum=std::max(0.0f,box.scrollWidth-box.content.width);
+    const float maximum=std::max(0.0f,box.scrollWidth-ScrollClientWidth(box));
     const float travel=std::max(0.0f,available-thumbWidth);
     const float trackStart=paddingBox.x+arrowWidth;
     const float thumbX=trackStart+(maximum>0?travel*(box.node->scrollLeft/maximum):0);
@@ -321,10 +349,20 @@ bool HasStableScrollbarGutter(const ComputedStyle& style) {
 }
 
 bool IsBlockifiedItem(const LayoutBox& box) {
+    const auto floating=box.style.Get(L"float",L"none");
+    if(floating==L"left"||floating==L"right"||floating==L"inline-start"||floating==L"inline-end")return true;
     if(!box.parent||box.style.Is(L"position",L"absolute")||box.style.Is(L"position",L"fixed"))return false;
     const auto parentDisplay=box.parent->style.Get(L"display");
     return parentDisplay==L"grid"||parentDisplay==L"inline-grid"||
            parentDisplay==L"flex"||parentDisplay==L"inline-flex";
+}
+
+bool HasInFlowBlockChildren(const LayoutBox& box) {
+    return std::any_of(box.children.begin(),box.children.end(),[](const auto& child){
+        return child->visible&&!IsInlineLevel(child->style.Get(L"display"))&&
+            !child->style.Is(L"position",L"absolute")&&!child->style.Is(L"position",L"fixed")&&
+            child->style.Get(L"float",L"none")==L"none";
+    });
 }
 
 int ZIndex(const LayoutBox& box) {
@@ -353,13 +391,12 @@ bool IsStackingContext(const LayoutBox& box) {
 }
 
 bool ClipsOverflow(const LayoutBox& box) {
-    const auto overflow=box.style.Get(L"overflow",L"visible");
-    const auto overflowX=box.style.Get(L"overflow-x",overflow);
-    const auto overflowY=box.style.Get(L"overflow-y",overflow);
+    const auto overflowX=OverflowX(box);
+    const auto overflowY=OverflowY(box);
     const auto clips=[](const std::wstring& value){
         return value==L"hidden"||value==L"clip"||value==L"auto"||value==L"scroll";
     };
-    return clips(overflow)||clips(overflowX)||clips(overflowY);
+    return clips(overflowX)||clips(overflowY);
 }
 
 enum class FloatSide { None, Left, Right };
@@ -469,7 +506,7 @@ bool Intersects(const LayoutRect& left,const LayoutRect& right) {
 }
 
 void UpdateSubtreeBounds(LayoutBox& box) {
-    box.subtreeBounds=box.rect;
+    box.subtreeBounds=box.viewportScrollContainer?box.viewportScrollport:box.rect;
     for(const auto& child:box.children){
         if(!child->visible)continue;
         const auto& bounds=child->subtreeBounds;
@@ -730,6 +767,93 @@ bool TransitionComplete(const StyleTransition& transition) {
     return transition.elapsedMs>=transition.delayMs+transition.durationMs;
 }
 
+std::vector<StyleAnimation> AnimationDefinitions(const ComputedStyle& style){
+    std::vector<StyleAnimation> result;
+    for(const auto& entry:CommaSeparated(style.Get(L"animation"))){
+        StyleAnimation animation;bool duration=false;
+        TransitionDefinition timing;
+        for(const auto& word:Words(entry)){
+            const auto lower=ToLower(word);float number=0;size_t used=0;
+            if(TransitionTime(word,number)){if(!duration){animation.durationMs=std::max(0.0f,number);duration=true;}else animation.delayMs=number;}
+            else if(TransitionTiming(word,timing)){}
+            else if(lower==L"infinite")animation.iterations=std::numeric_limits<float>::infinity();
+            else if(TryParseFloat(word,number,&used)&&used==word.size()&&number>=0)animation.iterations=number;
+            else if(lower==L"normal"||lower==L"reverse"||lower==L"alternate"||lower==L"alternate-reverse")animation.direction=lower;
+            else if(lower==L"forwards"||lower==L"backwards"||lower==L"both"||lower==L"none")animation.fill=lower;
+            else if(lower==L"paused"||lower==L"running")animation.paused=lower==L"paused";
+            else animation.name=word;
+        }
+        animation.x1=timing.x1;animation.y1=timing.y1;animation.x2=timing.x2;animation.y2=timing.y2;
+        animation.signature=entry;result.push_back(std::move(animation));
+    }
+    const auto names=CommaSeparated(style.Get(L"animation-name"));
+    if(!names.empty()){
+        if(result.empty())result.resize(names.size());else result.resize(names.size(),result.back());
+        for(size_t index=0;index<names.size();++index)result[index].name=names[index];
+    }
+    for(size_t index=0;index<result.size();++index){
+        auto& animation=result[index];
+        const auto value=[&](const wchar_t* property){const auto entries=CommaSeparated(style.Get(property));return entries.empty()?std::wstring{}:entries[index%entries.size()];};
+        float number=0;size_t used=0;TransitionDefinition timing;
+        auto token=value(L"animation-duration");if(!token.empty()&&TransitionTime(token,number))animation.durationMs=std::max(0.0f,number);
+        token=value(L"animation-delay");if(!token.empty()&&TransitionTime(token,number))animation.delayMs=number;
+        token=value(L"animation-iteration-count");if(token==L"infinite")animation.iterations=std::numeric_limits<float>::infinity();
+        else if(!token.empty()&&TryParseFloat(token,number,&used)&&used==token.size()&&number>=0)animation.iterations=number;
+        token=value(L"animation-direction");if(!token.empty())animation.direction=token;
+        token=value(L"animation-fill-mode");if(!token.empty())animation.fill=token;
+        token=value(L"animation-play-state");if(!token.empty())animation.paused=token==L"paused";
+        token=value(L"animation-timing-function");if(!token.empty()&&TransitionTiming(token,timing)){
+            animation.x1=timing.x1;animation.y1=timing.y1;animation.x2=timing.x2;animation.y2=timing.y2;
+        }
+        animation.signature+=L"|"+animation.name+L"|"+NumberText(animation.durationMs)+L"|"+NumberText(animation.delayMs)+L"|"+
+            NumberText(animation.iterations)+L"|"+animation.direction+L"|"+animation.fill;
+    }
+    return result;
+}
+
+bool AnimationProgress(const StyleAnimation& animation,float& progress){
+    const float time=animation.elapsedMs-animation.delayMs;
+    const float activeDuration=animation.durationMs*animation.iterations;
+    const bool before=time<0,after=animation.durationMs<=0||time>=activeDuration;
+    if(before&&animation.fill!=L"backwards"&&animation.fill!=L"both")return false;
+    if(after&&animation.fill!=L"forwards"&&animation.fill!=L"both")return false;
+    float iteration=0;
+    if(before)progress=0;
+    else if(after){iteration=std::max(0.0f,std::ceil(animation.iterations)-1);progress=animation.iterations-iteration;}
+    else{iteration=std::floor(time/animation.durationMs);progress=(time-iteration*animation.durationMs)/animation.durationMs;}
+    const bool odd=std::fmod(iteration,2.0f)>=1;
+    if(animation.direction==L"reverse"||(animation.direction==L"alternate"&&odd)||(animation.direction==L"alternate-reverse"&&!odd))progress=1-progress;
+    return true;
+}
+
+void ApplyAnimationValues(ComputedStyle& style,const StyleAnimation& animation){
+    float progress=0;if(!AnimationProgress(animation,progress))return;
+    std::vector<std::wstring> properties;
+    for(const auto& frame:animation.frames)for(const auto& declaration:frame.declarations)
+        if(IsNumericTransitionProperty(declaration.name)&&std::find(properties.begin(),properties.end(),declaration.name)==properties.end())properties.push_back(declaration.name);
+    if(properties.empty())return;
+    style.values=std::make_shared<ComputedStyle::ValueMap>(*style.values);
+    for(const auto& property:properties){
+        std::vector<std::pair<float,std::wstring>> points;
+        for(const auto& frame:animation.frames)for(const auto& declaration:frame.declarations)
+            if(declaration.name==property){if(!points.empty()&&points.back().first==frame.offset)points.back().second=declaration.value;else points.emplace_back(frame.offset,declaration.value);}
+        if(points.empty())continue;
+        const auto underlying=TransitionBaseValue(style,property,points.front().second);
+        if(points.front().first>0)points.insert(points.begin(),{0,underlying});
+        if(points.back().first<1)points.emplace_back(1,underlying);
+        size_t right=1;while(right<points.size()&&points[right].first<progress)++right;
+        if(right>=points.size()){(*style.values)[property]=points.back().second;continue;}
+        StyleTransition segment;segment.from=points[right-1].second;segment.to=points[right].second;
+        if(property==L"transform"){
+            if(segment.from.empty()||segment.from==L"none")segment.from=IdentityTransform(segment.to);
+            if(segment.to.empty()||segment.to==L"none")segment.to=IdentityTransform(segment.from);
+        }
+        segment.durationMs=points[right].first-points[right-1].first;segment.elapsedMs=progress-points[right-1].first;
+        segment.x1=animation.x1;segment.y1=animation.y1;segment.x2=animation.x2;segment.y2=animation.y2;
+        (*style.values)[property]=TransitionValue(segment);
+    }
+}
+
 bool IsColorToken(const std::wstring& token) {
     const auto value=ToLower(Trim(token));
     return !value.empty()&&(value[0]==L'#'||value.rfind(L"rgb",0)==0||value.rfind(L"color-mix(",0)==0||value==L"transparent"||
@@ -833,7 +957,7 @@ float FontSize(const ComputedStyle& style){
 IDWriteFactory* SharedWriteFactory();
 Microsoft::WRL::ComPtr<IDWriteTextFormat> TextFormat(IDWriteFactory* factory,
                                                       const ComputedStyle& style);
-struct FontBoxMetrics { float height=0,baseline=0; };
+struct FontBoxMetrics { float height=0,baseline=0,xHeight=0; };
 FontBoxMetrics NaturalFontBoxMetrics(const ComputedStyle& style);
 float NaturalFontLineHeight(const ComputedStyle& style);
 
@@ -893,9 +1017,13 @@ float GapValue(const ComputedStyle& style,bool horizontal,float reference,float 
     return StyleSheet::Length(style.Get(property,style.Get(L"gap",L"0")),reference,viewport,0,FontSize(style));
 }
 
+bool IsCollapsibleTextSpace(wchar_t c) {
+    return c==L' '||c==L'\t'||c==L'\n'||c==L'\r'||c==L'\f';
+}
+
 std::wstring NormalizeText(const std::wstring& text,bool preserve,bool preserveLeading=false,bool preserveTrailing=false) {
     if(preserve)return text;std::wstring out;bool space=false;
-    for(wchar_t c:text){if(std::iswspace(c)){if(!space&&(!out.empty()||preserveLeading))out+=L' ';space=true;}else{out+=c;space=false;}}
+    for(wchar_t c:text){if(IsCollapsibleTextSpace(c)){if(!space&&(!out.empty()||preserveLeading))out+=L' ';space=true;}else{out+=c;space=false;}}
     if(!preserveTrailing&&!out.empty()&&out.back()==L' ')out.pop_back();
     return out;
 }
@@ -933,7 +1061,7 @@ std::wstring NormalizeText(const std::wstring& text,const std::wstring& whiteSpa
             if(!out.empty()&&out.back()==L' ')out.pop_back();
             out+=L'\n';pendingSpace=false;lineHasText=false;continue;
         }
-        if(std::iswspace(character)){pendingSpace=lineHasText;continue;}
+        if(IsCollapsibleTextSpace(character)){pendingSpace=lineHasText;continue;}
         if(pendingSpace)out+=L' ';
         out+=character;pendingSpace=false;lineHasText=true;
     }
@@ -1127,30 +1255,34 @@ IDWriteFactory* SharedWriteFactory() {
 }
 
 Microsoft::WRL::ComPtr<IDWriteRenderingParams> WebTextRenderingParams(
-        IDWriteFactory* factory) {
+        IDWriteFactory* factory,bool subpixel) {
     static thread_local FastMap<std::uintptr_t,
         Microsoft::WRL::ComPtr<IDWriteRenderingParams>> cache;
     if(!factory)return {};
-    const auto key=reinterpret_cast<std::uintptr_t>(factory);
+    const auto key=reinterpret_cast<std::uintptr_t>(factory)|(subpixel?1u:0u);
     if(const auto found=cache.find(key);found!=cache.end())return found->second;
     Microsoft::WRL::ComPtr<IDWriteRenderingParams> params;
     Microsoft::WRL::ComPtr<IDWriteFactory1> factory1;
     if(SUCCEEDED(factory->QueryInterface(IID_PPV_ARGS(&factory1)))){
         Microsoft::WRL::ComPtr<IDWriteRenderingParams1> params1;
-        if(SUCCEEDED(factory1->CreateCustomRenderingParams(2.2f,0.0f,0.0f,0.0f,
-           DWRITE_PIXEL_GEOMETRY_FLAT,DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,&params1)))
+        if(SUCCEEDED(factory1->CreateCustomRenderingParams(2.2f,0.0f,0.0f,subpixel?1.0f:0.0f,
+           subpixel?DWRITE_PIXEL_GEOMETRY_RGB:DWRITE_PIXEL_GEOMETRY_FLAT,
+           DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,&params1)))
             params=params1;
     }
-    if(!params)factory->CreateCustomRenderingParams(2.2f,0.0f,0.0f,
-        DWRITE_PIXEL_GEOMETRY_FLAT,DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,&params);
+    if(!params)factory->CreateCustomRenderingParams(2.2f,0.0f,subpixel?1.0f:0.0f,
+        subpixel?DWRITE_PIXEL_GEOMETRY_RGB:DWRITE_PIXEL_GEOMETRY_FLAT,
+        DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,&params);
     if(params){if(cache.size()>=8)cache.clear();cache.emplace(key,params);}
     return params;
 }
 
 void ConfigureWebTextRendering(ID2D1RenderTarget* target,IDWriteFactory* factory) {
     if(!target)return;
-    target->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-    if(auto params=WebTextRenderingParams(factory))target->SetTextRenderingParams(params.Get());
+    const bool subpixel=target->GetPixelFormat().alphaMode==D2D1_ALPHA_MODE_IGNORE;
+    target->SetTextAntialiasMode(subpixel?D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE:
+                                        D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+    if(auto params=WebTextRenderingParams(factory,subpixel))target->SetTextRenderingParams(params.Get());
 }
 
 Microsoft::WRL::ComPtr<IDWriteTextFormat> TextFormat(IDWriteFactory* factory,
@@ -1202,11 +1334,13 @@ float NaturalFontLineHeight(const ComputedStyle& style) {
 FontBoxMetrics InlineFontBoxMetrics(const ComputedStyle& style) {
     const auto& cachedMetrics=StyleMetrics(style);
     if(cachedMetrics.inlineFontValid&&cachedMetrics.inlineFontScale==style.deviceScale)
-        return {cachedMetrics.inlineFontHeight,cachedMetrics.inlineFontBaseline};
+        return {cachedMetrics.inlineFontHeight,cachedMetrics.inlineFontBaseline,
+                cachedMetrics.inlineFontXHeight};
     const auto remember=[&](FontBoxMetrics result){
         auto& cached=StyleMetrics(style);
         cached.inlineFontValid=true;cached.inlineFontScale=style.deviceScale;
         cached.inlineFontHeight=result.height;cached.inlineFontBaseline=result.baseline;
+        cached.inlineFontXHeight=result.xHeight;
         return result;
     };
     static thread_local FastMap<std::wstring,FontBoxMetrics> cache;
@@ -1219,6 +1353,7 @@ FontBoxMetrics InlineFontBoxMetrics(const ComputedStyle& style) {
     if(const auto found=cache.find(key);found!=cache.end())return remember(found->second);
     if(cache.size()>=256)cache.clear();
     FontBoxMetrics result=NaturalFontBoxMetrics(style);
+    result.xHeight=FontSize(style)*0.5f;
     if(!genericMonospace){
         if(auto* factory=SharedWriteFactory()){
             Microsoft::WRL::ComPtr<IDWriteFontCollection> collection;
@@ -1239,7 +1374,9 @@ FontBoxMetrics InlineFontBoxMetrics(const ComputedStyle& style) {
                     const float scale=FontSize(style)/metrics.designUnitsPerEm;
                     const float baseline=std::round(metrics.ascent*scale);
                     const float descent=std::round(metrics.descent*scale);
-                    if(baseline+descent>0)result={baseline+descent,baseline};
+                    if(baseline+descent>0)result={baseline+descent,baseline,
+                        metrics.xHeight>0?std::round(metrics.xHeight*scale*64.0f)/64.0f:
+                            FontSize(style)*0.5f};
                 }
             }
         }
@@ -1252,13 +1389,22 @@ FontBoxMetrics InlineFontBoxMetrics(const ComputedStyle& style) {
         const float fontSize=FontSize(style);
         result={std::max(1.0f/scale,
                          std::floor(fontSize*scale+0.0001f)/scale),
-                std::round(fontSize*0.85f*scale)/scale};
+                std::round(fontSize*0.85f*scale)/scale,fontSize*0.5f};
     }
     cache.emplace(std::move(key),result);return remember(result);
 }
 
 float InlineContentBoxHeight(const ComputedStyle& style) {
     return InlineFontBoxMetrics(style).height;
+}
+
+float InlineHalfLeading(const ComputedStyle& style) {
+    // The font ascent/descent and inline content edges use CSS pixel metrics.
+    // Put an odd leading pixel below the alphabetic baseline; DPI scaling is
+    // applied when painting, without moving the CSS content edge at 150%.
+    const float leading=(LineHeight(style)-InlineContentBoxHeight(style))/2.0f;
+    const auto lineHeight=style.Get(L"line-height");
+    return lineHeight.empty()||lineHeight==L"normal"?leading:std::floor(leading);
 }
 
 float InlineBaselineOffset(const ComputedStyle& parentStyle,
@@ -1280,12 +1426,201 @@ float TextBaselineOffset(const ComputedStyle& style) {
     std::wstring key=FontFamily(style);key+=L'\x1f';key+=NumberText(FontSize(style));
     key+=L'\x1f';key+=std::to_wstring(FontWeight(style));key+=L'\x1f';
     key+=style.Get(L"font-style");key+=L'\x1f';key+=style.Get(L"line-height");
+    key+=L'\x1f';key+=style.Get(L"font-family");
+    if(UsesGenericMonospaceMetrics(style)){key+=L'\x1f';key+=NumberText(style.deviceScale);}
     if(const auto found=cache.find(key);found!=cache.end())return found->second;
     if(cache.size()>=256)cache.clear();
-    const auto metrics=NaturalFontBoxMetrics(style);
-    const float result=std::max(0.0f,(LineHeight(style)-metrics.height)/2.0f+
-        metrics.baseline);
+    const auto lineHeight=style.Get(L"line-height");
+    const bool natural=UsesGenericMonospaceMetrics(style)||lineHeight.empty()||lineHeight==L"normal";
+    const auto metrics=natural?NaturalFontBoxMetrics(style):
+        InlineFontBoxMetrics(style);
+    const float result=std::max(0.0f,metrics.baseline+
+        (natural?(LineHeight(style)-metrics.height)/2.0f:
+            InlineHalfLeading(style)));
     cache.emplace(std::move(key),result);return result;
+}
+
+std::wstring AlignmentKeyword(std::wstring value){
+    value=ToLower(Trim(value));
+    const auto separator=value.find_last_of(L" \t\r\n");
+    return separator==std::wstring::npos?value:value.substr(separator+1);
+}
+
+struct InlineLineMetrics {
+    float baseline=0;
+    float descent=0;
+    float edgeAlignedHeight=0;
+
+    float Height() const {
+        return std::max(baseline+descent,edgeAlignedHeight);
+    }
+};
+
+const ComputedStyle* FirstAvailableBaselineStyle(const LayoutBox& box) {
+    if(box.node&&box.node->type==NodeType::Text)return &box.style;
+    for(const auto& child:box.children){
+        if(!child->visible||child->style.Is(L"position",L"absolute")||
+           child->style.Is(L"position",L"fixed"))continue;
+        if(const auto* style=FirstAvailableBaselineStyle(*child))return style;
+    }
+    return nullptr;
+}
+
+bool HasCenteredControlLabel(const LayoutBox& box) {
+    if(!box.node||box.node->tag!=L"input")return false;
+    const auto type=ToLower(box.node->Attribute(L"type"));
+    return type==L"button"||type==L"submit"||type==L"reset";
+}
+
+float InlineOuterBaseline(const LayoutBox& child,float outerHeight,
+                          float reference,float viewport) {
+    if(IsAtomicInlineLevel(child)){
+        if(HasCenteredControlLabel(child)){
+            const auto margin=EdgeValues(child.style,L"margin",reference,viewport);
+            const auto metrics=InlineFontBoxMetrics(child.style);
+            return margin.top+(outerHeight-margin.top-margin.bottom)/2+metrics.baseline-metrics.height/2;
+        }
+        const auto overflow=ToLower(Trim(child.style.Get(L"overflow",L"visible")));
+        if(overflow==L"visible"){
+            if(const auto* baselineStyle=FirstAvailableBaselineStyle(child)){
+                const auto margin=EdgeValues(child.style,L"margin",reference,viewport);
+                const auto padding=EdgeValues(child.style,L"padding",reference,viewport);
+                const auto border=BorderValues(child.style);
+                return margin.top+border.top+padding.top+
+                    TextBaselineOffset(*baselineStyle);
+            }
+        }
+        return outerHeight;
+    }
+    if(!child.node||child.node->type==NodeType::Text)
+        return TextBaselineOffset(child.style);
+    const auto margin=EdgeValues(child.style,L"margin",reference,viewport);
+    const auto padding=EdgeValues(child.style,L"padding",reference,viewport);
+    const auto border=BorderValues(child.style);
+    return margin.top+border.top+padding.top+TextBaselineOffset(child.style);
+}
+
+float InlineBaselineRelativeTopFromBaseline(const ComputedStyle& parentStyle,
+                                            const LayoutBox& child,
+                                            float outerHeight,float boxBaseline,
+                                            float viewport) {
+    const auto raw=ToLower(Trim(child.style.Get(L"vertical-align",L"baseline")));
+    const auto alignment=AlignmentKeyword(raw);
+    if(alignment==L"middle")
+        // CSS middle aligns the box midpoint with the parent's baseline plus
+        // half the x-height, where "plus" points toward the text top in CSS's
+        // baseline coordinate system. Layout Y grows downward, so both the
+        // half x-height and half box height subtract from the line baseline.
+        return -InlineFontBoxMetrics(parentStyle).xHeight/2.0f-outerHeight/2.0f;
+    if(alignment==L"text-top")
+        return -InlineFontBoxMetrics(parentStyle).baseline;
+    if(alignment==L"text-bottom")
+        return InlineFontBoxMetrics(parentStyle).height-
+            InlineFontBoxMetrics(parentStyle).baseline-outerHeight;
+
+    float shift=0;
+    if(alignment==L"sub")shift=FontSize(parentStyle)*0.2f;
+    else if(alignment==L"super")shift=-FontSize(parentStyle)*0.33f;
+    else if(alignment!=L"baseline"&&alignment!=L"top"&&alignment!=L"bottom")
+        // Positive <length> and <percentage> values raise an inline box.
+        shift=-StyleSheet::Length(raw,LineHeight(parentStyle),viewport,0,
+                                  FontSize(child.style));
+    return -boxBaseline+shift;
+}
+
+float InlineBaselineRelativeTop(const ComputedStyle& parentStyle,
+                                const LayoutBox& child,float outerHeight,
+                                float reference,float viewport) {
+    return InlineBaselineRelativeTopFromBaseline(
+        parentStyle,child,outerHeight,
+        InlineOuterBaseline(child,outerHeight,reference,viewport),viewport);
+}
+
+InlineLineMetrics InitialInlineLineMetrics(const LayoutBox& parent) {
+    InlineLineMetrics result;
+    // Legacy HTML block containers omit the font strut from their inline lines.
+    // Actual text and replaced boxes still contribute through IncludeInlineLineBox.
+    const auto* document=parent.node?parent.node->ownerDocument:nullptr;
+    const bool inlineContainer=parent.style.Is(L"display",L"inline")&&
+        !IsAtomicInlineLevel(parent)&&!IsBlockifiedItem(parent);
+    if(document&&(document->QuirksMode()||document->LimitedQuirksMode())&&
+       !inlineContainer)return result;
+    const auto& parentStyle=parent.style;
+    result.baseline=TextBaselineOffset(parentStyle);
+    result.descent=std::max(0.0f,LineHeight(parentStyle)-result.baseline);
+    return result;
+}
+
+void IncludeInlineLineBox(InlineLineMetrics& line,const ComputedStyle& parentStyle,
+                          const LayoutBox& child,float outerHeight,
+                          float reference,float viewport) {
+    const auto alignment=AlignmentKeyword(
+        child.style.Get(L"vertical-align",L"baseline"));
+    const bool atomic=IsAtomicInlineLevel(child);
+    float contributionHeight=outerHeight;
+    if(!atomic){
+        const auto margin=EdgeValues(child.style,L"margin",reference,viewport);
+        const auto padding=EdgeValues(child.style,L"padding",reference,viewport);
+        const auto border=BorderValues(child.style);
+        const float contentHeight=outerHeight-margin.top-margin.bottom-
+            padding.top-padding.bottom-border.top-border.bottom;
+        contributionHeight=LineHeight(child.style);
+        if(contentHeight>std::max(contributionHeight,InlineContentBoxHeight(child.style))+0.01f)
+            contributionHeight=contentHeight;
+    }
+    if(alignment==L"top"||alignment==L"bottom"){
+        line.edgeAlignedHeight=std::max(line.edgeAlignedHeight,contributionHeight);
+        return;
+    }
+    const float contributionBaseline=atomic?
+        InlineOuterBaseline(child,outerHeight,reference,viewport):
+        TextBaselineOffset(child.style);
+    const float topFromBaseline=InlineBaselineRelativeTopFromBaseline(
+        parentStyle,child,contributionHeight,contributionBaseline,viewport);
+    line.baseline=std::max(line.baseline,-topFromBaseline);
+    line.descent=std::max(line.descent,contributionHeight+topFromBaseline);
+}
+
+float InlineLineBoxOffset(const InlineLineMetrics& line,
+                          const ComputedStyle& parentStyle,
+                          const LayoutBox& child,float outerHeight,
+                          float reference,float viewport) {
+    // A block inside an inline splits the inline formatting context. Its
+    // anonymous block fragment starts at the containing block's flow edge.
+    if(child.style.Is(L"display",L"inline")&&HasInFlowBlockChildren(child))return 0;
+    const auto alignment=AlignmentKeyword(
+        child.style.Get(L"vertical-align",L"baseline"));
+    const bool inlineElement=child.node&&child.node->type==NodeType::Element&&
+        !IsAtomicInlineLevel(child)&&!UsesGenericMonospaceMetrics(child.style);
+    if(alignment==L"top"||alignment==L"bottom"){
+        if(!inlineElement)return alignment==L"top"?0:
+            std::max(0.0f,line.Height()-outerHeight);
+        const auto margin=EdgeValues(child.style,L"margin",reference,viewport);
+        const auto padding=EdgeValues(child.style,L"padding",reference,viewport);
+        const auto border=BorderValues(child.style);
+        const float edge=InlineHalfLeading(child.style)-margin.top-padding.top-border.top;
+        return edge+(alignment==L"bottom"?line.Height()-LineHeight(child.style):0);
+    }
+    const bool baselineAlignment=alignment==L"baseline"||alignment==L"initial"||
+        alignment==L"unset"||alignment==L"revert"||alignment==L"revert-layer";
+    if(baselineAlignment&&IsAtomicInlineLevel(child)&&
+       !FirstAvailableBaselineStyle(child)&&!HasCenteredControlLabel(child)){
+        // Replaced and otherwise empty atomic boxes synthesize a baseline at
+        // their bottom margin edge. DirectWrite text-run rectangles already
+        // start on the visual line track used by that synthesized baseline;
+        // applying the ascent again pushes a short badge one full badge-height
+        // below adjacent glyphs. Keep the synthetic box on the shared track,
+        // while content-bearing inline-block/flex boxes continue to use their
+        // real descendant baseline above.
+        return 0;
+    }
+    float offset=line.baseline+InlineBaselineRelativeTop(
+        parentStyle,child,IsAtomicInlineLevel(child)?outerHeight:LineHeight(child.style),
+        reference,viewport);
+    if(child.node&&child.node->type==NodeType::Element&&!IsAtomicInlineLevel(child)&&
+       !UsesGenericMonospaceMetrics(child.style))
+        offset+=InlineHalfLeading(child.style);
+    return offset;
 }
 
 struct TextCaretLineMetrics {
@@ -1300,21 +1635,10 @@ TextCaretLineMetrics CaretLineMetrics(const ComputedStyle& style) {
     key+=style.Get(L"font-style");key+=L'\x1f';key+=style.Get(L"line-height");
     if(const auto found=cache.find(key);found!=cache.end())return found->second;
     if(cache.size()>=256)cache.clear();
-    const float lineHeight=std::max(1.0f,LineHeight(style));
     const auto metrics=NaturalFontBoxMetrics(style);
-    TextCaretLineMetrics result{std::max(0.0f,(lineHeight-metrics.height)/2.0f),
+    TextCaretLineMetrics result{std::max(0.0f,TextBaselineOffset(style)-metrics.baseline),
                                 std::max(1.0f,metrics.height)};
     cache.emplace(std::move(key),result);return result;
-}
-
-const ComputedStyle* FirstFlexBaselineStyle(const LayoutBox& box) {
-    if(box.node&&box.node->type==NodeType::Text)return &box.style;
-    for(const auto& child:box.children){
-        if(!child->visible||child->style.Is(L"position",L"absolute")||
-           child->style.Is(L"position",L"fixed"))continue;
-        if(const auto* style=FirstFlexBaselineStyle(*child))return style;
-    }
-    return nullptr;
 }
 
 float FlexItemBaselineOffset(const LayoutBox& box,float referenceWidth,
@@ -1322,7 +1646,7 @@ float FlexItemBaselineOffset(const LayoutBox& box,float referenceWidth,
     const auto margin=EdgeValues(box.style,L"margin",referenceWidth,referenceWidth);
     const auto padding=EdgeValues(box.style,L"padding",referenceWidth,referenceWidth);
     const auto border=BorderValues(box.style);
-    if(const auto* textStyle=FirstFlexBaselineStyle(box))
+    if(const auto* textStyle=FirstAvailableBaselineStyle(box))
         return margin.top+border.top+padding.top+TextBaselineOffset(*textStyle);
     // CSS synthesizes a baseline at the item's bottom margin edge when the
     // item has no usable first baseline.
@@ -1722,6 +2046,7 @@ std::wstring ListMarkerText(const LayoutBox& box) {
 void EnsureTextLayout(LayoutBox& box,IDWriteFactory* factory,const std::wstring& text) {
     if(text.empty()||!factory){box.textLayout.Reset();box.textLayoutKey.clear();return;}
     const bool formControl=IsFormControlText(box);
+    const bool inlineTextRun=box.node->type==NodeType::Text&&box.parent&&box.parent->style.Is(L"display",L"inline");
     const auto whiteSpace=box.style.Get(L"white-space");
     const float nativeSelectInset=box.node->tag==L"select"?4.0f:0.0f;
     std::wstring layoutKey=text;layoutKey+=L'\x1f';layoutKey+=FontFamily(box.style);layoutKey+=L'\x1f';
@@ -1731,6 +2056,7 @@ void EnsureTextLayout(LayoutBox& box,IDWriteFactory* factory,const std::wstring&
     layoutKey+=box.style.Get(L"tab-size");layoutKey+=L'\x1f';
     layoutKey+=box.style.Get(L"text-decoration-line",box.style.Get(L"text-decoration"));layoutKey+=L'\x1f';
     layoutKey+=box.style.Get(L"text-align");layoutKey+=L'\x1f';layoutKey+=whiteSpace;layoutKey+=L'\x1f';
+    layoutKey+=inlineTextRun?L"inline-run":L"paragraph";
     const float textLayoutHeight=box.node->tag==L"textarea"?
         std::max(box.content.height,box.scrollHeight):box.content.height;
     layoutKey+=NumberText(box.content.width);layoutKey+=L',';layoutKey+=NumberText(textLayoutHeight);
@@ -1745,8 +2071,10 @@ void EnsureTextLayout(LayoutBox& box,IDWriteFactory* factory,const std::wstring&
         factory->CreateTextLayout(text.c_str(),static_cast<UINT32>(text.size()),format.Get(),
             std::max(1.0f,box.content.width),std::max(1.0f,textLayoutHeight),&box.textLayout);
     if(FAILED(created)){box.textLayout.Reset();return;}
-    if(box.style.Is(L"text-align",L"center"))box.textLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-    else if(box.style.Is(L"text-align",L"right"))box.textLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+    // Inline runs have already been positioned by the containing line. A
+    // second paragraph alignment would shift text by its trailing spaces.
+    if(!inlineTextRun&&(box.style.Is(L"text-align",L"center")||box.style.Is(L"text-align",L"-webkit-center")))box.textLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    else if(!inlineTextRun&&(box.style.Is(L"text-align",L"right")||box.style.Is(L"text-align",L"-webkit-right")))box.textLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     box.textLayout->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM,
         LineHeight(box.style),TextBaselineOffset(box.style));
     box.textLayout->SetParagraphAlignment(box.node->tag==L"textarea"?
@@ -1792,6 +2120,7 @@ float ConstrainIntrinsicWidth(const ComputedStyle& style,float value,float viewp
 }
 
 float NaturalWidth(const LayoutBox& box);
+float NaturalGridWidth(const LayoutBox& box);
 
 float BlockOuterWidth(const LayoutBox& box,float availableWidth,float viewportWidth){
     const auto margin=EdgeValues(box.style,L"margin",availableWidth,viewportWidth);
@@ -1804,9 +2133,126 @@ float BlockOuterWidth(const LayoutBox& box,float availableWidth,float viewportWi
     return std::max(0.0f,width)+margin.left+margin.right;
 }
 
+struct MarginStrut {
+    float positive=0,negative=0;
+    MarginStrut()=default;
+    explicit MarginStrut(float value):positive(std::max(0.0f,value)),negative(std::min(0.0f,value)){}
+    float Value() const {return positive+negative;}
+    void Merge(const MarginStrut& other){
+        positive=std::max(positive,other.positive);
+        negative=std::min(negative,other.negative);
+    }
+};
+
+struct BlockMarginMetrics {
+    MarginStrut top,bottom;
+    bool first=false,last=false,self=false;
+};
+
+BlockMarginMetrics CollapsedBlockMargins(const LayoutBox& box,float availableWidth){
+    if(box.blockMarginsValid&&std::abs(box.blockMarginsReference-availableWidth)<0.01f){
+        BlockMarginMetrics result;
+        result.top.positive=box.marginTopPositive;result.top.negative=box.marginTopNegative;
+        result.bottom.positive=box.marginBottomPositive;result.bottom.negative=box.marginBottomNegative;
+        result.first=box.collapseFirstChildMargin;result.last=box.collapseLastChildMargin;
+        result.self=box.selfCollapsingMargins;return result;
+    }
+    const auto margin=EdgeValues(box.style,L"margin",availableWidth,availableWidth);
+    BlockMarginMetrics result;result.top=MarginStrut(margin.top);result.bottom=MarginStrut(margin.bottom);
+    const auto display=box.style.Get(L"display");
+    if((display==L"block"||display==L"list-item")&&
+       !EstablishesBlockFormattingContext(box)&&!IsBlockifiedItem(box)){
+        const auto padding=EdgeValues(box.style,L"padding",availableWidth,availableWidth);
+        const auto border=BorderValues(box.style);
+        const float outerWidth=BlockOuterWidth(box,availableWidth,availableWidth);
+        const float innerWidth=std::max(1.0f,outerWidth-margin.left-margin.right-
+            padding.left-padding.right-border.left-border.right);
+        std::vector<const LayoutBox*> flow;
+        for(const auto& child:box.children){
+            if(!child->visible||child->style.Is(L"position",L"absolute")||
+               child->style.Is(L"position",L"fixed")||UsedFloatSide(child->style)!=FloatSide::None)continue;
+            flow.push_back(child.get());
+        }
+        const auto adjoining=[](const LayoutBox& child){
+            return !IsInlineLevel(child.style.Get(L"display"))&&
+                child.style.Get(L"clear",L"none")==L"none";
+        };
+        result.first=padding.top==0&&border.top==0&&!flow.empty()&&adjoining(*flow.front());
+        const auto height=ToLower(Trim(box.style.Get(L"height",L"auto")));
+        result.last=padding.bottom==0&&border.bottom==0&&
+            (height.empty()||height==L"auto")&&!flow.empty()&&adjoining(*flow.back());
+        if(result.first){
+            for(const auto* child:flow){
+                if(!adjoining(*child))break;
+                const auto childMargins=CollapsedBlockMargins(*child,innerWidth);
+                result.top.Merge(childMargins.top);
+                if(!childMargins.self)break;
+                result.top.Merge(childMargins.bottom);
+            }
+        }
+        if(result.last){
+            for(auto it=flow.rbegin();it!=flow.rend();++it){
+                if(!adjoining(**it))break;
+                const auto childMargins=CollapsedBlockMargins(**it,innerWidth);
+                result.bottom.Merge(childMargins.bottom);
+                if(!childMargins.self)break;
+                result.bottom.Merge(childMargins.top);
+            }
+        }
+        const bool zeroHeight=height.empty()||height==L"auto"||
+            StyleSheet::Length(height,500,500,-1)==0;
+        result.self=zeroHeight&&StyleSheet::Length(box.style.Get(L"min-height"),500,500,0)<=0&&
+            padding.top==0&&padding.bottom==0&&border.top==0&&border.bottom==0&&
+            !ParticipatesInEditableContent(box.node);
+        for(const auto* child:flow)
+            if(!adjoining(*child)||!CollapsedBlockMargins(*child,innerWidth).self)result.self=false;
+        if(result.self){result.top.Merge(result.bottom);result.bottom=result.top;}
+    }
+    box.blockMarginsReference=availableWidth;box.blockMarginsValid=true;
+    box.marginTopPositive=result.top.positive;box.marginTopNegative=result.top.negative;
+    box.marginBottomPositive=result.bottom.positive;box.marginBottomNegative=result.bottom.negative;
+    box.collapseFirstChildMargin=result.first;box.collapseLastChildMargin=result.last;
+    box.selfCollapsingMargins=result.self;return result;
+}
+
+Edges UsedLayoutMargins(const LayoutBox& box,float reference,float viewport){
+    auto margin=EdgeValues(box.style,L"margin",reference,viewport);
+    if(box.node&&box.node->type==NodeType::Element){
+        const auto collapsed=CollapsedBlockMargins(box,reference);
+        margin.top=collapsed.top.Value();margin.bottom=collapsed.bottom.Value();
+    }
+    return margin;
+}
+
+struct BlockMarginFlow {
+    BlockMarginMetrics parent;
+    MarginStrut previousBottom,joinedTop;
+    bool atTop=true,previousBlock=false;
+    float Before(const BlockMarginMetrics& child,bool clearance=false){
+        joinedTop=child.top;
+        if(atTop&&parent.first&&!clearance)return -child.top.Value();
+        if(previousBlock&&!clearance){
+            joinedTop.Merge(previousBottom);
+            return joinedTop.Value()-previousBottom.Value()-child.top.Value();
+        }
+        return 0;
+    }
+    float After(const BlockMarginMetrics& child){
+        if(child.self){
+            if(atTop&&parent.first)return -child.bottom.Value();
+            auto joined=joinedTop;joined.Merge(child.bottom);
+            previousBottom=joined;previousBlock=true;
+            return joined.Value()-joinedTop.Value()-child.bottom.Value();
+        }
+        atTop=false;previousBlock=true;previousBottom=child.bottom;return 0;
+    }
+    void Separate(){atTop=false;previousBlock=false;previousBottom={};}
+    float Finish() const {return parent.last&&previousBlock?-previousBottom.Value():0;}
+};
+
 float BlockOuterHeight(const LayoutBox& box,float availableHeight,float availableWidth,
                        float viewportHeight,float viewportWidth){
-    const auto margin=EdgeValues(box.style,L"margin",availableWidth,viewportWidth);
+    const auto margin=UsedLayoutMargins(box,availableWidth,viewportWidth);
     const auto raw=box.style.Get(L"height");
     const bool borderBox=box.style.Is(L"box-sizing",L"border-box");
     const auto padding=EdgeValues(box.style,L"padding",availableWidth,viewportWidth);
@@ -1819,7 +2265,7 @@ float BlockOuterHeight(const LayoutBox& box,float availableHeight,float availabl
 }
 
 size_t GridColumnCount(const LayoutBox& box,float availableWidth){
-    const auto definition=box.style.Get(L"grid-template-columns",L"1fr");
+    const auto definition=box.style.Get(L"grid-template-columns",L"none");
     if(definition.find(L"repeat(auto-fit")!=std::wstring::npos||definition.find(L"repeat(auto-fill")!=std::wstring::npos){
         float minimum=320;const auto minmax=definition.find(L"minmax(");
         if(minmax!=std::wstring::npos){const auto comma=definition.find(L',',minmax);if(comma!=std::wstring::npos)minimum=StyleSheet::Length(definition.substr(minmax+7,comma-minmax-7),availableWidth,availableWidth,minimum);}
@@ -1951,7 +2397,8 @@ float NaturalWidth(const LayoutBox& box){
                                       box.preserveTrailingWhitespace,IsFormControlText(box));
         // Inline siblings need enough width for the final painted glyph. The
         // compressed Hangul advance alone can leave ink over the next span.
-        if(box.parent&&box.parent->style.Is(L"display",L"inline")&&
+        if(IsFormControlText(box)&&UsesAutomaticHangulFallback(box.style)&&
+           box.parent&&box.parent->style.Is(L"display",L"inline")&&
            box.parent->parent&&box.parent->parent->style.Is(L"display",L"inline")){
             const auto text=NormalizeText(box.node->text,false,box.preserveLeadingWhitespace,
                                           box.preserveTrailingWhitespace);
@@ -1965,9 +2412,17 @@ float NaturalWidth(const LayoutBox& box){
     // Percentages depend on the containing block and are indefinite during
     // intrinsic sizing.  Use the element's intrinsic contribution here; the
     // percentage is resolved later when the containing block is known.
-    if(!width.empty()&&width!=L"auto"&&normalizedWidth!=L"max-content"&&
-       width.find(L'%')==std::wstring::npos)
-        value=StyleSheet::Length(width,500,500,0);
+    const bool definiteWidth=!width.empty()&&width!=L"auto"&&normalizedWidth!=L"max-content"&&
+        width.find(L'%')==std::wstring::npos;
+    if(definiteWidth){
+        value=ConstrainIntrinsicWidth(box.style,
+            StyleSheet::Length(width,500,500,0,FontSize(box.style)),500);
+        const auto padding=EdgeValues(box.style,L"padding",500,500);
+        const auto border=BorderValues(box.style);
+        const float decoration=padding.left+padding.right+border.left+border.right;
+        value=box.style.Is(L"box-sizing",L"border-box")?std::max(decoration,value):
+            decoration+std::max(0.0f,value);
+    }
     else if(box.node->tag==L"input"&&(box.node->Attribute(L"type")==L"checkbox"||box.node->Attribute(L"type")==L"radio"))value=13;
     else if(box.node->tag==L"input")value=160;
     else if(box.node->tag==L"select"){
@@ -2011,6 +2466,10 @@ float NaturalWidth(const LayoutBox& box){
             value=StyleSheet::Length(height,500,500,150)*viewBox[2]/viewBox[3];
         else value=StyleSheet::Length(box.node->Attribute(L"width"),500,500,300);
     }
+    else if(box.style.Is(L"display",L"grid")||box.style.Is(L"display",L"inline-grid")){
+        const auto padding=EdgeValues(box.style,L"padding",500,500);const auto border=BorderValues(box.style);
+        value=NaturalGridWidth(box)+padding.left+padding.right+border.left+border.right;
+    }
     else if(box.node->tag==L"button"&&box.style.Get(L"display")!=L"grid"&&
             box.style.Get(L"display")!=L"inline-grid"){
         auto padding=EdgeValues(box.style,L"padding",500,500);auto border=BorderValues(box.style);
@@ -2029,7 +2488,10 @@ float NaturalWidth(const LayoutBox& box){
         value=content+padding.left+padding.right+border.left+border.right;
     }
     else{
-        const auto display=box.style.Get(L"display");const bool flex=display==L"flex"||display==L"inline-flex";const bool horizontal=IsInlineLevel(display)||display==L"table-row"||(flex&&!IsColumnFlexDirection(box.style));int visible=0;
+        const auto display=box.style.Get(L"display");const bool flex=display==L"flex"||display==L"inline-flex";
+        // The outer inline participation of inline-flex does not change its
+        // children's main axis. A column's intrinsic width is the widest item.
+        const bool horizontal=flex?!IsColumnFlexDirection(box.style):IsInlineLevel(display)||display==L"table-row";int visible=0;
         if(horizontal){
             float lineWidth=0;
             for(auto& c:box.children)if(c->visible&&!c->style.Is(L"position",L"absolute")&&!c->style.Is(L"position",L"fixed")){
@@ -2037,6 +2499,13 @@ float NaturalWidth(const LayoutBox& box){
                 lineWidth+=NaturalWidth(*c);++visible;
             }
             value=std::max(value,lineWidth);
+        }else if(flex){
+            // Column flex items form separate tracks even when their authored
+            // display is inline. Their intrinsic widths contribute by maximum.
+            for(const auto& child:box.children)if(child->visible&&
+                !child->style.Is(L"position",L"absolute")&&!child->style.Is(L"position",L"fixed")){
+                value=std::max(value,NaturalWidth(*child));++visible;
+            }
         }else{
             // The max-content width of normal block flow is the widest line,
             // not the widest individual inline child. Adjacent inline boxes
@@ -2058,13 +2527,15 @@ float NaturalWidth(const LayoutBox& box){
         if(flex&&horizontal)value+=GapValue(box.style,true,500,500)*std::max(0,visible-1);
         auto padding=EdgeValues(box.style,L"padding",500,500);auto border=BorderValues(box.style);value+=padding.left+padding.right+border.left+border.right;
     }
-    value=ConstrainIntrinsicWidth(box.style,value,500);auto margin=EdgeValues(box.style,L"margin",500,500);return remember(value+margin.left+margin.right);
+    if(!definiteWidth)value=ConstrainIntrinsicWidth(box.style,value,500);
+    auto margin=EdgeValues(box.style,L"margin",500,500);return remember(value+margin.left+margin.right);
 }
 
 std::vector<float> ResolveTableColumns(const LayoutBox& table,const TableGridModel& model,
                                        float availableWidth,float viewportWidth){
     if(!model.columnCount)return {};
     std::vector<float> explicitWidths(model.columnCount),preferredWidths(model.columnCount);
+    std::vector<float> percentageWidths(model.columnCount);
     size_t columnIndex=0;
     std::function<void(const std::shared_ptr<Node>&)> collectColumns=
         [&](const std::shared_ptr<Node>& node){
@@ -2111,9 +2582,19 @@ std::vector<float> ResolveTableColumns(const LayoutBox& table,const TableGridMod
         // a fluid text column).
         if((raw.empty()||raw==L"auto")&&cell.box->node)
             raw=Trim(cell.box->node->Attribute(L"width"));
-        if(!raw.empty()&&raw!=L"auto")
-            distributeDeficit(explicitWidths,cell,
-                StyleSheet::Length(raw,availableWidth,viewportWidth,0),nullptr);
+        if(!raw.empty()&&raw!=L"auto"){
+            float required=StyleSheet::Length(raw,availableWidth,viewportWidth,0);
+            if(fixed&&!cell.box->style.Is(L"box-sizing",L"border-box")){
+                const auto padding=EdgeValues(cell.box->style,L"padding",availableWidth,viewportWidth);
+                const auto border=BorderValues(cell.box->style);
+                required+=padding.left+padding.right+border.left+border.right;
+            }
+            const auto previous=explicitWidths;
+            distributeDeficit(explicitWidths,cell,required,nullptr);
+            if(fixed&&raw.find(L'%')!=std::wstring::npos)
+                for(size_t column=cell.column;column<std::min(model.columnCount,cell.column+cell.columnSpan);++column)
+                    percentageWidths[column]+=explicitWidths[column]-previous[column];
+        }
     }
     const bool collapsedBorders=table.style.Is(L"border-collapse",L"collapse");
     if(!fixed)for(const auto& cell:model.cells){
@@ -2133,6 +2614,16 @@ std::vector<float> ResolveTableColumns(const LayoutBox& table,const TableGridMod
     for(size_t column=0;column<result.size();++column){
         assigned+=result[column];
         if(result[column]<=0){++automatic;preferred+=preferredWidths[column];}
+    }
+    if(fixed&&assigned>availableWidth){
+        const float percentages=std::accumulate(percentageWidths.begin(),percentageWidths.end(),0.0f);
+        const float definite=assigned-percentages;
+        if(percentages>0&&definite<availableWidth){
+            const float ratio=(availableWidth-definite)/percentages;
+            for(size_t column=0;column<result.size();++column)
+                result[column]-=percentageWidths[column]*(1.0f-ratio);
+            assigned=availableWidth;
+        }
     }
     if(automatic){
         const float remaining=std::max(0.0f,availableWidth-assigned);
@@ -2170,7 +2661,7 @@ float MinContentWidth(const LayoutBox& box){
        box.node->tag==L"img"||box.node->tag==L"iframe"||box.node->tag==L"embed"||
        box.node->tag==L"object"||box.node->tag==L"video")return remember(NaturalWidth(box));
     const auto display=box.style.Get(L"display");const bool flex=display==L"flex"||display==L"inline-flex";
-    const bool horizontal=IsInlineLevel(display)||display==L"table-row"||(flex&&!IsColumnFlexDirection(box.style));
+    const bool horizontal=flex?!IsColumnFlexDirection(box.style):IsInlineLevel(display)||display==L"table-row";
     const auto flexWrap=ToLower(Trim(box.style.Get(L"flex-wrap",L"nowrap")));
     const bool wraps=flex&&horizontal&&(flexWrap==L"wrap"||flexWrap==L"wrap-reverse");
     float value=0;int visible=0;
@@ -2204,6 +2695,7 @@ float NaturalGridHeight(const LayoutBox& box,float availableWidth);
 
 float NaturalHeight(const LayoutBox& box,float availableWidth=500){
     if(box.naturalHeightValid&&std::abs(box.naturalHeightReference-availableWidth)<0.01f)return box.naturalHeight;
+    box.naturalFloatBottom=0;
     auto remember=[&](float result){box.naturalHeightReference=availableWidth;box.naturalHeight=result;box.naturalHeightValid=true;return result;};
     // Ordinary text inherits font/line formatting, not element box edges or
     // size constraints. Match LayoutBoxTree's text path during intrinsic sizing.
@@ -2211,6 +2703,7 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
         return remember(TextHeight(box.node->text,box.style,availableWidth,
             box.preserveLeadingWhitespace,box.preserveTrailingWhitespace));
     auto height=box.style.Get(L"height");float value=0;
+    if(box.style.Is(L"display",L"inline")&&!IsAtomicInlineLevel(box)&&!IsBlockifiedItem(box))height=L"auto";
     if(!height.empty()&&height!=L"auto"&&height.find(L'%')==std::wstring::npos){
         value=StyleSheet::Length(height,500,500,20);
         if(!box.style.Is(L"box-sizing",L"border-box")){
@@ -2279,7 +2772,7 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
         }else{
             const bool flex=display==L"flex"||display==L"inline-flex";
             const bool row=(flex&&!IsColumnFlexDirection(box.style))||
-                (IsInlineLevel(display)&&!IsBlockifiedItem(box))||display==L"table-row";
+                (IsInlineLevel(display)&&!IsBlockifiedItem(box)&&!HasInFlowBlockChildren(box))||display==L"table-row";
             int visible=0;
             const auto flexWrap=ToLower(Trim(box.style.Get(L"flex-wrap",L"nowrap")));
             if(flex&&row&&(flexWrap==L"wrap"||flexWrap==L"wrap-reverse")){
@@ -2314,7 +2807,7 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
                         // width. Passing the entire line width can expand an auto-
                         // height icon to the width of its link or table cell.
                         const float childWidth=std::max(1.0f,
-                            std::min(NaturalWidth(*child),innerWidth));
+                            HasInFlowBlockChildren(*child)?innerWidth:std::min(NaturalWidth(*child),innerWidth));
                         lineHeight=std::max(lineHeight,NaturalHeight(*child,childWidth));
                     }
                     else value+=NaturalHeight(*child,innerWidth);
@@ -2332,6 +2825,7 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
                     // with auto height encloses their margin boxes.
                     std::vector<FloatArea> floats;
                     float cursor=0,lineWidth=0,lineHeight=0,lineStart=0,maxFloatBottom=0;
+                    BlockMarginFlow marginFlow; marginFlow.parent=CollapsedBlockMargins(box,availableWidth);
                     auto flushLine=[&]{
                         cursor+=lineHeight;lineWidth=0;lineHeight=0;lineStart=0;
                     };
@@ -2340,25 +2834,31 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
                            child->style.Is(L"position",L"fixed"))continue;
                         const auto side=UsedFloatSide(child->style);
                         if(side!=FloatSide::None){
-                            if(lineWidth>0||lineHeight>0)flushLine();
                             const float childWidth=FloatOuterWidth(*child,innerWidth,availableWidth);
                             const float childHeight=NaturalHeight(*child,std::max(1.0f,childWidth));
+                            float left=0,right=innerWidth,nextBottom=0;
+                            AvailableFloatBand(floats,0,innerWidth,cursor,left,right,nextBottom);
+                            if(lineHeight>0&&(childWidth+lineWidth>right-left+0.01f||
+                               ClearedFloatY(floats,cursor,child->style.Get(L"clear"))>cursor+0.01f))flushLine();
                             const auto placed=PlaceFloat(floats,0,innerWidth,cursor,childWidth,
                                 childHeight,side,child->style.Get(L"clear"));
+                            if(lineHeight>0&&side==FloatSide::Left)lineStart+=childWidth;
                             floats.push_back({placed,side});
                             maxFloatBottom=std::max(maxFloatBottom,placed.y+placed.height);
                             continue;
                         }
                         cursor=ClearedFloatY(floats,cursor,child->style.Get(L"clear"));
                         if(child->node->tag==L"br"){
+                            marginFlow.Separate();
                             if(lineWidth>0||lineHeight>0)flushLine();
                             else cursor+=LineHeight(child->style);
                             continue;
                         }
                         if(IsInlineLevel(child->style.Get(L"display"))){
+                            marginFlow.Separate();
                             float left=0,right=innerWidth,nextBottom=0;
                             AvailableFloatBand(floats,0,innerWidth,cursor,left,right,nextBottom);
-                            const float childWidth=NaturalWidth(*child);
+                            const float childWidth=HasInFlowBlockChildren(*child)?innerWidth:NaturalWidth(*child);
                             if(lineWidth==0)lineStart=left;
                             if(lineStart+lineWidth+childWidth>right+0.5f){
                                 if(lineWidth>0||lineHeight>0)flushLine();
@@ -2374,16 +2874,19 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
                                 (atomic?InlineFormattingDescent(box.style):0.0f)));
                         }else{
                             if(lineWidth>0||lineHeight>0)flushLine();
+                            const auto childMargins=CollapsedBlockMargins(*child,innerWidth);
+                            cursor+=marginFlow.Before(childMargins,child->style.Get(L"clear",L"none")!=L"none");
                             float left=0,right=innerWidth,nextBottom=0;
                             AvailableFloatBand(floats,0,innerWidth,cursor,left,right,nextBottom);
                             if(right<=left+0.01f&&std::isfinite(nextBottom)){
                                 cursor=nextBottom;
                                 AvailableFloatBand(floats,0,innerWidth,cursor,left,right,nextBottom);
                             }
-                            cursor+=NaturalHeight(*child,std::max(1.0f,right-left));
+                            cursor+=NaturalHeight(*child,std::max(1.0f,right-left))+marginFlow.After(childMargins);
                         }
                     }
                     if(lineWidth>0||lineHeight>0)flushLine();
+                    cursor+=marginFlow.Finish();
                     value=cursor;
                     if(EstablishesBlockFormattingContext(box))value=std::max(value,maxFloatBottom);
                 }else{
@@ -2391,17 +2894,24 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
                     // A <br> flushes the current line, and consecutive breaks add
                     // an empty line instead of behaving like a tall empty block.
                     float lineWidth=0,lineHeight=0;
-                    auto flushLine=[&]{value+=lineHeight;lineWidth=0;lineHeight=0;};
+                    auto lineMetrics=InitialInlineLineMetrics(box);
+                    BlockMarginFlow marginFlow; marginFlow.parent=CollapsedBlockMargins(box,availableWidth);
+                    auto flushLine=[&]{
+                        value+=lineHeight;lineWidth=0;lineHeight=0;
+                        lineMetrics=InitialInlineLineMetrics(box);
+                    };
                     for(auto& child:box.children){
                         if(!child->visible||child->style.Is(L"position",L"absolute")||
                            child->style.Is(L"position",L"fixed"))continue;
                         if(child->node->tag==L"br"){
+                            marginFlow.Separate();
                             if(lineWidth>0||lineHeight>0)flushLine();
                             else value+=LineHeight(child->style);
                             continue;
                         }
                         if(IsInlineLevel(child->style.Get(L"display"))){
-                            const float childWidth=NaturalWidth(*child);
+                            marginFlow.Separate();
+                            const float childWidth=HasInFlowBlockChildren(*child)?innerWidth:NaturalWidth(*child);
                             if(lineWidth>0&&lineWidth+childWidth>innerWidth+0.5f)flushLine();
                             lineWidth+=std::min(childWidth,innerWidth);
                             const bool atomic=IsAtomicInlineLevel(*child);
@@ -2420,14 +2930,18 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
                             // with the containing block's font and line-height. A
                             // line made only from smaller inline descendants must
                             // therefore not collapse below the parent's line box.
-                            lineHeight=std::max(LineHeight(box.style),std::max(lineHeight,
-                                childHeight+(atomic?InlineFormattingDescent(box.style):0.0f)));
+                            IncludeInlineLineBox(lineMetrics,box.style,*child,childHeight,
+                                                 innerWidth,availableWidth);
+                            lineHeight=lineMetrics.Height();
                         }else{
                             if(lineWidth>0||lineHeight>0)flushLine();
-                            value+=NaturalHeight(*child,innerWidth);
+                            const auto childMargins=CollapsedBlockMargins(*child,innerWidth);
+                            value+=marginFlow.Before(childMargins,child->style.Get(L"clear",L"none")!=L"none");
+                            value+=NaturalHeight(*child,innerWidth)+marginFlow.After(childMargins);
                         }
                     }
                     if(lineWidth>0||lineHeight>0)flushLine();
+                    value+=marginFlow.Finish();
                 }
             }
         }
@@ -2446,23 +2960,62 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
     const bool automaticHeight=height.empty()||height==L"auto";
     if(automaticHeight&&box.node->type==NodeType::Element&&display==L"inline"&&
        !IsAtomicInlineLevel(box)&&!IsBlockifiedItem(box)&&
-       UsesGenericMonospaceMetrics(box.style)&&
        box.node->InnerText().find(L'\n')==std::wstring::npos&&
        NaturalWidth(box)<=availableWidth+0.5f){
         const auto padding=EdgeValues(box.style,L"padding",availableWidth,availableWidth);
         const auto border=BorderValues(box.style);
-        value=InlineContentBoxHeight(box.style)+padding.top+padding.bottom+
-            border.top+border.bottom;
+        const float decoration=padding.top+padding.bottom+border.top+border.bottom;
+        if(value<=LineHeight(box.style)+decoration+0.01f)
+            value=InlineContentBoxHeight(box.style)+decoration;
     }
     // Percentage block-size constraints are indefinite during intrinsic
     // measurement. Resolve them later from a definite containing block rather
     // than from this routine's measurement fallback.
-    value=ConstrainIntrinsicHeight(box.style,value,500);auto margin=EdgeValues(box.style,L"margin",availableWidth,availableWidth);return remember(value+margin.top+margin.bottom);
+    const auto margin=UsedLayoutMargins(box,availableWidth,availableWidth);
+    const bool normalFlow=display!=L"flex"&&display!=L"inline-flex"&&display!=L"grid"&&
+        display!=L"inline-grid"&&display!=L"table"&&display!=L"table-row"&&display!=L"table-row-group";
+    if(normalFlow&&!box.children.empty()){
+        const auto padding=EdgeValues(box.style,L"padding",availableWidth,availableWidth);
+        const auto border=BorderValues(box.style);
+        const float innerWidth=std::max(1.0f,availableWidth-padding.left-padding.right-border.left-border.right);
+        float cursor=0,lineWidth=0,lineHeight=0,floatBottom=0;
+        std::vector<FloatArea> floats;
+        BlockMarginFlow marginFlow;marginFlow.parent=CollapsedBlockMargins(box,availableWidth);
+        for(const auto& child:box.children){
+            if(!child->visible||child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed"))continue;
+            const auto side=UsedFloatSide(child->style);
+            if(side!=FloatSide::None){
+                const auto width=FloatOuterWidth(*child,innerWidth,availableWidth);
+                const auto floatHeight=NaturalHeight(*child,std::max(1.0f,width));
+                const auto placed=PlaceFloat(floats,0,innerWidth,cursor,width,floatHeight,side,child->style.Get(L"clear"));
+                floats.push_back({placed,side});floatBottom=std::max(floatBottom,placed.y+placed.height);continue;
+            }
+            const bool inlineChild=IsInlineLevel(child->style.Get(L"display"))&&!HasInFlowBlockChildren(*child);
+            const auto width=inlineChild?std::min(innerWidth,NaturalWidth(*child)):innerWidth;
+            const auto childHeight=NaturalHeight(*child,std::max(1.0f,width));
+            if(inlineChild){
+                marginFlow.Separate();
+                if(lineWidth>0&&lineWidth+width>innerWidth+0.5f){cursor+=lineHeight;lineWidth=lineHeight=0;}
+                if(!EstablishesBlockFormattingContext(*child))floatBottom=std::max(floatBottom,cursor+child->naturalFloatBottom);
+                lineWidth+=width;lineHeight=std::max(lineHeight,childHeight);
+            }else{
+                cursor+=lineHeight;lineWidth=lineHeight=0;
+                const auto childMargins=CollapsedBlockMargins(*child,innerWidth);
+                cursor+=marginFlow.Before(childMargins,child->style.Get(L"clear",L"none")!=L"none");
+                if(!EstablishesBlockFormattingContext(*child))floatBottom=std::max(floatBottom,cursor+child->naturalFloatBottom);
+                cursor+=childHeight+marginFlow.After(childMargins);
+            }
+        }
+        if(automaticHeight&&EstablishesBlockFormattingContext(box))
+            value=std::max(value,padding.top+border.top+floatBottom+padding.bottom+border.bottom);
+        box.naturalFloatBottom=margin.top+padding.top+border.top+floatBottom;
+    }
+    value=ConstrainIntrinsicHeight(box.style,value,500);return remember(value+margin.top+margin.bottom);
 }
 
 std::vector<float> ResolveTableRows(const TableGridModel& model,
                                     const std::vector<float>& columns){
-    std::vector<float> rows(model.rows.size(),20.0f);
+    std::vector<float> rows(model.rows.size(),0.0f);
     for(size_t row=0;row<model.rows.size();++row){
         const auto raw=Trim(model.rows[row].box->style.Get(L"height"));
         if(!raw.empty()&&raw!=L"auto"&&raw.find(L'%')==std::wstring::npos)
@@ -2502,23 +3055,97 @@ std::vector<float> ResolveTableRows(const TableGridModel& model,
     return rows;
 }
 
+bool IsAutomaticInset(const std::wstring& value){
+    const auto normalized=ToLower(Trim(value));
+    return normalized.empty()||normalized==L"auto";
+}
+
 LayoutRect PositionedRect(const LayoutBox& box,const LayoutRect& area,float viewportWidth,float viewportHeight){
     const auto leftRaw=box.style.Get(L"left"),rightRaw=box.style.Get(L"right");
     const auto topRaw=box.style.Get(L"top"),bottomRaw=box.style.Get(L"bottom");
+    const bool autoLeft=IsAutomaticInset(leftRaw),autoRight=IsAutomaticInset(rightRaw);
+    const bool autoTop=IsAutomaticInset(topRaw),autoBottom=IsAutomaticInset(bottomRaw);
     const float left=StyleSheet::Length(leftRaw,area.width,viewportWidth,0);
     const float right=StyleSheet::Length(rightRaw,area.width,viewportWidth,0);
     const float top=StyleSheet::Length(topRaw,area.height,viewportHeight,0);
     const float bottom=StyleSheet::Length(bottomRaw,area.height,viewportHeight,0);
     const auto widthRaw=box.style.Get(L"width"),heightRaw=box.style.Get(L"height");
+    const auto padding=EdgeValues(box.style,L"padding",area.width,viewportWidth);
+    const auto border=BorderValues(box.style);
+    const bool borderBox=box.style.Is(L"box-sizing",L"border-box");
+    const float decorationWidth=padding.left+padding.right+border.left+border.right;
+    const float decorationHeight=padding.top+padding.bottom+border.top+border.bottom;
     float width=NaturalWidth(box);
-    if(!widthRaw.empty()&&widthRaw!=L"auto")width=StyleSheet::Length(widthRaw,area.width,viewportWidth,width);
-    else if(!leftRaw.empty()&&!rightRaw.empty())width=std::max(0.0f,area.width-left-right);
+    if(!widthRaw.empty()&&widthRaw!=L"auto"){
+        width=StyleSheet::Length(widthRaw,area.width,viewportWidth,width);
+        width=borderBox?std::max(width,decorationWidth):width+decorationWidth;
+    }
+    else if(!autoLeft&&!autoRight)width=std::max(0.0f,area.width-left-right);
     float height=NaturalHeight(box,width);
-    if(!heightRaw.empty()&&heightRaw!=L"auto")height=StyleSheet::Length(heightRaw,area.height,viewportHeight,height);
-    else if(!topRaw.empty()&&!bottomRaw.empty())height=std::max(0.0f,area.height-top-bottom);
-    const float x=!leftRaw.empty()?area.x+left:(!rightRaw.empty()?area.x+area.width-right-width:area.x);
-    const float y=!topRaw.empty()?area.y+top:(!bottomRaw.empty()?area.y+area.height-bottom-height:area.y);
+    if(!heightRaw.empty()&&heightRaw!=L"auto"){
+        height=StyleSheet::Length(heightRaw,area.height,viewportHeight,height);
+        height=borderBox?std::max(height,decorationHeight):height+decorationHeight;
+    }
+    else if(!autoTop&&!autoBottom)height=std::max(0.0f,area.height-top-bottom);
+    const float x=!autoLeft?area.x+left:(!autoRight?area.x+area.width-right-width:area.x);
+    const float y=!autoTop?area.y+top:(!autoBottom?area.y+area.height-bottom-height:area.y);
     return {x,y,std::max(0.0f,width),std::max(0.0f,height)};
+}
+
+float SingleFlexItemOffset(const std::wstring& rawAlignment,float freeSpace,
+                           bool flexAxisReversed,bool horizontal){
+    const auto alignment=AlignmentKeyword(rawAlignment);
+    if(alignment==L"center"||alignment==L"space-around"||
+       alignment==L"space-evenly")return freeSpace/2.0f;
+    if(alignment==L"right"&&horizontal)return freeSpace;
+    if(alignment==L"left"&&horizontal)return 0;
+    if(alignment==L"flex-end")return flexAxisReversed?0:freeSpace;
+    if(alignment==L"flex-start"||alignment==L"normal"||
+       alignment==L"stretch"||alignment==L"space-between")
+        return flexAxisReversed?freeSpace:0;
+    if(alignment==L"end"||alignment==L"self-end")return freeSpace;
+    return 0;
+}
+
+LayoutRect FlexStaticPositionedRect(const LayoutBox& container,const LayoutBox& child,
+                                    LayoutRect positioned){
+    const auto direction=ToLower(Trim(container.style.Get(L"flex-direction",L"row")));
+    const bool column=direction==L"column"||direction==L"column-reverse";
+    const bool mainReversed=direction==L"row-reverse"||direction==L"column-reverse";
+    const bool crossReversed=ToLower(Trim(container.style.Get(L"flex-wrap",L"nowrap")))==
+        L"wrap-reverse";
+    const bool autoLeft=IsAutomaticInset(child.style.Get(L"left"));
+    const bool autoRight=IsAutomaticInset(child.style.Get(L"right"));
+    const bool autoTop=IsAutomaticInset(child.style.Get(L"top"));
+    const bool autoBottom=IsAutomaticInset(child.style.Get(L"bottom"));
+    auto alignSelf=child.style.Get(L"align-self",L"auto");
+    if(AlignmentKeyword(alignSelf)==L"auto")
+        alignSelf=container.style.Get(L"align-items",L"stretch");
+
+    // An out-of-flow flex child with automatic insets keeps the static
+    // position it would have as the container's sole flex item. Distributed
+    // main-axis alignment therefore centers a single item for space-around
+    // and space-evenly, while space-between falls back to flex-start. Use the
+    // content box for this hypothetical placement; explicit insets continue
+    // to resolve against the positioned ancestor's padding box.
+    if(!column){
+        if(autoLeft&&autoRight)
+            positioned.x=container.content.x+SingleFlexItemOffset(
+                container.style.Get(L"justify-content",L"normal"),
+                container.content.width-positioned.width,mainReversed,true);
+        if(autoTop&&autoBottom)
+            positioned.y=container.content.y+SingleFlexItemOffset(
+                alignSelf,container.content.height-positioned.height,crossReversed,false);
+    }else{
+        if(autoTop&&autoBottom)
+            positioned.y=container.content.y+SingleFlexItemOffset(
+                container.style.Get(L"justify-content",L"normal"),
+                container.content.height-positioned.height,mainReversed,false);
+        if(autoLeft&&autoRight)
+            positioned.x=container.content.x+SingleFlexItemOffset(
+                alignSelf,container.content.width-positioned.width,crossReversed,true);
+    }
+    return positioned;
 }
 
 LayoutRect PositionedPaddingBox(const LayoutBox& box){
@@ -2533,12 +3160,19 @@ LayoutRect PositionedPaddingBox(const LayoutBox& box){
 }
 
 const LayoutBox* AbsoluteContainingBlockAncestor(const LayoutBox& box){
-    // An absolutely positioned box is not generally positioned against its
-    // immediate DOM parent. Walk to the nearest positioned ancestor; if there
-    // is none, CSS uses the initial containing block (the viewport).
-    for(auto ancestor=box.parent;ancestor;ancestor=ancestor->parent)
-        if(ToLower(Trim(ancestor->style.Get(L"position",L"static")))!=L"static")
+    // Even an identity transform establishes a padding-box containing block.
+    // Fixed descendants skip ordinary positioned ancestors, but share the
+    // transformed ancestor's coordinate system with absolute descendants.
+    const bool fixed=box.style.Is(L"position",L"fixed");
+    for(auto ancestor=box.parent;ancestor;ancestor=ancestor->parent){
+        const auto transform=ToLower(Trim(ancestor->style.Get(L"transform",L"none")));
+        const bool transformable=!ancestor->style.Is(L"display",L"inline")||
+            IsAtomicInlineLevel(*ancestor)||IsBlockifiedItem(*ancestor)||
+            ancestor->style.Is(L"position",L"absolute")||ancestor->style.Is(L"position",L"fixed");
+        if((transformable&&!transform.empty()&&transform!=L"none")||
+           (!fixed&&ToLower(Trim(ancestor->style.Get(L"position",L"static")))!=L"static"))
             return ancestor;
+    }
     return nullptr;
 }
 
@@ -3063,8 +3697,29 @@ GridContentDistribution DistributeGridContent(const std::wstring& source,float a
     return result;
 }
 
+float NaturalGridWidth(const LayoutBox& box){
+    const auto definitions=ExpandGridTracks(box.style.Get(L"grid-template-columns",L"none"),box,0);
+    const auto rowDefinitions=ExpandGridTracks(box.style.Get(L"grid-template-rows"),box,0);
+    size_t areaRows=0,areaColumns=0;const auto areas=ParseGridAreas(box.style.Get(L"grid-template-areas"),areaRows,areaColumns);
+    size_t columns=std::max<size_t>(1,std::max(definitions->size(),areaColumns)),usedRows=0;
+    const auto items=PlaceGridItems(box,areas,std::max(areaRows,rowDefinitions->size()),columns,usedRows);
+    const auto gap=GapValue(box.style,true,0,500);
+    auto tracks=ResolveGridTracks(*definitions,columns,0,gap,500,items,true,{},false,false);
+    float fraction=0;
+    for(size_t index=0;index<tracks.size();++index){
+        const auto sizing=ParseGridTrack(index<definitions->size()?(*definitions)[index]:L"auto",0,500);
+        if(sizing.fraction>0)fraction=std::max(fraction,tracks[index]/sizing.fraction);
+    }
+    float width=gap*std::max(0,static_cast<int>(tracks.size())-1);
+    for(size_t index=0;index<tracks.size();++index){
+        const auto sizing=ParseGridTrack(index<definitions->size()?(*definitions)[index]:L"auto",0,500);
+        width+=sizing.fraction>0?std::max(tracks[index],fraction*sizing.fraction):tracks[index];
+    }
+    return width;
+}
+
 float NaturalGridHeight(const LayoutBox& box,float availableWidth) {
-    const auto columnDefinitions=ExpandGridTracks(box.style.Get(L"grid-template-columns",L"1fr"),box,availableWidth);
+    const auto columnDefinitions=ExpandGridTracks(box.style.Get(L"grid-template-columns",L"none"),box,availableWidth);
     const auto rowDefinitions=ExpandGridTracks(box.style.Get(L"grid-template-rows"),box,0);
     size_t areaRows=0,areaColumns=0;const auto areas=ParseGridAreas(box.style.Get(L"grid-template-areas"),areaRows,areaColumns);
     size_t columnCount=std::max<size_t>(1,std::max(columnDefinitions->size(),areaColumns));
@@ -3621,10 +4276,10 @@ void ApplyScrollOffset(LayoutBox& box,float oldScrollLeft,float oldScrollTop,flo
         if(box.scrollTraversalCached){
             for(auto* child:box.scrollTranslationBoxes)TranslateBoxGeometry(*child,dx,dy);
             for(auto* child:box.scrollStickyChildren){
-                ShiftStickyFlow(*child,dy);ApplySticky(*child,box.content.y,viewportHeight);
+                ShiftStickyFlow(*child,dy);ApplySticky(*child,PaddingBox(box).y,viewportHeight);
             }
         }else{
-            for(auto& child:box.children)if(!child->style.Is(L"position",L"fixed")){ShiftStickyFlow(*child,dy);TranslateBox(*child,dx,dy);if(child->containsSticky)ApplySticky(*child,box.content.y,viewportHeight);}
+            for(auto& child:box.children)if(!child->style.Is(L"position",L"fixed")){ShiftStickyFlow(*child,dy);TranslateBox(*child,dx,dy);if(child->containsSticky)ApplySticky(*child,PaddingBox(box).y,viewportHeight);}
         }
         for(auto* ancestor=&box;ancestor;ancestor=ancestor->parent)UpdateSubtreeBounds(*ancestor);
     }
@@ -3642,11 +4297,13 @@ std::vector<float> SvgNumbers(const std::wstring& source){
     return values;
 }
 
-Microsoft::WRL::ComPtr<ID2D1PathGeometry> SvgPath(ID2D1Factory* factory,const std::wstring& data){
+Microsoft::WRL::ComPtr<ID2D1PathGeometry> SvgPath(ID2D1Factory* factory,const std::wstring& data,
+                                             D2D1_FILL_MODE fillMode=D2D1_FILL_MODE_WINDING){
     Microsoft::WRL::ComPtr<ID2D1PathGeometry> path;
     if(!factory||FAILED(factory->CreatePathGeometry(&path)))return {};
     Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
     if(FAILED(path->Open(&sink)))return {};
+    sink->SetFillMode(fillMode);
     size_t position=0;wchar_t command=0,previous=0;bool open=false;
     D2D1_POINT_2F point{0,0},begin{0,0},cubic{0,0},quadratic{0,0};
     auto read=[&](float& value){
@@ -3734,32 +4391,169 @@ std::shared_ptr<Node> SvgUseTarget(const std::shared_ptr<Node>& use){
     return !reference.empty()&&reference.front()==L'#'?FindSvgReference(use,reference.substr(1)):std::shared_ptr<Node>{};
 }
 
+D2D1::Matrix3x2F SvgLocalTransform(const std::shared_ptr<Node>& node){
+    auto result=D2D1::Matrix3x2F::Identity();const auto source=node->Attribute(L"transform");
+    size_t start=0;
+    while(start<source.size()){
+        const auto open=source.find(L'(',start),close=source.find(L')',open);
+        if(open==std::wstring::npos||close==std::wstring::npos)break;
+        const auto name=Trim(source.substr(start,open-start));const auto v=SvgNumbers(source.substr(open+1,close-open-1));
+        auto local=D2D1::Matrix3x2F::Identity();
+        if(name==L"matrix"&&v.size()==6)local={v[0],v[1],v[2],v[3],v[4],v[5]};
+        else if(name==L"translate"&&!v.empty())local=D2D1::Matrix3x2F::Translation(v[0],v.size()>1?v[1]:0);
+        else if(name==L"scale"&&!v.empty())local=D2D1::Matrix3x2F::Scale(v[0],v.size()>1?v[1]:v[0]);
+        else if(name==L"rotate"&&!v.empty())local=D2D1::Matrix3x2F::Rotation(v[0],v.size()>2?D2D1::Point2F(v[1],v[2]):D2D1::Point2F());
+        else if(name==L"skewX"&&!v.empty())local=D2D1::Matrix3x2F::Skew(v[0],0);
+        else if(name==L"skewY"&&!v.empty())local=D2D1::Matrix3x2F::Skew(0,v[0]);
+        result=local*result;start=close+1;
+        while(start<source.size()&&(std::iswspace(source[start])||source[start]==L','))++start;
+    }
+    return result;
+}
+
+Microsoft::WRL::ComPtr<IDWriteTextLayout> SvgTextLayout(
+        const std::shared_ptr<Node>& node,StyleSheet& styles,
+        const ComputedStyle& style,IDWriteFactory* factory){
+    struct Run { UINT32 start=0,length=0;ComputedStyle style; };
+    std::wstring text;std::vector<Run> runs;bool pendingSpace=false;
+    const auto append=[&](wchar_t character,const ComputedStyle& runStyle){
+        const auto offset=static_cast<UINT32>(text.size());text+=character;
+        if(!runs.empty()&&runs.back().style.values==runStyle.values)++runs.back().length;
+        else runs.push_back({offset,1,runStyle});
+    };
+    std::function<void(const std::shared_ptr<Node>&,const ComputedStyle&)> collect=
+        [&](const std::shared_ptr<Node>& current,const ComputedStyle& inherited){
+        if(current->type==NodeType::Text){
+            const auto whitespace=inherited.Get(L"white-space",L"normal");
+            const bool preserve=whitespace==L"pre"||whitespace==L"pre-wrap"||whitespace==L"break-spaces";
+            for(const auto character:current->text){
+                const bool collapsible=character==L' '||character==L'\t'||character==L'\r'||character==L'\n'||character==L'\f';
+                if(!preserve&&collapsible){pendingSpace=!text.empty();continue;}
+                if(pendingSpace){append(L' ',inherited);pendingSpace=false;}
+                append(character,inherited);
+            }
+        }else if(current->type==NodeType::Element){
+            const auto computed=current==node?style:styles.Compute(current,&inherited);
+            if(computed.Is(L"display",L"none"))return;
+            for(const auto& child:current->children)
+                if(child->type==NodeType::Text||child->tag==L"tspan"||ToLower(child->tag)==L"textpath"||child->tag==L"a")collect(child,computed);
+        }
+    };
+    collect(node,style);
+    Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
+    const auto format=TextFormat(factory,style);
+    if(!format||FAILED(factory->CreateTextLayout(text.c_str(),static_cast<UINT32>(text.size()),
+            format.Get(),1000000,1000000,&layout)))return {};
+    layout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    Microsoft::WRL::ComPtr<IDWriteTextLayout1> extended;layout.As(&extended);
+    for(const auto& run:runs){
+        const DWRITE_TEXT_RANGE range{run.start,run.length};
+        layout->SetFontFamilyName(FontFamily(run.style).c_str(),range);
+        layout->SetFontSize(FontSize(run.style),range);
+        layout->SetFontWeight(static_cast<DWRITE_FONT_WEIGHT>(FontWeight(run.style)),range);
+        layout->SetFontStyle(run.style.Is(L"font-style",L"italic")?DWRITE_FONT_STYLE_ITALIC:
+            run.style.Is(L"font-style",L"oblique")?DWRITE_FONT_STYLE_OBLIQUE:DWRITE_FONT_STYLE_NORMAL,range);
+        if(extended){
+            const float spacing=StyleSheet::Length(run.style.Get(L"letter-spacing",L"0"),
+                FontSize(run.style),FontSize(run.style),0,FontSize(run.style));
+            extended->SetCharacterSpacing(0,spacing,0,range);
+        }
+    }
+    return layout;
+}
+
+bool MeasureSvgObject(const std::shared_ptr<Node>& node,StyleSheet& styles,
+                      const ComputedStyle* parentStyle,ID2D1Factory* factory,IDWriteFactory* writeFactory,
+                      const D2D1::Matrix3x2F& transform,D2D1_RECT_F& total,bool& hasBounds,
+                      bool includeTransform=false,unsigned depth=0){
+    if(!node||node->type!=NodeType::Element||depth>32)return false;
+    const auto style=styles.Compute(node,parentStyle);
+    const auto matrix=includeTransform?SvgLocalTransform(node)*transform:transform;
+    auto number=[&](const wchar_t* name,float fallback=0){return StyleSheet::Length(node->Attribute(name),24,FontSize(style),fallback);};
+    const auto merge=[&](const D2D1_RECT_F& b){
+        if(!std::isfinite(b.left)||!std::isfinite(b.top)||!std::isfinite(b.right)||!std::isfinite(b.bottom)||b.right<b.left||b.bottom<b.top)return;
+        if(!hasBounds){total=b;hasBounds=true;}
+        else{total.left=std::min(total.left,b.left);total.top=std::min(total.top,b.top);total.right=std::max(total.right,b.right);total.bottom=std::max(total.bottom,b.bottom);}
+    };
+    Microsoft::WRL::ComPtr<ID2D1Geometry> geometry;
+    if(node->tag==L"path")geometry=SvgPath(factory,node->Attribute(L"d"));
+    else if(node->tag==L"rect"||node->tag==L"image"){
+        const float x=number(L"x"),y=number(L"y"),w=number(L"width"),h=number(L"height");
+        if(w>0&&h>0){Microsoft::WRL::ComPtr<ID2D1RectangleGeometry> rect;factory->CreateRectangleGeometry(D2D1::RectF(x,y,x+w,y+h),&rect);geometry=rect;}
+    }else if(node->tag==L"circle"||node->tag==L"ellipse"){
+        const float rx=number(node->tag==L"circle"?L"r":L"rx"),ry=node->tag==L"circle"?rx:number(L"ry");
+        if(rx>0&&ry>0){Microsoft::WRL::ComPtr<ID2D1EllipseGeometry> ellipse;factory->CreateEllipseGeometry(D2D1::Ellipse(D2D1::Point2F(number(L"cx"),number(L"cy")),rx,ry),&ellipse);geometry=ellipse;}
+    }else if(node->tag==L"line"||node->tag==L"polygon"||node->tag==L"polyline"){
+        const auto v=node->tag==L"line"?std::vector<float>{number(L"x1"),number(L"y1"),number(L"x2"),number(L"y2")}:SvgNumbers(node->Attribute(L"points"));
+        if(v.size()>=4){Microsoft::WRL::ComPtr<ID2D1PathGeometry> path;Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
+            if(SUCCEEDED(factory->CreatePathGeometry(&path))&&SUCCEEDED(path->Open(&sink))){
+                sink->BeginFigure(D2D1::Point2F(v[0],v[1]),D2D1_FIGURE_BEGIN_FILLED);
+                for(size_t i=2;i+1<v.size();i+=2)sink->AddLine(D2D1::Point2F(v[i],v[i+1]));
+                sink->EndFigure(node->tag==L"polygon"?D2D1_FIGURE_END_CLOSED:D2D1_FIGURE_END_OPEN);
+                if(SUCCEEDED(sink->Close()))geometry=path;
+            }
+        }
+    }else if(node->tag==L"text"||node->tag==L"tspan"||ToLower(node->tag)==L"textpath"){
+        const auto layout=SvgTextLayout(node,styles,style,writeFactory);
+        if(layout){
+            layout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);DWRITE_TEXT_METRICS metrics{};DWRITE_LINE_METRICS line{};UINT32 lines=0;
+            if(SUCCEEDED(layout->GetMetrics(&metrics))&&SUCCEEDED(layout->GetLineMetrics(&line,1,&lines))){
+                float x=number(L"x")+number(L"dx"),y=number(L"y")+number(L"dy")-line.baseline;
+                const auto anchor=style.Get(L"text-anchor",L"start");
+                if(anchor==L"middle")x-=metrics.widthIncludingTrailingWhitespace/2;else if(anchor==L"end")x-=metrics.widthIncludingTrailingWhitespace;
+                Microsoft::WRL::ComPtr<ID2D1RectangleGeometry> rect;
+                factory->CreateRectangleGeometry(D2D1::RectF(x,y,x+metrics.widthIncludingTrailingWhitespace,y+metrics.height),&rect);geometry=rect;
+            }
+        }
+    }
+    if(geometry){D2D1_RECT_F b{};if(SUCCEEDED(geometry->GetBounds(matrix,&b)))merge(b);}
+    if(node->tag==L"use"){
+        if(const auto target=SvgUseTarget(node))MeasureSvgObject(target,styles,&style,factory,writeFactory,
+            D2D1::Matrix3x2F::Translation(number(L"x"),number(L"y"))*matrix,total,hasBounds,true,depth+1);
+    }else if(node->tag==L"svg"||node->tag==L"g"||node->tag==L"symbol"||node->tag==L"a"||node->tag==L"switch"){
+        for(const auto& child:node->children)if(child->tag!=L"defs")MeasureSvgObject(child,styles,&style,factory,writeFactory,matrix,total,hasBounds,true,depth+1);
+    }
+    return hasBounds;
+}
+
 void PaintSvgShape(ID2D1RenderTarget* target,ID2D1Factory* factory,StyleSheet& styleSheet,
                    const std::shared_ptr<Node>& node,const ComputedStyle* parentStyle,
                    float parentOpacity,unsigned int inheritedColor,
                    FastMap<std::wstring,Microsoft::WRL::ComPtr<ID2D1PathGeometry>>& geometryCache,
+                   D2D1_SIZE_F viewport,
                    int referenceDepth=0){
     if(!node||referenceDepth>16)return;
     const auto style=styleSheet.Compute(node,parentStyle);
+    if(style.Is(L"display",L"none")||style.Is(L"visibility",L"hidden")||node->tag==L"defs")return;
+    // SVG children do not create HTML layout boxes. Their authored transforms
+    // must still be composed in SVG user coordinates and scoped to this subtree.
+    struct RestoreTransform {
+        ID2D1RenderTarget* target;D2D1_MATRIX_3X2_F previous{};
+        explicit RestoreTransform(ID2D1RenderTarget* value):target(value){target->GetTransform(&previous);}
+        ~RestoreTransform(){target->SetTransform(previous);}
+    } restore(target);
+    target->SetTransform(SvgLocalTransform(node)*restore.previous);
     const auto currentColor=StyleSheet::Color(style.Get(L"color"),inheritedColor);
     const auto fill=style.Get(L"fill",L"black");
     const auto stroke=style.Get(L"stroke",L"none");
     const auto strokeWidthText=style.Get(L"stroke-width",L"1");
-    const auto strokeWidth=StyleSheet::Length(strokeWidthText,24,24,1);
+    const float diagonal=std::hypot(viewport.width,viewport.height)/std::sqrt(2.0f);
+    const auto strokeWidth=StyleSheet::Length(strokeWidthText,diagonal,viewport.width,1,FontSize(style));
     float opacity=parentOpacity;
     float parsedOpacity=1;if(TryParseFloat(style.Get(L"opacity",L"1"),parsedOpacity))opacity*=parsedOpacity;
     opacity=std::max(0.0f,std::min(1.0f,opacity));
     if(node->tag==L"g"||node->tag==L"symbol"){
         for(const auto& child:node->children)
-            PaintSvgShape(target,factory,styleSheet,child,&style,opacity,currentColor,geometryCache,referenceDepth);
+            PaintSvgShape(target,factory,styleSheet,child,&style,opacity,currentColor,geometryCache,viewport,referenceDepth);
         return;
     }
     if(node->tag==L"use"){
+        const float x=StyleSheet::Length(node->Attribute(L"x"),viewport.width,viewport.width,0,FontSize(style));
+        const float y=StyleSheet::Length(node->Attribute(L"y"),viewport.height,viewport.height,0,FontSize(style));
+        D2D1_MATRIX_3X2_F transformed{};target->GetTransform(&transformed);
+        target->SetTransform(D2D1::Matrix3x2F::Translation(x,y)*transformed);
         if(const auto referenced=SvgUseTarget(node)){
-            if(referenced->tag==L"symbol"||referenced->tag==L"g")
-                for(const auto& child:referenced->children)
-                    PaintSvgShape(target,factory,styleSheet,child,&style,opacity,currentColor,geometryCache,referenceDepth+1);
-            else PaintSvgShape(target,factory,styleSheet,referenced,&style,opacity,currentColor,geometryCache,referenceDepth+1);
+            PaintSvgShape(target,factory,styleSheet,referenced,&style,opacity,currentColor,geometryCache,viewport,referenceDepth+1);
         }
         return;
     }
@@ -3771,33 +4565,63 @@ void PaintSvgShape(ID2D1RenderTarget* target,ID2D1Factory* factory,StyleSheet& s
         result.a*=opacity*std::max(0.0f,std::min(1.0f,localOpacity));return result;
     };
     if(!fill.empty()&&fill!=L"none")target->CreateSolidColorBrush(brushColor(fill,L"fill-opacity"),&fillBrush);
-    if(!stroke.empty()&&stroke!=L"none")target->CreateSolidColorBrush(brushColor(stroke,L"stroke-opacity"),&strokeBrush);
-    Microsoft::WRL::ComPtr<ID2D1StrokeStyle> strokeStyle;
+    if(!stroke.empty()&&stroke!=L"none"&&strokeWidth>0)target->CreateSolidColorBrush(brushColor(stroke,L"stroke-opacity"),&strokeBrush);
     D2D1_STROKE_STYLE_PROPERTIES strokeProperties=D2D1::StrokeStyleProperties();
+    strokeProperties.lineJoin=D2D1_LINE_JOIN_MITER_OR_BEVEL;
+    strokeProperties.miterLimit=std::max(1.0f,StyleSheet::Length(style.Get(L"stroke-miterlimit",L"4"),1,1,4));
     const auto lineCap=ToLower(style.Get(L"stroke-linecap",L"butt"));
     if(lineCap==L"round")strokeProperties.startCap=strokeProperties.endCap=strokeProperties.dashCap=D2D1_CAP_STYLE_ROUND;
     else if(lineCap==L"square")strokeProperties.startCap=strokeProperties.endCap=strokeProperties.dashCap=D2D1_CAP_STYLE_SQUARE;
     const auto lineJoin=ToLower(style.Get(L"stroke-linejoin",L"miter"));
     if(lineJoin==L"round")strokeProperties.lineJoin=D2D1_LINE_JOIN_ROUND;
     else if(lineJoin==L"bevel")strokeProperties.lineJoin=D2D1_LINE_JOIN_BEVEL;
-    factory->CreateStrokeStyle(strokeProperties,nullptr,0,&strokeStyle);
-    const auto numbers=[&](const wchar_t* name){return SvgNumbers(node->Attribute(name));};
+    std::vector<float> dashes;
+    auto dashText=Trim(style.Get(L"stroke-dasharray",L"none"));
+    if(ToLower(dashText)!=L"none"&&strokeWidth>0){
+        std::replace(dashText.begin(),dashText.end(),L',',L' ');
+        float sum=0;std::wistringstream tokens(dashText);std::wstring token;
+        while(tokens>>token){
+            const float length=StyleSheet::Length(token,diagonal,viewport.width,
+                std::numeric_limits<float>::quiet_NaN(),FontSize(style));
+            if(!std::isfinite(length)||length<0){dashes.clear();sum=0;break;}
+            dashes.push_back(length);sum+=length;
+        }
+        if(sum>0&&std::isfinite(sum)){
+            if(dashes.size()%2){const auto repeated=dashes;dashes.insert(dashes.end(),repeated.begin(),repeated.end());}
+        }else dashes.clear();
+    }
+    const auto fillMode=style.Is(L"fill-rule",L"evenodd")?D2D1_FILL_MODE_ALTERNATE:D2D1_FILL_MODE_WINDING;
     auto paintGeometry=[&](ID2D1Geometry* geometry){
         if(!geometry)return;
         if(fillBrush)target->FillGeometry(geometry,fillBrush.Get());
-        if(strokeBrush)target->DrawGeometry(geometry,strokeBrush.Get(),strokeWidth,strokeStyle.Get());
+        if(strokeBrush){
+            auto properties=strokeProperties;auto lengths=dashes;
+            if(!lengths.empty()){
+                float pathScale=1,authoredLength=0,actualLength=0;
+                if(TryParseFloat(node->Attribute(L"pathlength"),authoredLength)&&authoredLength>0&&
+                   SUCCEEDED(geometry->ComputeLength(nullptr,&actualLength)))pathScale=actualLength/authoredLength;
+                for(auto& length:lengths)length*=pathScale/strokeWidth;
+                properties.dashStyle=D2D1_DASH_STYLE_CUSTOM;
+                properties.dashOffset=StyleSheet::Length(style.Get(L"stroke-dashoffset",L"0"),diagonal,
+                    viewport.width,0,FontSize(style))*pathScale/strokeWidth;
+            }
+            Microsoft::WRL::ComPtr<ID2D1StrokeStyle> strokeStyle;
+            factory->CreateStrokeStyle(properties,lengths.empty()?nullptr:lengths.data(),
+                static_cast<UINT32>(lengths.size()),&strokeStyle);
+            target->DrawGeometry(geometry,strokeBrush.Get(),strokeWidth,strokeStyle.Get());
+        }
     };
     if(node->tag==L"path"){
-        const auto data=node->Attribute(L"d"),key=L"path\x1f"+data;
+        const auto data=node->Attribute(L"d"),key=L"path\x1f"+std::to_wstring(fillMode)+L"\x1f"+data;
         auto found=geometryCache.find(key);
         if(found==geometryCache.end()){
             if(geometryCache.size()>=256)geometryCache.clear();
-            found=geometryCache.emplace(key,SvgPath(factory,data)).first;
+            found=geometryCache.emplace(key,SvgPath(factory,data,fillMode)).first;
         }
         paintGeometry(found->second.Get());
     }else if(node->tag==L"polygon"||node->tag==L"polyline"){
         const auto source=node->Attribute(L"points"),key=node->tag+
-            (fillBrush?L"\x001f" L"f" L"\x001f":L"\x001f" L"h" L"\x001f")+source;
+            (fillBrush?L"\x001f" L"f" L"\x001f":L"\x001f" L"h" L"\x001f")+std::to_wstring(fillMode)+L"\x1f"+source;
         auto found=geometryCache.find(key);
         if(found==geometryCache.end()){
             const auto points=SvgNumbers(source);
@@ -3805,6 +4629,7 @@ void PaintSvgShape(ID2D1RenderTarget* target,ID2D1Factory* factory,StyleSheet& s
             Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
             if(points.size()>=4&&SUCCEEDED(factory->CreatePathGeometry(&geometry))&&
                SUCCEEDED(geometry->Open(&sink))){
+                sink->SetFillMode(fillMode);
                 sink->BeginFigure(D2D1::Point2F(points[0],points[1]),
                     fillBrush?D2D1_FIGURE_BEGIN_FILLED:D2D1_FIGURE_BEGIN_HOLLOW);
                 for(size_t index=2;index+1<points.size();index+=2)
@@ -3820,23 +4645,29 @@ void PaintSvgShape(ID2D1RenderTarget* target,ID2D1Factory* factory,StyleSheet& s
         const float x=StyleSheet::Length(node->Attribute(L"x"),24,24,0),y=StyleSheet::Length(node->Attribute(L"y"),24,24,0);
         const float width=StyleSheet::Length(node->Attribute(L"width"),24,24,0),height=StyleSheet::Length(node->Attribute(L"height"),24,24,0);
         const float radius=StyleSheet::Length(node->Attribute(L"rx"),24,24,0);
-        auto rect=D2D1::RoundedRect(D2D1::RectF(x,y,x+width,y+height),radius,radius);
-        if(fillBrush)target->FillRoundedRectangle(rect,fillBrush.Get());
-        if(strokeBrush)target->DrawRoundedRectangle(rect,strokeBrush.Get(),strokeWidth,strokeStyle.Get());
+        Microsoft::WRL::ComPtr<ID2D1RoundedRectangleGeometry> rect;
+        if(width>0&&height>0)factory->CreateRoundedRectangleGeometry(
+            D2D1::RoundedRect(D2D1::RectF(x,y,x+width,y+height),radius,radius),&rect);
+        paintGeometry(rect.Get());
     }else if(node->tag==L"circle"||node->tag==L"ellipse"){
         const float cx=StyleSheet::Length(node->Attribute(L"cx"),24,24,0),cy=StyleSheet::Length(node->Attribute(L"cy"),24,24,0);
         const float rx=StyleSheet::Length(node->Attribute(node->tag==L"circle"?L"r":L"rx"),24,24,0);
         const float ry=node->tag==L"circle"?rx:StyleSheet::Length(node->Attribute(L"ry"),24,24,0);
-        const auto ellipse=D2D1::Ellipse(D2D1::Point2F(cx,cy),rx,ry);
-        if(fillBrush)target->FillEllipse(ellipse,fillBrush.Get());
-        if(strokeBrush)target->DrawEllipse(ellipse,strokeBrush.Get(),strokeWidth,strokeStyle.Get());
+        Microsoft::WRL::ComPtr<ID2D1EllipseGeometry> ellipse;
+        if(rx>0&&ry>0)factory->CreateEllipseGeometry(D2D1::Ellipse(D2D1::Point2F(cx,cy),rx,ry),&ellipse);
+        paintGeometry(ellipse.Get());
     }else if(node->tag==L"line"){
         const float x1=StyleSheet::Length(node->Attribute(L"x1"),24,24,0),y1=StyleSheet::Length(node->Attribute(L"y1"),24,24,0);
         const float x2=StyleSheet::Length(node->Attribute(L"x2"),24,24,0),y2=StyleSheet::Length(node->Attribute(L"y2"),24,24,0);
-        if(strokeBrush)target->DrawLine(D2D1::Point2F(x1,y1),D2D1::Point2F(x2,y2),strokeBrush.Get(),strokeWidth,strokeStyle.Get());
+        Microsoft::WRL::ComPtr<ID2D1PathGeometry> line;Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
+        if(SUCCEEDED(factory->CreatePathGeometry(&line))&&SUCCEEDED(line->Open(&sink))){
+            sink->BeginFigure(D2D1::Point2F(x1,y1),D2D1_FIGURE_BEGIN_HOLLOW);
+            sink->AddLine(D2D1::Point2F(x2,y2));sink->EndFigure(D2D1_FIGURE_END_OPEN);
+            if(SUCCEEDED(sink->Close()))paintGeometry(line.Get());
+        }
     }
     for(const auto& child:node->children)
-        PaintSvgShape(target,factory,styleSheet,child,&style,opacity,currentColor,geometryCache,referenceDepth);
+        PaintSvgShape(target,factory,styleSheet,child,&style,opacity,currentColor,geometryCache,viewport,referenceDepth);
 }
 
 void PaintSvg(ID2D1RenderTarget* target,const LayoutBox& box,StyleSheet& styleSheet,
@@ -3858,8 +4689,8 @@ void PaintSvg(ID2D1RenderTarget* target,const LayoutBox& box,StyleSheet& styleSh
         D2D1::Matrix3x2F::Scale(scale,scale)*D2D1::Matrix3x2F::Translation(x,y)*old);
     Microsoft::WRL::ComPtr<ID2D1Factory> factory;target->GetFactory(&factory);
     const auto currentColor=StyleSheet::Color(box.style.Get(L"color",L"#000"),0xff000000);
-    for(const auto& child:box.node->children)
-        PaintSvgShape(target,factory.Get(),styleSheet,child,&box.style,1,currentColor,geometryCache);
+    for(const auto& child:box.node->children)if(child->tag!=L"defs"&&child->tag!=L"symbol")
+        PaintSvgShape(target,factory.Get(),styleSheet,child,&box.style,1,currentColor,geometryCache,D2D1::SizeF(width,height));
     target->SetTransform(old);
 }
 
@@ -4079,9 +4910,64 @@ D2D1_MATRIX_3X2_F CanvasMatrix(const CanvasTransform& transform){
                            transform.e,transform.f);
 }
 
+Microsoft::WRL::ComPtr<ID2D1Brush> CanvasRadialBrush(ID2D1RenderTarget* target,const CanvasGradient& gradient){
+    Microsoft::WRL::ComPtr<ID2D1Brush> result;
+    D2D1::Matrix3x2F inverse(gradient.transform.a,gradient.transform.b,gradient.transform.c,
+        gradient.transform.d,gradient.transform.e,gradient.transform.f);
+    const auto size=target->GetSize();const auto width=static_cast<UINT>(std::ceil(size.width)),height=static_cast<UINT>(std::ceil(size.height));
+    if(!width||!height||static_cast<std::uint64_t>(width)*height>16*1024*1024||!inverse.Invert())return result;
+    std::vector<D2D1_COLOR_F> colors;colors.reserve(gradient.stops.size());
+    for(const auto& stop:gradient.stops)colors.push_back(D2DColor(StyleSheet::Color(stop.color,0xff000000)));
+    std::vector<unsigned char> pixels(static_cast<size_t>(width)*height*4,0);
+    const double dx=gradient.x1-gradient.x0,dy=gradient.y1-gradient.y0,dr=gradient.radius1-gradient.radius0;
+    const double quadratic=dx*dx+dy*dy-dr*dr;
+    if(dx!=0||dy!=0||dr!=0)for(UINT y=0;y<height;++y)for(UINT x=0;x<width;++x){
+        const double px=(x+0.5)*inverse._11+(y+0.5)*inverse._21+inverse._31-gradient.x0;
+        const double py=(x+0.5)*inverse._12+(y+0.5)*inverse._22+inverse._32-gradient.y0;
+        const double linear=-2*(px*dx+py*dy+gradient.radius0*dr),constant=px*px+py*py-gradient.radius0*gradient.radius0;
+        double position=-std::numeric_limits<double>::infinity();
+        const auto accept=[&](double value){if(std::isfinite(value)&&gradient.radius0+value*dr>=0)position=std::max(position,value);};
+        if(std::abs(quadratic)<1e-12){if(std::abs(linear)>1e-12)accept(-constant/linear);}
+        else{
+            const double discriminant=linear*linear-4*quadratic*constant;
+            if(discriminant>=0){const double root=std::sqrt(discriminant);accept((-linear-root)/(2*quadratic));accept((-linear+root)/(2*quadratic));}
+        }
+        if(!std::isfinite(position))continue;
+        const auto stop=std::upper_bound(gradient.stops.begin(),gradient.stops.end(),position,
+            [](double offset,const CanvasGradientStop& value){return offset<value.offset;});
+        D2D1_COLOR_F color;
+        if(stop==gradient.stops.begin())color=colors.front();
+        else if(stop==gradient.stops.end())color=colors.back();
+        else{
+            const auto index=static_cast<size_t>(stop-gradient.stops.begin());
+            const float factor=static_cast<float>((position-gradient.stops[index-1].offset)/(stop->offset-gradient.stops[index-1].offset));
+            const auto& first=colors[index-1];const auto& second=colors[index];
+            color={first.r+(second.r-first.r)*factor,first.g+(second.g-first.g)*factor,
+                first.b+(second.b-first.b)*factor,first.a+(second.a-first.a)*factor};
+        }
+        auto* pixel=pixels.data()+(static_cast<size_t>(y)*width+x)*4;
+        const auto byte=[](float value){return static_cast<unsigned char>(std::lround(std::clamp(value,0.0f,1.0f)*255));};
+        pixel[0]=byte(color.b*color.a);pixel[1]=byte(color.g*color.a);pixel[2]=byte(color.r*color.a);pixel[3]=byte(color.a);
+    }
+    Microsoft::WRL::ComPtr<ID2D1Bitmap> bitmap;Microsoft::WRL::ComPtr<ID2D1BitmapBrush> brush;
+    if(SUCCEEDED(target->CreateBitmap(D2D1::SizeU(width,height),pixels.data(),width*4,
+            D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED),96,96),&bitmap))&&
+       SUCCEEDED(target->CreateBitmapBrush(bitmap.Get(),&brush))){
+        D2D1::Matrix3x2F drawing;target->GetTransform(&drawing);
+        if(drawing.Invert()){brush->SetTransform(drawing);brush.As(&result);}
+    }
+    return result;
+}
+
 Microsoft::WRL::ComPtr<ID2D1Brush> CanvasBrush(ID2D1RenderTarget* target,
                                                 const CanvasPaint& paint){
     Microsoft::WRL::ComPtr<ID2D1Brush> result;
+    if(paint.gradient&&(paint.gradient->radial||paint.gradient->stops.empty())){
+        if(!paint.gradient->stops.empty())result=CanvasRadialBrush(target,*paint.gradient);
+        if(!result){Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
+            if(SUCCEEDED(target->CreateSolidColorBrush(D2D1::ColorF(0,0.0f),&brush)))brush.As(&result);}
+        return result;
+    }
     if(paint.gradient&&!paint.gradient->stops.empty()){
         std::vector<D2D1_GRADIENT_STOP> stops;stops.reserve(paint.gradient->stops.size()+2);
         for(const auto& stop:paint.gradient->stops)
@@ -4114,15 +5000,28 @@ Microsoft::WRL::ComPtr<ID2D1PathGeometry> CanvasGeometry(
     Microsoft::WRL::ComPtr<ID2D1PathGeometry> geometry;
     Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
     if(!factory||FAILED(factory->CreatePathGeometry(&geometry))||FAILED(geometry->Open(&sink)))return {};
-    sink->SetFillMode(D2D1_FILL_MODE_WINDING);bool open=false;CanvasPoint current{},start{};
+    sink->SetFillMode(D2D1_FILL_MODE_WINDING);bool open=false,hasCurrent=false;CanvasPoint current{},start{};
     auto endOpen=[&]{if(open){sink->EndFigure(D2D1_FIGURE_END_OPEN);open=false;}};
-    auto begin=[&](CanvasPoint point){endOpen();sink->BeginFigure(D2D1::Point2F(point.x,point.y),D2D1_FIGURE_BEGIN_FILLED);open=true;current=start=point;};
+    auto begin=[&](CanvasPoint point){endOpen();sink->BeginFigure(D2D1::Point2F(point.x,point.y),D2D1_FIGURE_BEGIN_FILLED);open=hasCurrent=true;current=start=point;};
     constexpr float pi=3.14159265358979323846f;
     for(const auto& segment:path){
         if(segment.verb==CanvasPathVerb::MoveTo){begin(segment.point);continue;}
         if(segment.verb==CanvasPathVerb::LineTo){
-            if(!open)begin(segment.point);else{sink->AddLine(D2D1::Point2F(segment.point.x,segment.point.y));current=segment.point;}
+            if(!open)begin(hasCurrent?current:segment.point);
+            sink->AddLine(D2D1::Point2F(segment.point.x,segment.point.y));current=segment.point;
             continue;
+        }
+        if(segment.verb==CanvasPathVerb::QuadraticCurveTo||segment.verb==CanvasPathVerb::BezierCurveTo){
+            if(!open)begin(hasCurrent?current:segment.control1);
+            if(segment.verb==CanvasPathVerb::QuadraticCurveTo)
+                sink->AddQuadraticBezier(D2D1::QuadraticBezierSegment(
+                    D2D1::Point2F(segment.control1.x,segment.control1.y),
+                    D2D1::Point2F(segment.point.x,segment.point.y)));
+            else sink->AddBezier(D2D1::BezierSegment(
+                D2D1::Point2F(segment.control1.x,segment.control1.y),
+                D2D1::Point2F(segment.control2.x,segment.control2.y),
+                D2D1::Point2F(segment.point.x,segment.point.y)));
+            current=segment.point;continue;
         }
         if(segment.verb==CanvasPathVerb::Close){
             if(open){sink->EndFigure(D2D1_FIGURE_END_CLOSED);open=false;current=start;}continue;
@@ -4132,8 +5031,8 @@ Microsoft::WRL::ComPtr<ID2D1PathGeometry> CanvasGeometry(
             segment.centerX+std::cos(angle)*segment.radius,
             segment.centerY+std::sin(angle)*segment.radius);};
         const auto arcStart=pointAt(segment.startAngle);
-        if(!open)begin(arcStart);
-        else if(std::abs(current.x-arcStart.x)>0.001f||std::abs(current.y-arcStart.y)>0.001f){
+        if(!open)begin(hasCurrent?current:arcStart);
+        if(std::abs(current.x-arcStart.x)>0.001f||std::abs(current.y-arcStart.y)>0.001f){
             sink->AddLine(D2D1::Point2F(arcStart.x,arcStart.y));current=arcStart;
         }
         float delta=segment.endAngle-segment.startAngle;
@@ -4165,6 +5064,7 @@ struct CanvasFont {
     std::wstring koreanFamily;
     float size=10.0f;
     DWRITE_FONT_WEIGHT weight=DWRITE_FONT_WEIGHT_NORMAL;
+    DWRITE_FONT_STYLE style=DWRITE_FONT_STYLE_NORMAL;
 };
 
 float ImagePositionOffset(const std::wstring& token,float freeSpace,bool horizontal){
@@ -4239,7 +5139,146 @@ CanvasFont ParseCanvasFont(const std::wstring& source){
     if(!familyList.empty())result.family=ResolveFontFamilyList(familyList,L"Arial");
     result.koreanFamily=ExplicitKoreanFontFamily(familyList);
     if(lower.find(L"bold")!=std::wstring::npos)result.weight=DWRITE_FONT_WEIGHT_BOLD;
+    if(lower.find(L"italic")!=std::wstring::npos)result.style=DWRITE_FONT_STYLE_ITALIC;
+    else if(lower.find(L"oblique")!=std::wstring::npos)result.style=DWRITE_FONT_STYLE_OBLIQUE;
     return result;
+}
+
+Microsoft::WRL::ComPtr<IDWriteTextLayout> CanvasTextLayout(IDWriteFactory* factory,const CanvasFont& parsed,std::wstring text){
+    for(auto& character:text)if(character>=9&&character<=13)character=L' ';
+    Microsoft::WRL::ComPtr<IDWriteTextFormat> format;Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
+    if(!factory||FAILED(factory->CreateTextFormat(parsed.family.c_str(),nullptr,parsed.weight,
+            parsed.style,DWRITE_FONT_STRETCH_NORMAL,parsed.size,L"",&format)))return {};
+    format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    if(FAILED(factory->CreateTextLayout(text.c_str(),static_cast<UINT32>(text.size()),format.Get(),100000,100000,&layout)))return {};
+    if(!parsed.koreanFamily.empty()&&ContainsHangul(text))for(size_t start=0;start<text.size();){
+        if(!IsHangul(text[start])){++start;continue;}
+        size_t end=start+1;while(end<text.size()&&IsHangul(text[end]))++end;
+        layout->SetFontFamilyName(parsed.koreanFamily.c_str(),DWRITE_TEXT_RANGE{static_cast<UINT32>(start),static_cast<UINT32>(end-start)});start=end;
+    }
+    DWRITE_TEXT_METRICS metrics{};
+    if(SUCCEEDED(layout->GetMetrics(&metrics))){layout->SetMaxWidth(std::max(1.0f,metrics.widthIncludingTrailingWhitespace));layout->SetMaxHeight(std::max(1.0f,metrics.height));}
+    return layout;
+}
+
+float CanvasTextTop(const CanvasFont& font,const std::wstring& text,const std::wstring& baseline,IDWriteTextLayout* layout,const DWRITE_TEXT_METRICS& metrics){
+    const auto value=ToLower(baseline);
+    if(value==L"top"||value==L"hanging")return -font.size*(ContainsHangul(text)?0.30f:0.10f);
+    if(value==L"middle")return -metrics.height/2;
+    if(value==L"bottom"||value==L"ideographic")return -metrics.height;
+    DWRITE_LINE_METRICS line{};UINT32 count=0;layout->GetLineMetrics(&line,1,&count);
+    return -line.baseline;
+}
+
+class CanvasStrokeTextRenderer final:public IDWriteTextRenderer {
+    LONG references_=1;
+    ID2D1RenderTarget* target_;
+    Microsoft::WRL::ComPtr<ID2D1Brush> brush_;
+    float width_;
+public:
+    CanvasStrokeTextRenderer(ID2D1RenderTarget* target,ID2D1Brush* brush,float width):target_(target),brush_(brush),width_(width){}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,void** result)override{
+        if(!result)return E_POINTER;*result=nullptr;
+        if(iid==__uuidof(IUnknown)||iid==__uuidof(IDWritePixelSnapping)||iid==__uuidof(IDWriteTextRenderer)){
+            *result=static_cast<IDWriteTextRenderer*>(this);AddRef();return S_OK;
+        }return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef()override{return static_cast<ULONG>(InterlockedIncrement(&references_));}
+    ULONG STDMETHODCALLTYPE Release()override{const auto count=InterlockedDecrement(&references_);if(!count)delete this;return static_cast<ULONG>(count);}
+    HRESULT STDMETHODCALLTYPE IsPixelSnappingDisabled(void*,BOOL* disabled)override{if(!disabled)return E_POINTER;*disabled=TRUE;return S_OK;}
+    HRESULT STDMETHODCALLTYPE GetCurrentTransform(void*,DWRITE_MATRIX* transform)override{
+        if(!transform)return E_POINTER;D2D1_MATRIX_3X2_F matrix{};target_->GetTransform(&matrix);
+        *transform={matrix._11,matrix._12,matrix._21,matrix._22,matrix._31,matrix._32};return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetPixelsPerDip(void*,FLOAT* pixels)override{if(!pixels)return E_POINTER;*pixels=1;return S_OK;}
+    HRESULT STDMETHODCALLTYPE DrawGlyphRun(void*,FLOAT x,FLOAT y,DWRITE_MEASURING_MODE,const DWRITE_GLYPH_RUN* run,
+        const DWRITE_GLYPH_RUN_DESCRIPTION*,IUnknown*)override{
+        if(!run||!run->fontFace)return E_INVALIDARG;
+        Microsoft::WRL::ComPtr<ID2D1Factory> factory;target_->GetFactory(&factory);
+        Microsoft::WRL::ComPtr<ID2D1PathGeometry> geometry;Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
+        HRESULT result=factory->CreatePathGeometry(&geometry);if(FAILED(result))return result;
+        result=geometry->Open(&sink);if(FAILED(result))return result;
+        result=run->fontFace->GetGlyphRunOutline(run->fontEmSize,run->glyphIndices,run->glyphAdvances,
+            run->glyphOffsets,run->glyphCount,run->isSideways,(run->bidiLevel&1)!=0,sink.Get());
+        const auto closed=sink->Close();if(FAILED(result))return result;if(FAILED(closed))return closed;
+        D2D1::Matrix3x2F previous;target_->GetTransform(&previous);
+        target_->SetTransform(D2D1::Matrix3x2F::Translation(x,y)*previous);
+        target_->DrawGeometry(geometry.Get(),brush_.Get(),width_);target_->SetTransform(previous);return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DrawUnderline(void*,FLOAT x,FLOAT y,const DWRITE_UNDERLINE* line,IUnknown*)override{
+        if(!line)return E_INVALIDARG;target_->DrawLine(D2D1::Point2F(x,y+line->offset),D2D1::Point2F(x+line->width,y+line->offset),brush_.Get(),line->thickness);return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DrawStrikethrough(void*,FLOAT x,FLOAT y,const DWRITE_STRIKETHROUGH* line,IUnknown*)override{
+        if(!line)return E_INVALIDARG;target_->DrawLine(D2D1::Point2F(x,y+line->offset),D2D1::Point2F(x+line->width,y+line->offset),brush_.Get(),line->thickness);return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DrawInlineObject(void* context,FLOAT x,FLOAT y,IDWriteInlineObject* object,BOOL sideways,BOOL rtl,IUnknown* effect)override{
+        return object?object->Draw(context,this,x,y,sideways,rtl,effect):E_INVALIDARG;
+    }
+};
+
+HRESULT ReplayCanvas(ID2D1RenderTarget* drawingTarget,IDWriteFactory* factory,const CanvasSurface& surface){
+    // Canvas text is also web content. Its intrinsic 96-DPI backing store must
+    // use the same grayscale coverage as DOM text before the bitmap is scaled
+    // to the CSS box.
+    ConfigureWebTextRendering(drawingTarget,factory);
+    drawingTarget->BeginDraw();drawingTarget->SetTransform(D2D1::IdentityMatrix());
+    drawingTarget->Clear(D2D1::ColorF(0,surface.alpha?0.0f:1.0f));
+    for(const auto& command:surface.commands){
+        const bool pathCommand=command.kind==CanvasCommandKind::FillPath||
+                               command.kind==CanvasCommandKind::StrokePath;
+        drawingTarget->SetTransform(pathCommand?D2D1::IdentityMatrix():CanvasMatrix(command.state.transform));
+        if(command.kind==CanvasCommandKind::ClearRect){
+            const float left=std::min(command.x,command.x+command.width);
+            const float top=std::min(command.y,command.y+command.height);
+            const float right=std::max(command.x,command.x+command.width);
+            const float bottom=std::max(command.y,command.y+command.height);
+            drawingTarget->PushAxisAlignedClip(D2D1::RectF(left,top,right,bottom),
+                D2D1_ANTIALIAS_MODE_ALIASED);
+            drawingTarget->Clear(D2D1::ColorF(0,surface.alpha?0.0f:1.0f));
+            drawingTarget->PopAxisAlignedClip();
+        }else if(command.kind==CanvasCommandKind::FillRect){
+            const float left=std::min(command.x,command.x+command.width);
+            const float top=std::min(command.y,command.y+command.height);
+            const float right=std::max(command.x,command.x+command.width);
+            const float bottom=std::max(command.y,command.y+command.height);
+            const auto brush=CanvasBrush(drawingTarget,command.state.fillStyle);
+            if(brush)drawingTarget->FillRectangle(D2D1::RectF(left,top,right,bottom),brush.Get());
+        }else if(pathCommand){
+            const auto geometry=CanvasGeometry(drawingTarget,command.path);
+            const auto brush=CanvasBrush(drawingTarget,command.kind==CanvasCommandKind::FillPath?
+                command.state.fillStyle:command.state.strokeStyle);
+            if(geometry&&brush){
+                if(command.kind==CanvasCommandKind::FillPath)drawingTarget->FillGeometry(geometry.Get(),brush.Get());
+                else drawingTarget->DrawGeometry(geometry.Get(),brush.Get(),command.state.lineWidth);
+            }
+        }else if((command.kind==CanvasCommandKind::FillText||command.kind==CanvasCommandKind::StrokeText)&&!command.text.empty()){
+            const auto parsed=ParseCanvasFont(command.state.font);
+            const auto layout=CanvasTextLayout(factory,parsed,command.text);
+            if(layout){
+                DWRITE_TEXT_METRICS metrics{};layout->GetMetrics(&metrics);
+                const float horizontalScale=command.width>0&&metrics.widthIncludingTrailingWhitespace>command.width?
+                    command.width/metrics.widthIncludingTrailingWhitespace:1;
+                const float textWidth=metrics.widthIncludingTrailingWhitespace*horizontalScale;
+                float left=command.x,top=command.y;const auto align=ToLower(command.state.textAlign);
+                if(align==L"center")left-=textWidth/2;
+                else if(align==L"right"||align==L"end")left-=textWidth;
+                top+=CanvasTextTop(parsed,command.text,command.state.textBaseline,layout.Get(),metrics);
+                const auto brush=CanvasBrush(drawingTarget,command.kind==CanvasCommandKind::StrokeText?command.state.strokeStyle:command.state.fillStyle);
+                drawingTarget->SetTransform(D2D1::Matrix3x2F::Scale(horizontalScale,1)*
+                    D2D1::Matrix3x2F::Translation(left,top)*CanvasMatrix(command.state.transform));
+                if(brush){
+                    if(command.kind==CanvasCommandKind::FillText)drawingTarget->DrawTextLayout(D2D1::Point2F(0,0),layout.Get(),brush.Get());
+                    else{
+                        Microsoft::WRL::ComPtr<IDWriteTextRenderer> renderer;
+                        renderer.Attach(new CanvasStrokeTextRenderer(drawingTarget,brush.Get(),command.state.lineWidth));
+                        layout->Draw(nullptr,renderer.Get(),0,0);
+                    }
+                }
+            }
+        }
+    }
+    drawingTarget->SetTransform(D2D1::IdentityMatrix());
+    return drawingTarget->EndDraw();
 }
 
 void PaintCanvas(ID2D1RenderTarget* target,IDWriteFactory* factory,const LayoutBox& box){
@@ -4259,77 +5298,7 @@ void PaintCanvas(ID2D1RenderTarget* target,IDWriteFactory* factory,const LayoutB
             D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE,&bitmapTarget)))return;
     bitmapTarget->SetDpi(USER_DEFAULT_SCREEN_DPI,USER_DEFAULT_SCREEN_DPI);
     auto* drawingTarget=static_cast<ID2D1RenderTarget*>(bitmapTarget.Get());
-    // Canvas text is also web content. Its intrinsic 96-DPI backing store must
-    // use the same grayscale coverage as DOM text before the bitmap is scaled
-    // to the CSS box.
-    ConfigureWebTextRendering(drawingTarget,factory);
-    drawingTarget->BeginDraw();drawingTarget->SetTransform(D2D1::IdentityMatrix());
-    drawingTarget->Clear(D2D1::ColorF(0,0.0f));
-    for(const auto& command:surface->commands){
-        const bool pathCommand=command.kind==CanvasCommandKind::FillPath||
-                               command.kind==CanvasCommandKind::StrokePath;
-        drawingTarget->SetTransform(pathCommand?D2D1::IdentityMatrix():CanvasMatrix(command.state.transform));
-        if(command.kind==CanvasCommandKind::ClearRect){
-            const float left=std::min(command.x,command.x+command.width);
-            const float top=std::min(command.y,command.y+command.height);
-            const float right=std::max(command.x,command.x+command.width);
-            const float bottom=std::max(command.y,command.y+command.height);
-            drawingTarget->PushAxisAlignedClip(D2D1::RectF(left,top,right,bottom),
-                D2D1_ANTIALIAS_MODE_ALIASED);
-            drawingTarget->Clear(D2D1::ColorF(0,0.0f));
-            drawingTarget->PopAxisAlignedClip();
-        }else if(command.kind==CanvasCommandKind::FillRect){
-            const float left=std::min(command.x,command.x+command.width);
-            const float top=std::min(command.y,command.y+command.height);
-            const float right=std::max(command.x,command.x+command.width);
-            const float bottom=std::max(command.y,command.y+command.height);
-            const auto brush=CanvasBrush(drawingTarget,command.state.fillStyle);
-            if(brush)drawingTarget->FillRectangle(D2D1::RectF(left,top,right,bottom),brush.Get());
-        }else if(pathCommand){
-            const auto geometry=CanvasGeometry(drawingTarget,command.path);
-            const auto brush=CanvasBrush(drawingTarget,command.kind==CanvasCommandKind::FillPath?
-                command.state.fillStyle:command.state.strokeStyle);
-            if(geometry&&brush){
-                if(command.kind==CanvasCommandKind::FillPath)drawingTarget->FillGeometry(geometry.Get(),brush.Get());
-                else drawingTarget->DrawGeometry(geometry.Get(),brush.Get(),command.state.lineWidth);
-            }
-        }else if(command.kind==CanvasCommandKind::FillText&&!command.text.empty()){
-            const auto parsed=ParseCanvasFont(command.state.font);
-            Microsoft::WRL::ComPtr<IDWriteTextFormat> format;
-            Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
-            if(SUCCEEDED(factory->CreateTextFormat(parsed.family.c_str(),nullptr,parsed.weight,
-                    DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,parsed.size,L"",&format))&&
-               SUCCEEDED(factory->CreateTextLayout(command.text.c_str(),
-                    static_cast<UINT32>(command.text.size()),format.Get(),100000,100000,&layout))){
-                if(!parsed.koreanFamily.empty()&&ContainsHangul(command.text))
-                    for(size_t start=0;start<command.text.size();){
-                        if(!IsHangul(command.text[start])){++start;continue;}
-                        size_t end=start+1;while(end<command.text.size()&&IsHangul(command.text[end]))++end;
-                        layout->SetFontFamilyName(parsed.koreanFamily.c_str(),DWRITE_TEXT_RANGE{
-                            static_cast<UINT32>(start),static_cast<UINT32>(end-start)});start=end;
-                    }
-                DWRITE_TEXT_METRICS metrics{};layout->GetMetrics(&metrics);
-                float left=command.x,top=command.y;const auto align=ToLower(command.state.textAlign);
-                if(align==L"center")left-=metrics.widthIncludingTrailingWhitespace/2;
-                else if(align==L"right"||align==L"end")left-=metrics.widthIncludingTrailingWhitespace;
-                const auto baseline=ToLower(command.state.textBaseline);
-                // Canvas's top baseline is the top text bearing, whereas a
-                // DirectWrite layout origin includes the face's leading area.
-                // Account for the ordinary Latin and full-em Hangul bearings
-                // in font-relative units so this remains stable at any canvas
-                // backing-store size and monitor DPI.
-                if(baseline==L"top"||baseline==L"hanging")
-                    top-=parsed.size*(ContainsHangul(command.text)?0.30f:0.10f);
-                else if(baseline==L"middle")top-=metrics.height/2;
-                else if(baseline==L"bottom"||baseline==L"ideographic")top-=metrics.height;
-                else if(baseline==L"alphabetic")top-=parsed.size*0.8f;
-                const auto brush=CanvasBrush(drawingTarget,command.state.fillStyle);
-                if(brush)drawingTarget->DrawTextLayout(D2D1::Point2F(left,top),layout.Get(),brush.Get());
-            }
-        }
-    }
-    drawingTarget->SetTransform(D2D1::IdentityMatrix());
-    if(FAILED(drawingTarget->EndDraw()))return;
+    if(FAILED(ReplayCanvas(drawingTarget,factory,*surface)))return;
     Microsoft::WRL::ComPtr<ID2D1Bitmap> bitmap;if(FAILED(bitmapTarget->GetBitmap(&bitmap)))return;
     target->PushAxisAlignedClip(D2D1::RectF(box.content.x,box.content.y,
         box.content.x+box.content.width,box.content.y+box.content.height),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
@@ -4398,12 +5367,178 @@ bool FindFirstLetterRun(const std::shared_ptr<Node>& node,
 
 } // namespace
 
+bool SvgObjectBoundingBox(const std::shared_ptr<Node>& node,StyleSheet& styles,
+                          LayoutRect& bounds,ID2D1Factory* factory,IDWriteFactory* writeFactory){
+    bounds={};if(!node)return false;
+    Microsoft::WRL::ComPtr<ID2D1Factory> ownedFactory;
+    if(!factory){if(FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,ownedFactory.GetAddressOf())))return false;factory=ownedFactory.Get();}
+    if(!writeFactory)writeFactory=SharedWriteFactory();
+    std::vector<std::shared_ptr<Node>> ancestors;for(auto p=node->parent.lock();p;p=p->parent.lock())ancestors.push_back(p);
+    ComputedStyle inherited;for(auto it=ancestors.rbegin();it!=ancestors.rend();++it)inherited=styles.Compute(*it,&inherited);
+    D2D1_RECT_F total{};bool found=false;
+    MeasureSvgObject(node,styles,ancestors.empty()?nullptr:&inherited,factory,writeFactory,D2D1::Matrix3x2F::Identity(),total,found);
+    if(found)bounds={total.left,total.top,total.right-total.left,total.bottom-total.top};return true;
+}
+
+bool SvgTextAdvanceLength(const std::shared_ptr<Node>& node,StyleSheet& styles,
+                          float& length,IDWriteFactory* writeFactory,std::vector<LayoutRect>* characters){
+    length=0;if(characters)characters->clear();if(!node)return false;
+    if(!writeFactory)writeFactory=SharedWriteFactory();if(!writeFactory)return false;
+    std::vector<std::shared_ptr<Node>> ancestors;
+    for(auto parent=node->parent.lock();parent;parent=parent->parent.lock())ancestors.push_back(parent);
+    ComputedStyle inherited;
+    for(auto it=ancestors.rbegin();it!=ancestors.rend();++it){
+        inherited=styles.Compute(*it,&inherited);if(inherited.Is(L"display",L"none"))return true;
+    }
+    const auto style=styles.Compute(node,ancestors.empty()?nullptr:&inherited);
+    const auto layout=SvgTextLayout(node,styles,style,writeFactory);if(!layout)return false;
+    UINT32 count=0;layout->GetClusterMetrics(nullptr,0,&count);
+    if(!count)return true;
+    std::vector<DWRITE_CLUSTER_METRICS> clusters(count);
+    if(FAILED(layout->GetClusterMetrics(clusters.data(),count,&count)))return false;
+    for(const auto& cluster:clusters)length+=cluster.width;
+    if(characters){
+        DWRITE_TEXT_METRICS metrics{};DWRITE_LINE_METRICS line{};UINT32 lines=0;
+        if(FAILED(layout->GetMetrics(&metrics))||FAILED(layout->GetLineMetrics(&line,1,&lines)))return false;
+        auto number=[&](const wchar_t* name){return StyleSheet::Length(node->Attribute(name),24,FontSize(style),0);};
+        float x=number(L"x")+number(L"dx"),y=number(L"y")+number(L"dy")-line.baseline;
+        const auto anchor=style.Get(L"text-anchor",L"start");
+        if(anchor==L"middle")x-=metrics.widthIncludingTrailingWhitespace/2;
+        else if(anchor==L"end")x-=metrics.widthIncludingTrailingWhitespace;
+        UINT32 position=0;
+        for(const auto& cluster:clusters){
+            FLOAT hitX=0,hitY=0;DWRITE_HIT_TEST_METRICS hit{};
+            if(FAILED(layout->HitTestTextPosition(position,FALSE,&hitX,&hitY,&hit)))return false;
+            // UTF-16 units sharing a shaped cluster share its glyph cell.
+            // DirectWrite supplies visual positions for ligatures and bidi text.
+            for(UINT16 unit=0;unit<cluster.length;++unit)
+                characters->push_back({x+hit.left,y+hit.top,hit.width,hit.height});
+            position+=cluster.length;
+        }
+    }
+    return true;
+}
+
+bool MeasureCanvasText(const CanvasDrawingState& state,const std::wstring& text,CanvasTextMetrics& output){
+    output={};const auto font=ParseCanvasFont(state.font);auto* factory=SharedWriteFactory();
+    const auto layout=CanvasTextLayout(factory,font,text);if(!layout)return false;
+    DWRITE_TEXT_METRICS metrics{};DWRITE_OVERHANG_METRICS overhang{};DWRITE_LINE_METRICS line{};UINT32 count=0;
+    if(FAILED(layout->GetMetrics(&metrics))||FAILED(layout->GetOverhangMetrics(&overhang))||FAILED(layout->GetLineMetrics(&line,1,&count)))return false;
+    output.width=metrics.widthIncludingTrailingWhitespace;
+    const auto align=ToLower(state.textAlign);const double horizontal=align==L"center"?-output.width/2:
+        align==L"right"||align==L"end"?-output.width:0;
+    const double top=CanvasTextTop(font,text,state.textBaseline,layout.Get(),metrics),alphabetic=top+line.baseline;
+    if(std::any_of(text.begin(),text.end(),[](wchar_t character){return character!=L' '&&!(character>=9&&character<=13);})){
+        output.actualBoundingBoxLeft=overhang.left-horizontal;
+        output.actualBoundingBoxRight=metrics.layoutWidth+overhang.right+horizontal;
+        output.actualBoundingBoxAscent=overhang.top-top;
+        output.actualBoundingBoxDescent=metrics.layoutHeight+overhang.bottom+top;
+    }
+    Microsoft::WRL::ComPtr<IDWriteFontCollection> collection;Microsoft::WRL::ComPtr<IDWriteFontFamily> family;
+    Microsoft::WRL::ComPtr<IDWriteFont> matched;UINT32 index=0;BOOL exists=FALSE;
+    if(FAILED(factory->GetSystemFontCollection(&collection))||FAILED(collection->FindFamilyName(font.family.c_str(),&index,&exists))||!exists||
+       FAILED(collection->GetFontFamily(index,&family))||FAILED(family->GetFirstMatchingFont(font.weight,DWRITE_FONT_STRETCH_NORMAL,font.style,&matched)))return false;
+    DWRITE_FONT_METRICS face{};matched->GetMetrics(&face);if(!face.designUnitsPerEm)return false;
+    const double ascent=font.size*face.ascent/face.designUnitsPerEm,descent=font.size*face.descent/face.designUnitsPerEm;
+    output.fontBoundingBoxAscent=ascent-alphabetic;output.fontBoundingBoxDescent=descent+alphabetic;
+    output.emHeightAscent=ascent-alphabetic;output.emHeightDescent=descent+alphabetic;
+    output.hangingBaseline=ascent*0.8-alphabetic;output.alphabeticBaseline=-alphabetic;output.ideographicBaseline=-descent-alphabetic;
+    return true;
+}
+
+bool ReadCanvasPixels(const CanvasSurface& surface,std::vector<unsigned char>& rgba){
+    rgba.clear();
+    if(surface.width==0||surface.height==0)return true;
+    const auto bytes=static_cast<std::uint64_t>(surface.width)*surface.height*4;
+    if(bytes>64*1024*1024)return false;
+    Microsoft::WRL::ComPtr<IWICImagingFactory> imaging;
+    Microsoft::WRL::ComPtr<IWICBitmap> bitmap;
+    Microsoft::WRL::ComPtr<ID2D1Factory> drawing;
+    Microsoft::WRL::ComPtr<IDWriteFactory> text;
+    Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
+    if(FAILED(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&imaging)))||
+       FAILED(imaging->CreateBitmap(surface.width,surface.height,GUID_WICPixelFormat32bppPBGRA,WICBitmapCacheOnLoad,&bitmap))||
+       FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,drawing.GetAddressOf()))||
+       FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),reinterpret_cast<IUnknown**>(text.GetAddressOf()))))return false;
+    const auto properties=D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED),96,96);
+    if(FAILED(drawing->CreateWicBitmapRenderTarget(bitmap.Get(),properties,&target))||
+       FAILED(ReplayCanvas(target.Get(),text.Get(),surface)))return false;
+    target.Reset();
+    Microsoft::WRL::ComPtr<IWICBitmapLock> lock;
+    const WICRect bounds{0,0,static_cast<INT>(surface.width),static_cast<INT>(surface.height)};
+    if(FAILED(bitmap->Lock(&bounds,WICBitmapLockRead,&lock)))return false;
+    UINT stride=0,length=0;BYTE* pixels=nullptr;
+    if(FAILED(lock->GetStride(&stride))||FAILED(lock->GetDataPointer(&length,&pixels))||
+       static_cast<std::uint64_t>(stride)*(surface.height-1)+surface.width*4>length)return false;
+    rgba.resize(static_cast<size_t>(bytes));
+    for(unsigned y=0;y<surface.height;++y)for(unsigned x=0;x<surface.width;++x){
+        const auto* source=pixels+static_cast<size_t>(y)*stride+x*4;
+        auto* destination=rgba.data()+(static_cast<size_t>(y)*surface.width+x)*4;
+        const unsigned alpha=source[3];destination[3]=static_cast<unsigned char>(alpha);
+        for(unsigned channel=0;channel<3;++channel)
+            destination[channel]=alpha?static_cast<unsigned char>(std::min(255u,(source[2-channel]*255u+alpha/2)/alpha)):0;
+    }
+    return true;
+}
+
+bool EncodeCanvasPng(const CanvasSurface& surface,std::vector<unsigned char>& png){
+    png.clear();std::vector<unsigned char> rgba;
+    if(!surface.width||!surface.height||!ReadCanvasPixels(surface,rgba))return false;
+    Microsoft::WRL::ComPtr<IWICImagingFactory> imaging;
+    Microsoft::WRL::ComPtr<IStream> stream;
+    Microsoft::WRL::ComPtr<IWICBitmapEncoder> encoder;
+    Microsoft::WRL::ComPtr<IWICBitmapFrameEncode> frame;
+    if(FAILED(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&imaging)))||
+       FAILED(CreateStreamOnHGlobal(nullptr,TRUE,&stream))||
+       FAILED(imaging->CreateEncoder(GUID_ContainerFormatPng,nullptr,&encoder))||
+       FAILED(encoder->Initialize(stream.Get(),WICBitmapEncoderNoCache))||
+       FAILED(encoder->CreateNewFrame(&frame,nullptr))||FAILED(frame->Initialize(nullptr))||
+       FAILED(frame->SetSize(surface.width,surface.height))||FAILED(frame->SetResolution(96,96)))return false;
+    // WIC's PNG encoder accepts straight-alpha BGRA. The Canvas reader exposes
+    // RGBA, so convert channel order without changing alpha or pixel geometry.
+    for(size_t index=0;index<rgba.size();index+=4)std::swap(rgba[index],rgba[index+2]);
+    auto format=GUID_WICPixelFormat32bppBGRA;
+    if(FAILED(frame->SetPixelFormat(&format))||format!=GUID_WICPixelFormat32bppBGRA||
+       FAILED(frame->WritePixels(surface.height,surface.width*4,static_cast<UINT>(rgba.size()),rgba.data()))||
+       FAILED(frame->Commit())||FAILED(encoder->Commit()))return false;
+    STATSTG information{};HGLOBAL memory=nullptr;
+    if(FAILED(stream->Stat(&information,STATFLAG_NONAME))||information.cbSize.HighPart||
+       FAILED(GetHGlobalFromStream(stream.Get(),&memory)))return false;
+    const auto* data=static_cast<const unsigned char*>(GlobalLock(memory));if(!data)return false;
+    png.assign(data,data+information.cbSize.LowPart);GlobalUnlock(memory);return true;
+}
+
 LayoutEngine::LayoutEngine(Document& document,StyleSheet& styleSheet):document_(document),styleSheet_(styleSheet){}
 LayoutEngine::~LayoutEngine(){ClearOwnerBoundThreadCaches();}
 void LayoutEngine::SetRasterImageResolver(RasterImageResolver resolver){rasterImageResolver_=std::move(resolver);}
 
+static void PreserveInlineEdgeSpace(LayoutBox& box,bool leading){
+    if(box.node->type==NodeType::Text){
+        if(leading)box.preserveLeadingWhitespace=true;else box.preserveTrailingWhitespace=true;
+        return;
+    }
+    if(!box.style.Is(L"display",L"inline")||IsAtomicInlineLevel(box))return;
+    for(size_t offset=0;offset<box.children.size();++offset){
+        auto& child=*box.children[leading?offset:box.children.size()-1-offset];
+        if(!child.visible||child.style.Is(L"position",L"absolute")||child.style.Is(L"position",L"fixed"))continue;
+        PreserveInlineEdgeSpace(child,leading);break;
+    }
+}
+
 std::unique_ptr<LayoutBox> LayoutEngine::Build(const std::shared_ptr<Node>& node,const ComputedStyle* parentStyle,std::uint64_t parentContext,size_t siblingIndex,size_t siblingCount,const std::shared_ptr<Node>& previousElement){
-    if(!node||node->type==NodeType::Comment)return {};auto box=std::make_unique<LayoutBox>();box->node=node;boxIndex_[node.get()]=box.get();const auto cacheKey=StyleContextHash(node,parentContext,styleSheet_,siblingIndex,siblingCount,previousElement);auto cached=styleCache_.find(cacheKey);if(cached!=styleCache_.end())box->style=cached->second;else{box->style=styleSheet_.Compute(node,parentStyle);styleCache_.emplace(cacheKey,box->style);}box->style.deviceScale=deviceScale_;box->visible=!box->style.Is(L"display",L"none");
+    if(!node||node->type==NodeType::Comment)return {};
+    auto box=std::make_unique<LayoutBox>();box->node=node;boxIndex_[node.get()]=box.get();
+    auto treeRoot=node;while(const auto ancestor=treeRoot->parent.lock())treeRoot=ancestor;
+    const bool shadowTree=!treeRoot->shadowHost.expired();
+    const auto cacheKey=StyleContextHash(node,parentContext,styleSheet_,siblingIndex,siblingCount,previousElement);
+    const auto cached=styleCache_.find(cacheKey);
+    if(!shadowTree&&cached!=styleCache_.end())box->style=cached->second;
+    else{
+        box->style=styleSheet_.Compute(node,parentStyle);
+        if(!shadowTree)styleCache_.emplace(cacheKey,box->style);
+    }
+    box->style.deviceScale=deviceScale_;box->visible=!box->style.Is(L"display",L"none");
     if(!box->visible)return box;
     if(node->type==NodeType::Element&&styleSheet_.HasPseudoRulesFor(node,L"first-letter")){
         std::shared_ptr<Node> textNode;size_t offset=0,length=0;
@@ -4433,7 +5568,7 @@ std::unique_ptr<LayoutBox> LayoutEngine::Build(const std::shared_ptr<Node>& node
     const bool anonymousLayoutItem=parentDisplay==L"flex"||parentDisplay==L"inline-flex"||
         parentDisplay==L"grid"||parentDisplay==L"inline-grid";
     bool hasInlineContent=false;
-    size_t elementCount=0;for(const auto& child:node->children)if(child->type==NodeType::Element)++elementCount;
+    size_t elementCount=0;for(const auto& child:node->RenderChildren())if(child->type==NodeType::Element)++elementCount;
     const auto parentWhiteSpace=box->style.Get(L"white-space");
     const auto hasRenderableText=[&](const std::wstring& text){
         // Flex and grid turn direct text runs into anonymous layout items, but
@@ -4443,10 +5578,11 @@ std::unique_ptr<LayoutBox> LayoutEngine::Build(const std::shared_ptr<Node>& node
         if(anonymousLayoutItem&&std::all_of(text.begin(),text.end(),
             [](wchar_t character){return std::iswspace(character)!=0;}))return false;
         const auto normalized=NormalizeText(text,parentWhiteSpace);
-        return PreservesLineBreaks(parentWhiteSpace)?!normalized.empty():!Trim(normalized).empty();
+        return PreservesLineBreaks(parentWhiteSpace)?!normalized.empty():
+            std::any_of(normalized.begin(),normalized.end(),[](wchar_t c){return !IsCollapsibleTextSpace(c);});
     };
-    std::vector<bool> hasFollowingContent(node->children.size());bool following=false;
-    for(size_t index=node->children.size();index>0;--index){const auto& child=node->children[index-1];hasFollowingContent[index-1]=following;if(child->type==NodeType::Text){if(hasRenderableText(child->text))following=true;}else if(child->type==NodeType::Element)following=true;}
+    std::vector<bool> hasFollowingContent(node->RenderChildren().size());bool following=false;
+    for(size_t index=node->RenderChildren().size();index>0;--index){const auto& child=node->RenderChildren()[index-1];hasFollowingContent[index-1]=following;if(child->type==NodeType::Text){if(hasRenderableText(child->text))following=true;}else if(child->type==NodeType::Element)following=true;}
     const auto appendBuilt=[&](std::unique_ptr<LayoutBox> built,
                                const std::shared_ptr<Node>& sourceNode,
                                bool preserveLeading,bool preserveTrailing){
@@ -4457,18 +5593,51 @@ std::unique_ptr<LayoutBox> LayoutEngine::Build(const std::shared_ptr<Node>& node
             if(!boxIndex_.count(sourceNode.get()))boxIndex_[sourceNode.get()]=built.get();
         }
         const bool inlineLevel=built->node->type==NodeType::Text||IsInlineLevel(built->style.Get(L"display"));
+        const bool outOfFlow=built->style.Is(L"position",L"absolute")||
+            built->style.Is(L"position",L"fixed")||
+            (!anonymousLayoutItem&&UsedFloatSide(built->style)!=FloatSide::None);
         if(built->node->type==NodeType::Text&&!anonymousLayoutItem){
             built->preserveLeadingWhitespace=preserveLeading;
             built->preserveTrailingWhitespace=preserveTrailing;
+        }else if(!outOfFlow&&!anonymousLayoutItem&&built->style.Is(L"display",L"inline")){
+            // Collapsed edge spaces inside nested inlines belong to the
+            // surrounding line, including a space before a following control.
+            if(preserveLeading)PreserveInlineEdgeSpace(*built,true);
+            if(preserveTrailing)PreserveInlineEdgeSpace(*built,false);
         }
-        hasInlineContent=inlineLevel;box->containsSticky=box->containsSticky||built->containsSticky;
+        // Out-of-flow elements do not make a whitespace-only sibling into an
+        // inline run, nor interrupt real inline content on either side.
+        if(!outOfFlow)hasInlineContent=inlineLevel;
+        box->containsSticky=box->containsSticky||built->containsSticky;
         box->children.push_back(std::move(built));
     };
     size_t elementIndex=0;std::shared_ptr<Node> previousChildElement;
-    for(size_t childIndex=0;childIndex<node->children.size();++childIndex){auto& child=node->children[childIndex];
+    for(size_t childIndex=0;childIndex<node->RenderChildren().size();++childIndex){auto& child=node->RenderChildren()[childIndex];
         if(node->tag==L"svg")break; // SVG descendants are painted in the SVG viewport, not HTML flow.
         if(child->type==NodeType::Comment)continue;
-        if(child->type==NodeType::Text&&!hasRenderableText(child->text))continue;
+        if(child->type==NodeType::Text&&!hasRenderableText(child->text)){
+            // A collapsed space between inline siblings is still a text run.
+            // Dropping whitespace-only DOM nodes joins an image or inline
+            // box directly to the following label. Formatting whitespace
+            // around block children and anonymous flex/grid items stays empty.
+            if(anonymousLayoutItem||!hasInlineContent||!hasFollowingContent[childIndex])continue;
+            bool nextInline=false;
+            for(size_t next=childIndex+1;next<node->RenderChildren().size();++next){
+                const auto& followingNode=node->RenderChildren()[next];
+                if(followingNode->type==NodeType::Comment)continue;
+                if(followingNode->type==NodeType::Text){
+                    if(!hasRenderableText(followingNode->text))continue;
+                    nextInline=true;break;
+                }
+                const auto followingStyle=styleSheet_.Compute(followingNode,&box->style);
+                if(followingStyle.Is(L"display",L"none")||
+                   followingStyle.Is(L"position",L"absolute")||
+                   followingStyle.Is(L"position",L"fixed")||
+                   UsedFloatSide(followingStyle)!=FloatSide::None)continue;
+                nextInline=IsInlineLevel(followingStyle.Get(L"display"));break;
+            }
+            if(!nextInline)continue;
+        }
         if(child->type==NodeType::Text){
             const auto firstLetter=firstLetterRuns_.find(child.get());
             if(firstLetter!=firstLetterRuns_.end()&&
@@ -4598,17 +5767,44 @@ void LayoutEngine::ApplyTransitions(LayoutBox& box){
             }else transitions_.erase(key);
         }
     }
+    ApplyAnimations(box,true);
     for(auto& child:box.children)ApplyTransitions(*child);
+}
+
+void LayoutEngine::ApplyAnimations(LayoutBox& box,bool updateDefinitions){
+    if(box.generatedFrom||!box.node)return;
+    const auto key=box.node.get();
+    if(updateDefinitions){
+        auto definitions=AnimationDefinitions(box.style);std::vector<StyleAnimation> active;
+        const auto previous=animations_.find(key);
+        for(size_t index=0;index<definitions.size();++index){
+            auto animation=std::move(definitions[index]);
+            if(animation.name.empty()||animation.name==L"none")continue;
+            const auto frames=styleSheet_.FindKeyframes(box.node,animation.name);if(!frames)continue;
+            animation.frames=frames->frames;
+            if(previous!=animations_.end()&&index<previous->second.size()&&previous->second[index].signature==animation.signature)
+                animation.elapsedMs=previous->second[index].elapsedMs;
+            active.push_back(std::move(animation));
+        }
+        if(active.empty()){animations_.erase(key);animationTargets_.erase(key);return;}
+        animationTargets_[key]=box.style;animations_[key]=std::move(active);
+    }
+    const auto active=animations_.find(key);if(active==animations_.end())return;
+    for(const auto& animation:active->second)ApplyAnimationValues(box.style,animation);
 }
 
 bool LayoutEngine::HasActiveTransitions()const{
     for(const auto& item:transitions_)if(!item.second.empty())return true;
+    for(const auto& item:animations_)for(const auto& animation:item.second)
+        if(!animation.paused&&animation.durationMs>0&&animation.elapsedMs<animation.delayMs+animation.durationMs*animation.iterations)return true;
     return false;
 }
 
 void LayoutEngine::RefreshTransitionFrame(LayoutBox& box){
     if(!box.generatedFrom&&box.node){
         const auto key=box.node.get();auto active=transitions_.find(key);
+        const auto animationTarget=animationTargets_.find(key);
+        if(animationTarget!=animationTargets_.end())box.style=animationTarget->second;
         if(active!=transitions_.end()){
             const auto target=transitionTargets_.find(key);
             if(target!=transitionTargets_.end())box.style=target->second;
@@ -4624,8 +5820,10 @@ void LayoutEngine::RefreshTransitionFrame(LayoutBox& box){
             }
             if(intrinsicChanged)for(auto* current=&box;current;current=current->parent){
                 current->naturalWidthValid=false;current->minimumWidthValid=false;current->naturalHeightValid=false;
+                current->blockMarginsValid=false;
             }
         }
+        ApplyAnimations(box,false);
     }
     for(auto& child:box.children)RefreshTransitionFrame(*child);
 }
@@ -4635,6 +5833,8 @@ bool LayoutEngine::AdvanceTransitions(float milliseconds){
     for(auto& item:transitions_)for(auto& transition:item.second){
         transition.elapsedMs+=milliseconds;
     }
+    for(auto& item:animations_)for(auto& animation:item.second)
+        if(!animation.paused)animation.elapsedMs+=milliseconds;
     if(root_){
         RefreshTransitionFrame(*root_);
         root_->rect={0,0,viewportWidth_,viewportHeight_};root_->content=root_->rect;
@@ -4646,7 +5846,7 @@ bool LayoutEngine::AdvanceTransitions(float milliseconds){
 }
 
 void LayoutEngine::ClearTransitions(){
-    transitionTargets_.clear();transitions_.clear();
+    transitionTargets_.clear();transitions_.clear();animationTargets_.clear();animations_.clear();
 }
 
 void LayoutEngine::DiscardDeviceResources(){
@@ -4686,6 +5886,30 @@ void LayoutEngine::Layout(float width,float height,float deviceScale){
     std::vector<const Node*> removed;
     for(const auto& item:transitionTargets_)if(!boxIndex_.count(item.first))removed.push_back(item.first);
     for(const auto key:removed){transitionTargets_.erase(key);transitions_.erase(key);}
+    removed.clear();
+    for(const auto& item:animationTargets_)if(!boxIndex_.count(item.first))removed.push_back(item.first);
+    for(const auto key:removed){animationTargets_.erase(key);animations_.erase(key);}
+    // CSS propagates overflow from the root element, or from body while the
+    // root remains visible, to the viewport. A visible propagated value is
+    // used as auto by the viewport so an ordinary tall document scrolls even
+    // without an authored overflow declaration.
+    const ComputedStyle* viewportOverflowStyle=&root_->style;
+    if(root_->node&&root_->node->tag==L"body"&&inheritedStyle){
+        const auto htmlOverflow=inheritedStyle->Get(L"overflow",L"visible");
+        const auto htmlX=ToLower(Trim(inheritedStyle->Get(L"overflow-x",htmlOverflow)));
+        const auto htmlY=ToLower(Trim(inheritedStyle->Get(L"overflow-y",htmlOverflow)));
+        if(htmlX!=L"visible"||htmlY!=L"visible")viewportOverflowStyle=inheritedStyle;
+    }
+    const auto propagatedOverflow=[&](const wchar_t* axis){
+        const auto shorthand=viewportOverflowStyle->Get(L"overflow",L"visible");
+        auto value=ToLower(Trim(viewportOverflowStyle->Get(axis,shorthand)));
+        if(value==L"clip")return std::wstring(L"hidden");
+        return value.empty()||value==L"visible"?std::wstring(L"auto"):value;
+    };
+    root_->viewportScrollContainer=true;
+    root_->viewportScrollport={0,0,viewportWidth_,viewportHeight_};
+    root_->viewportOverflowX=propagatedOverflow(L"overflow-x");
+    root_->viewportOverflowY=propagatedOverflow(L"overflow-y");
     root_->rect={0,0,viewportWidth_,viewportHeight_};root_->content=root_->rect;LayoutBoxTree(*root_,root_->rect,true);
     UpdateTraversalMetadata(*root_);
     UpdateStackingContexts(*root_);
@@ -4694,6 +5918,7 @@ void LayoutEngine::Layout(float width,float height,float deviceScale){
 
 void LayoutEngine::InvalidateMeasurements(LayoutBox& box){
     box.naturalWidthValid=false;box.minimumWidthValid=false;box.naturalHeightValid=false;
+    box.blockMarginsValid=false;
     box.stickyFlowYValid=false;
     for(auto& child:box.children)InvalidateMeasurements(*child);
 }
@@ -4709,6 +5934,7 @@ void LayoutEngine::Relayout(float width,float height,float deviceScale){
     }
     viewportWidth_=width;viewportHeight_=height;
     InvalidateMeasurements(*root_);
+    root_->viewportScrollport={0,0,viewportWidth_,viewportHeight_};
     root_->rect={0,0,viewportWidth_,viewportHeight_};root_->content=root_->rect;
     LayoutBoxTree(*root_,root_->rect,true);
     UpdateTraversalMetadata(*root_);
@@ -4728,7 +5954,12 @@ void LayoutEngine::LayoutBoxTree(LayoutBox& box,const LayoutRect& available,bool
         box.content=available;
         return;
     }
-    auto margin=EdgeValues(box.style,L"margin",available.width,viewportWidth_);auto padding=EdgeValues(box.style,L"padding",available.width,viewportWidth_);
+    const bool flexItem=box.parent&&(box.parent->style.Is(L"display",L"flex")||
+        box.parent->style.Is(L"display",L"inline-flex"))&&
+        !box.style.Is(L"position",L"absolute")&&!box.style.Is(L"position",L"fixed");
+    const float edgeReference=flexItem?box.parent->content.width:available.width;
+    auto margin=UsedLayoutMargins(box,edgeReference,viewportWidth_);
+    auto padding=EdgeValues(box.style,L"padding",edgeReference,viewportWidth_);
     const auto border=BorderValues(box.style);float x=available.x+margin.left,y=available.y+margin.top;
     float width=std::max(0.0f,available.width-margin.left-margin.right),height=std::max(0.0f,available.height-margin.top-margin.bottom);
     auto cssWidth=box.style.Get(L"width"),cssHeight=box.style.Get(L"height");
@@ -4745,7 +5976,8 @@ void LayoutEngine::UpdateTraversalMetadata(LayoutBox& box){
     box.deferredStackingScope=nullptr;
     box.scrollTranslationBoxes.clear();
     box.scrollStickyChildren.clear();
-    box.scrollTraversalCached=box.scrollWidth>box.content.width||box.scrollHeight>box.content.height;
+    box.scrollTraversalCached=box.scrollWidth>ScrollClientWidth(box)||
+        box.scrollHeight>ScrollClientHeight(box);
     if(box.scrollTraversalCached){
         const auto collect=[&](const auto& self,LayoutBox& child)->void{
             box.scrollTranslationBoxes.push_back(&child);
@@ -4828,9 +6060,10 @@ void LayoutEngine::UpdateTopLayer(){
 }
 
 void LayoutEngine::FinalizeScroll(LayoutBox& box){
-    const auto overflowX=box.style.Get(L"overflow-x",box.style.Get(L"overflow",L"visible"));
-    const auto overflowY=box.style.Get(L"overflow-y",box.style.Get(L"overflow",L"visible"));
-    box.scrollWidth=box.content.width;box.scrollHeight=box.content.height;
+    const auto overflowX=OverflowX(box),overflowY=OverflowY(box);
+    const auto scrollport=PaddingBox(box);
+    const float clientWidth=ScrollClientWidth(box),clientHeight=ScrollClientHeight(box);
+    box.scrollWidth=clientWidth;box.scrollHeight=clientHeight;
     const auto scrollable=[](const std::wstring& overflow){return overflow==L"auto"||overflow==L"scroll"||overflow==L"hidden";};
     const bool scrollX=scrollable(overflowX),scrollY=scrollable(overflowY);
     if(!scrollX&&!scrollY){box.node->scrollLeft=0;box.node->scrollTop=0;box.appliedScrollLeft=0;box.appliedScrollTop=0;return;}
@@ -4878,22 +6111,35 @@ void LayoutEngine::FinalizeScroll(LayoutBox& box){
     };
     ScrollExtent extent{box.content.x,box.content.y};
     for(const auto& child:box.children){const auto childExtent=measure(*child);extent.right=std::max(extent.right,childExtent.right);extent.bottom=std::max(extent.bottom,childExtent.bottom);}
-    if(scrollX)box.scrollWidth=std::max(box.content.width,extent.right-box.content.x);
-    if(scrollY)box.scrollHeight=std::max(box.content.height,extent.bottom-box.content.y);
-    box.node->scrollLeft=std::max(0.0f,std::min(std::max(0.0f,box.scrollWidth-box.content.width),box.node->scrollLeft));
-    box.node->scrollTop=std::max(0.0f,std::min(std::max(0.0f,box.scrollHeight-box.content.height),box.node->scrollTop));
+    if(box.viewportScrollContainer){
+        // Body margins live outside its border box but remain part of the
+        // document's scrollable overflow at the trailing viewport edges.
+        const float endX=std::max(0.0f,scrollport.x+scrollport.width-
+            (box.rect.x+box.rect.width));
+        const float endY=std::max(0.0f,scrollport.y+scrollport.height-
+            (box.rect.y+box.rect.height));
+        if(extent.right>scrollport.x+scrollport.width+0.01f)extent.right+=endX;
+        if(extent.bottom>scrollport.y+scrollport.height+0.01f)extent.bottom+=endY;
+    }
+    if(scrollX)box.scrollWidth=std::max(clientWidth,extent.right-scrollport.x);
+    if(scrollY)box.scrollHeight=std::max(clientHeight,extent.bottom-scrollport.y);
+    box.node->scrollLeft=std::max(0.0f,std::min(std::max(0.0f,box.scrollWidth-clientWidth),box.node->scrollLeft));
+    box.node->scrollTop=std::max(0.0f,std::min(std::max(0.0f,box.scrollHeight-clientHeight),box.node->scrollTop));
     if(box.node->scrollLeft>0||box.node->scrollTop>0){
         for(auto& child:box.children)if(!child->style.Is(L"position",L"fixed"))TranslateBox(*child,-box.node->scrollLeft,-box.node->scrollTop);
-        for(auto& child:box.children)ApplySticky(*child,box.content.y,viewportHeight_);
+        for(auto& child:box.children)ApplySticky(*child,scrollport.y,viewportHeight_);
     }
     box.appliedScrollLeft=box.node->scrollLeft;box.appliedScrollTop=box.node->scrollTop;
 }
 
 void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
-    float flowWidth=box.content.width;const auto overflowY=box.style.Get(L"overflow-y",L"visible");
+    float flowWidth=box.content.width;const auto overflowY=OverflowY(box);
     if(overflowY==L"scroll"||((overflowY==L"auto")&&HasStableScrollbarGutter(box.style)))
         flowWidth=std::max(0.0f,flowWidth-VerticalScrollbarMetricsFor(box,styleSheet_).width);
-    else if(overflowY==L"auto"){
+    else if(overflowY==L"auto"&&!box.viewportScrollContainer){
+        // Viewport auto scrollbars overlay the initial containing block. Do
+        // not perform a full intrinsic-height pass over every page before its
+        // normal layout merely to predict whether the document will scroll.
         float required=0;
         for(const auto& child:box.children)
             if(child->visible&&!child->style.Is(L"position",L"absolute")&&
@@ -4917,6 +6163,8 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
         return;
     }
     auto inlineOuterWidth=[&](const LayoutBox& child){
+        if(child.style.Is(L"display",L"inline")&&!IsAtomicInlineLevel(child)&&
+           HasInFlowBlockChildren(child))return flowWidth;
         const auto width=child.style.Get(L"width");
         if(!width.empty()&&width!=L"auto")return BlockOuterWidth(child,flowWidth,viewportWidth_);
         float natural=NaturalWidth(child);
@@ -4934,6 +6182,7 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
         return natural;
     };
     auto inlineOuterHeight=[&](const LayoutBox& child,float width){
+        if(child.style.Is(L"display",L"inline")&&!IsAtomicInlineLevel(child)&&!IsBlockifiedItem(child))return NaturalHeight(child,width);
         const auto height=child.style.Get(L"height");
         return !height.empty()&&height!=L"auto"?
             BlockOuterHeight(child,box.content.height,width,viewportHeight_,viewportWidth_):
@@ -4942,13 +6191,41 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
     const bool hasFloats=std::any_of(box.children.begin(),box.children.end(),
         [](const auto& child){return child->visible&&
             UsedFloatSide(child->style)!=FloatSide::None;});
-    bool inlineOnly=!hasFloats&&!box.children.empty();std::vector<std::pair<float,float>> inlineSizes;float inlineWidth=0,inlineHeight=0;
-    for(auto& child:box.children){if(!child->visible)continue;if(child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed"))continue;if(child->node->tag==L"br"){inlineOnly=false;break;}const auto display=child->style.Get(L"display");if(!IsInlineLevel(display)){inlineOnly=false;break;}const float width=inlineOuterWidth(*child),height=inlineOuterHeight(*child,width);inlineSizes.push_back({width,height});inlineWidth+=width;inlineHeight=std::max(inlineHeight,height);}
+    bool inlineOnly=!hasFloats&&!box.children.empty();
+    std::vector<std::pair<float,float>> inlineSizes;
+    float inlineWidth=0;
+    auto inlineLine=InitialInlineLineMetrics(box);
+    for(auto& child:box.children){
+        if(!child->visible)continue;
+        if(child->style.Is(L"position",L"absolute")||
+           child->style.Is(L"position",L"fixed"))continue;
+        if(child->node->tag==L"br"){
+            inlineOnly=false;
+            break;
+        }
+        const auto display=child->style.Get(L"display");
+        if(!IsInlineLevel(display)){
+            inlineOnly=false;
+            break;
+        }
+        const float width=inlineOuterWidth(*child);
+        const float height=inlineOuterHeight(*child,width);
+        inlineSizes.push_back({width,height});
+        inlineWidth+=width;
+        IncludeInlineLineBox(inlineLine,box.style,*child,height,
+                             flowWidth,viewportWidth_);
+    }
+    const float inlineHeight=inlineLine.Height();
     const auto whiteSpace=box.style.Get(L"white-space");
     const bool noWrap=PreventsTextWrapping(whiteSpace);
     if(inlineOnly&&(!inlineSizes.empty())&&(inlineWidth<=flowWidth+0.5f||noWrap)){
-        float x=box.content.x;if(box.style.Is(L"text-align",L"center"))x+=(flowWidth-inlineWidth)/2;else if(box.style.Is(L"text-align",L"right"))x+=flowWidth-inlineWidth;
+        float x=box.content.x;
+        if(box.style.Is(L"text-align",L"center")||box.style.Is(L"text-align",L"-webkit-center"))x+=(flowWidth-inlineWidth)/2;
+        else if(box.style.Is(L"text-align",L"right")||box.style.Is(L"text-align",L"-webkit-right"))x+=flowWidth-inlineWidth;
         float y=box.content.y;
+        if(box.style.Is(L"display",L"inline")&&!IsBlockifiedItem(box)&&
+           !UsesGenericMonospaceMetrics(box.style))
+            y-=InlineHalfLeading(box.style);
         // Ordinary inline formatting starts at the block's content edge.
         // A table cell, however, distributes the row's extra block size around
         // its inline line.  Keep a mixed line (for example icon + text) on the
@@ -4965,18 +6242,19 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
         size_t index=0;
         for(auto& child:box.children)if(child->visible){
             if(child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed")){
-                const LayoutRect area=child->style.Is(L"position",L"fixed")?LayoutRect{0,0,viewportWidth_,viewportHeight_}:AbsoluteContainingBlock(*child,viewportWidth_,viewportHeight_);
+                const LayoutRect area=AbsoluteContainingBlock(*child,viewportWidth_,viewportHeight_);
                 LayoutBoxTree(*child,PositionedRect(*child,area,viewportWidth_,viewportHeight_),true);continue;
             }
             const auto size=inlineSizes[index++];
-            const float baselineOffset=IsAtomicInlineLevel(*child)?0.0f:
-                InlineBaselineOffset(box.style,*child,flowWidth,viewportWidth_);
-            LayoutBoxTree(*child,{x,y+baselineOffset,size.first,size.second},true);
+            const float verticalOffset=InlineLineBoxOffset(
+                inlineLine,box.style,*child,size.second,flowWidth,viewportWidth_);
+            LayoutBoxTree(*child,{x,y+verticalOffset,size.first,size.second},true);
             x+=size.first;
         }
         return;
     }
     float cursorY=box.content.y;float lineX=box.content.x;float lineHeight=0;
+    BlockMarginFlow marginFlow; marginFlow.parent=CollapsedBlockMargins(box,box.rect.width);
     std::vector<FloatArea> floats;
     // The root body and its first in-flow block share their adjoining top
     // margin when neither establishes a separating border, padding, or scroll
@@ -4992,7 +6270,7 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
                    child->style.Is(L"position",L"fixed"))continue;
                 if(!IsInlineLevel(child->style.Get(L"display"))){
                     const auto bodyMargin=EdgeValues(box.style,L"margin",box.rect.width,viewportWidth_);
-                    const auto childMargin=EdgeValues(child->style,L"margin",flowWidth,viewportWidth_);
+                    const auto childMargin=UsedLayoutMargins(*child,flowWidth,viewportWidth_);
                     const auto collapse=[](float first,float second){
                         if(first>=0&&second>=0)return std::max(first,second);
                         if(first<=0&&second<=0)return std::min(first,second);
@@ -5005,16 +6283,28 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
             }
         }
     }
-    for(auto& child:box.children){if(!child->visible)continue;
+    size_t inlineLineBegin=0;
+    for(size_t childIndex=0;childIndex<box.children.size();++childIndex){
+        auto& child=box.children[childIndex];if(!child->visible)continue;
         const bool absolute=child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed");
         if(absolute){
-            const LayoutRect area=child->style.Is(L"position",L"fixed")?LayoutRect{0,0,viewportWidth_,viewportHeight_}:AbsoluteContainingBlock(*child,viewportWidth_,viewportHeight_);
+            const LayoutRect area=AbsoluteContainingBlock(*child,viewportWidth_,viewportHeight_);
             LayoutBoxTree(*child,PositionedRect(*child,area,viewportWidth_,viewportHeight_),true);continue;
         }
         const auto floatSide=UsedFloatSide(child->style);
         if(floatSide!=FloatSide::None){
-            if(lineX>box.content.x){cursorY+=lineHeight;lineX=box.content.x;lineHeight=0;}
+            marginFlow.Separate();
             const float w=FloatOuterWidth(*child,flowWidth,viewportWidth_);
+            float bandLeft=box.content.x,bandRight=box.content.x+flowWidth,nextBottom=0;
+            AvailableFloatBand(floats,box.content.x,box.content.x+flowWidth,cursorY,
+                               bandLeft,bandRight,nextBottom);
+            const float pendingInlineWidth=std::max(0.0f,lineX-bandLeft);
+            // A float can share the current line with preceding inline content.
+            // Only finish that line when its content and the float cannot fit.
+            if(lineHeight>0&&(w+pendingInlineWidth>bandRight-bandLeft+0.01f||
+               ClearedFloatY(floats,cursorY,child->style.Get(L"clear"))>cursorY+0.01f)){
+                cursorY+=lineHeight;lineX=box.content.x;lineHeight=0;
+            }
             const auto cssH=ToLower(Trim(child->style.Get(L"height")));
             const bool explicitHeight=!cssH.empty()&&cssH!=L"auto";
             const bool resolvedHeight=explicitHeight&&
@@ -5024,6 +6314,15 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
                 NaturalHeight(*child,std::max(1.0f,w));
             const auto placed=PlaceFloat(floats,box.content.x,box.content.x+flowWidth,
                 cursorY,w,h,floatSide,child->style.Get(L"clear"));
+            if(lineHeight>0&&floatSide==FloatSide::Left){
+                for(size_t prior=inlineLineBegin;prior<childIndex;++prior){
+                    auto& inlineChild=*box.children[prior];
+                    if(inlineChild.visible&&UsedFloatSide(inlineChild.style)==FloatSide::None&&
+                       !inlineChild.style.Is(L"position",L"absolute")&&!inlineChild.style.Is(L"position",L"fixed"))
+                        TranslateBox(inlineChild,w,0);
+                }
+                lineX+=w;
+            }
             LayoutBoxTree(*child,placed,true,true,resolvedHeight);
             floats.push_back({placed,floatSide});
             continue;
@@ -5034,15 +6333,58 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
             cursorY=std::max(cursorY,clearedY);lineX=box.content.x;lineHeight=0;
         }
         if(child->node->tag==L"br"){
+            marginFlow.Separate();
             const float breakHeight=LineHeight(child->style);
             LayoutBoxTree(*child,{lineX,cursorY,0,breakHeight},true,false,false);
             cursorY+=lineX>box.content.x?std::max(lineHeight,breakHeight):breakHeight;
             lineX=box.content.x;lineHeight=0;continue;
         }
         const auto d=child->style.Get(L"display");const bool inlineBox=IsInlineLevel(d);
-        if(inlineBox){float bandLeft=box.content.x,bandRight=box.content.x+flowWidth,nextBottom=0;AvailableFloatBand(floats,box.content.x,box.content.x+flowWidth,cursorY,bandLeft,bandRight,nextBottom);if(lineX==box.content.x)lineX=bandLeft;float w=inlineOuterWidth(*child);const bool wrapText=child->node->type==NodeType::Text&&!noWrap;const bool atomic=IsAtomicInlineLevel(*child);const bool wrappingInlineContainer=!noWrap&&child->node->type==NodeType::Element&&!atomic&&!child->children.empty();if((wrapText||wrappingInlineContainer)&&lineX+w>bandRight+0.5f){if(lineX>bandLeft){cursorY+=lineHeight;lineHeight=0;}else if(std::isfinite(nextBottom))cursorY=nextBottom;AvailableFloatBand(floats,box.content.x,box.content.x+flowWidth,cursorY,bandLeft,bandRight,nextBottom);lineX=bandLeft;w=std::min(w,std::max(0.0f,bandRight-bandLeft));}float h=(wrapText||wrappingInlineContainer)?NaturalHeight(*child,w):inlineOuterHeight(*child,w);if(!wrapText&&!wrappingInlineContainer&&lineX+w>bandRight+0.5f&&lineX>bandLeft){cursorY+=lineHeight;lineHeight=0;AvailableFloatBand(floats,box.content.x,box.content.x+flowWidth,cursorY,bandLeft,bandRight,nextBottom);lineX=bandLeft;}const float baselineOffset=atomic?0.0f:InlineBaselineOffset(box.style,*child,flowWidth,viewportWidth_);LayoutBoxTree(*child,{lineX,cursorY+baselineOffset,w,h},true,false,false);lineX+=w;lineHeight=std::max(LineHeight(box.style),std::max(lineHeight,h+(atomic?InlineFormattingDescent(box.style):0.0f)));}
+        if(inlineBox){
+            marginFlow.Separate();
+            float bandLeft=box.content.x,bandRight=box.content.x+flowWidth,nextBottom=0;
+            AvailableFloatBand(floats,box.content.x,box.content.x+flowWidth,cursorY,
+                               bandLeft,bandRight,nextBottom);
+            if(lineX==box.content.x)lineX=bandLeft;
+            float w=inlineOuterWidth(*child);
+            const bool wrapText=child->node->type==NodeType::Text&&!noWrap;
+            const bool atomic=IsAtomicInlineLevel(*child);
+            const bool wrappingInlineContainer=!noWrap&&
+                child->node->type==NodeType::Element&&!atomic&&
+                !child->children.empty();
+            if((wrapText||wrappingInlineContainer)&&lineX+w>bandRight+0.5f){
+                if(lineX>bandLeft){cursorY+=lineHeight;lineHeight=0;}
+                else if(std::isfinite(nextBottom))cursorY=nextBottom;
+                AvailableFloatBand(floats,box.content.x,box.content.x+flowWidth,
+                                   cursorY,bandLeft,bandRight,nextBottom);
+                lineX=bandLeft;
+                w=std::min(w,std::max(0.0f,bandRight-bandLeft));
+            }
+            const float h=(wrapText||wrappingInlineContainer)?
+                NaturalHeight(*child,w):inlineOuterHeight(*child,w);
+            if(!wrapText&&!wrappingInlineContainer&&lineX+w>bandRight+0.5f&&
+               lineX>bandLeft){
+                cursorY+=lineHeight;
+                lineHeight=0;
+                AvailableFloatBand(floats,box.content.x,box.content.x+flowWidth,
+                                   cursorY,bandLeft,bandRight,nextBottom);
+                lineX=bandLeft;
+            }
+            auto childLine=InitialInlineLineMetrics(box);
+            IncludeInlineLineBox(childLine,box.style,*child,h,
+                                 flowWidth,viewportWidth_);
+            const float verticalOffset=InlineLineBoxOffset(
+                childLine,box.style,*child,h,flowWidth,viewportWidth_);
+            if(lineHeight<=0)inlineLineBegin=childIndex;
+            LayoutBoxTree(*child,{lineX,cursorY+verticalOffset,w,h},
+                          true,false,false);
+            lineX+=w;
+            lineHeight=std::max(lineHeight,childLine.Height());
+        }
         else{
             if(lineX>box.content.x){cursorY+=lineHeight;lineX=box.content.x;lineHeight=0;}
+            const auto childMargins=CollapsedBlockMargins(*child,flowWidth);
+            cursorY+=marginFlow.Before(childMargins,child->style.Get(L"clear",L"none")!=L"none");
             float bandLeft=box.content.x,bandRight=box.content.x+flowWidth,nextBottom=0;
             AvailableFloatBand(floats,box.content.x,box.content.x+flowWidth,cursorY,
                                bandLeft,bandRight,nextBottom);
@@ -5078,7 +6420,25 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
             const bool autoRight=ToLower(Trim(child->style.Get(L"margin-right")))==L"auto";
             const float freeWidth=std::max(0.0f,availableWidth-w);float childX=bandLeft;
             if(autoLeft&&autoRight)childX+=freeWidth/2;else if(autoLeft)childX+=freeWidth;
-            LayoutBoxTree(*child,{childX,cursorY,w,h},true,true,explicitHeight);cursorY+=h;
+            else if(!autoRight){
+                if(box.style.Is(L"text-align",L"-webkit-center"))childX+=freeWidth/2;
+                else if(box.style.Is(L"text-align",L"-webkit-right"))childX+=freeWidth;
+            }
+            LayoutBoxTree(*child,{childX,cursorY,w,h},true,true,explicitHeight);
+            cursorY+=h+marginFlow.After(childMargins);
+        }
+    }
+    if(box.style.Is(L"display",L"table-cell")){
+        // Vertical alignment applies to all in-flow cell contents, including
+        // block children and floats, not just the inline-only fast path above.
+        float flowBottom=cursorY+lineHeight;
+        for(const auto& area:floats)flowBottom=std::max(flowBottom,area.rect.y+area.rect.height);
+        const float extra=std::max(0.0f,box.content.height-(flowBottom-box.content.y));
+        const auto alignment=box.style.Get(L"vertical-align",L"middle");
+        const float offset=alignment==L"bottom"?extra:alignment==L"middle"?extra/2:0;
+        if(offset>0)for(auto& child:box.children){
+            if(child->visible&&!child->style.Is(L"position",L"absolute")&&
+               !child->style.Is(L"position",L"fixed"))TranslateBox(*child,0,offset);
         }
     }
 }
@@ -5089,6 +6449,24 @@ void LayoutEngine::LayoutFlex(LayoutBox& box){
     const bool column=direction==L"column"||direction==L"column-reverse";
     const bool reverse=direction==L"row-reverse"||direction==L"column-reverse";
     const float mainSize=column?box.content.height:box.content.width;const float crossSize=column?box.content.width:box.content.height;const float gap=GapValue(box.style,!column,mainSize,viewportWidth_);
+    const auto decorationExtent=[&](const LayoutBox& child,bool horizontal){
+        // Flex allocations passed to LayoutBoxTree include padding and borders.
+        // Percentage padding on either axis resolves against the containing width.
+        const auto padding=EdgeValues(child.style,L"padding",box.content.width,viewportWidth_);
+        const auto border=BorderValues(child.style);
+        return horizontal?padding.left+padding.right+border.left+border.right:
+            padding.top+padding.bottom+border.top+border.bottom;
+    };
+    const auto definiteExtent=[&](const LayoutBox& child,const std::wstring& raw,
+                                  bool horizontal,float reference){
+        const float viewport=horizontal?viewportWidth_:viewportHeight_;
+        float value=StyleSheet::Length(raw,reference,viewport,0,FontSize(child.style));
+        value=Constrain(child.style,horizontal?L"min-width":L"min-height",
+                        horizontal?L"max-width":L"max-height",value,reference,viewport);
+        const float decoration=decorationExtent(child,horizontal);
+        return child.style.Is(L"box-sizing",L"border-box")?std::max(decoration,value):
+            decoration+std::max(0.0f,value);
+    };
     const auto wrapMode=ToLower(Trim(box.style.Get(L"flex-wrap",L"nowrap")));
     if((wrapMode==L"wrap"||wrapMode==L"wrap-reverse")&&!children.empty()){
         const size_t count=children.size();
@@ -5099,8 +6477,9 @@ void LayoutEngine::LayoutFlex(LayoutBox& box){
         const auto parentAlign=box.style.Get(L"align-items",L"stretch");
         for(size_t index=0;index<count;++index){
             auto* child=children[index];
-            const auto margin=EdgeValues(child->style,L"margin",mainSize,viewportWidth_);
+            const auto margin=EdgeValues(child->style,L"margin",box.content.width,viewportWidth_);
             const float mainMargin=column?margin.top+margin.bottom:margin.left+margin.right;
+            const float mainDecoration=decorationExtent(*child,!column);
             const auto isAutoMargin=[&](const wchar_t* property){
                 return ToLower(Trim(child->style.Get(property)))==L"auto";
             };
@@ -5114,14 +6493,10 @@ void LayoutEngine::LayoutFlex(LayoutBox& box){
             if(raw.empty()||raw==L"auto")raw=child->style.Get(column?L"height":L"width");
             const bool natural=raw.empty()||raw==L"auto"||ToLower(Trim(raw))==L"max-content";
             float base=natural?(column?NaturalHeight(*child,crossSize):NaturalWidth(*child)):
-                StyleSheet::Length(raw,mainSize,column?viewportHeight_:viewportWidth_,0);
-            if(!natural){
-                base=column?Constrain(child->style,L"min-height",L"max-height",base,mainSize,viewportHeight_):
-                    Constrain(child->style,L"min-width",L"max-width",base,mainSize,viewportWidth_);
-                base+=mainMargin;
-            }
-            sizes[index]=base;minimums[index]=column?mainMargin:MinContentWidth(*child);
-            shrinkWeights[index]=shrink*std::max(0.0f,base-mainMargin);
+                definiteExtent(*child,raw,!column,mainSize)+mainMargin;
+            sizes[index]=base;minimums[index]=std::max(mainDecoration+mainMargin,
+                column?mainMargin:MinContentWidth(*child));
+            shrinkWeights[index]=shrink*std::max(0.0f,base-mainMargin-mainDecoration);
 
             auto align=child->style.Get(L"align-self",L"auto");
             if(align.empty()||align==L"auto")align=parentAlign;
@@ -5129,7 +6504,7 @@ void LayoutEngine::LayoutFlex(LayoutBox& box){
             const auto crossProperty=child->style.Get(column?L"width":L"height");
             crossDefinite[index]=!crossProperty.empty()&&crossProperty!=L"auto";
             if(crossDefinite[index]){
-                crossExtents[index]=StyleSheet::Length(crossProperty,crossSize,column?viewportWidth_:viewportHeight_,0)+
+                crossExtents[index]=definiteExtent(*child,crossProperty,column,crossSize)+
                     (column?margin.left+margin.right:margin.top+margin.bottom);
             }else{
                 crossExtents[index]=column?NaturalWidth(*child):NaturalHeight(*child,std::max(1.0f,sizes[index]));
@@ -5277,15 +6652,9 @@ void LayoutEngine::LayoutFlex(LayoutBox& box){
         }
         for(auto& child:box.children)if(child->visible&&
             (child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed"))){
-            const LayoutRect area=child->style.Is(L"position",L"fixed")?
-                LayoutRect{0,0,viewportWidth_,viewportHeight_}:AbsoluteContainingBlock(*child,viewportWidth_,viewportHeight_);
-            auto positioned=PositionedRect(*child,area,viewportWidth_,viewportHeight_);
-            if(child->style.Get(L"left").empty()&&child->style.Get(L"right").empty()&&
-               box.style.Is(L"justify-content",L"center"))
-                positioned.x=area.x+(area.width-positioned.width)/2;
-            if(child->style.Get(L"top").empty()&&child->style.Get(L"bottom").empty()&&
-               box.style.Is(L"align-items",L"center"))
-                positioned.y=area.y+(area.height-positioned.height)/2;
+            const LayoutRect area=AbsoluteContainingBlock(*child,viewportWidth_,viewportHeight_);
+            auto positioned=FlexStaticPositionedRect(box,*child,
+                PositionedRect(*child,area,viewportWidth_,viewportHeight_));
             LayoutBoxTree(*child,positioned,true);
         }
         return;
@@ -5295,7 +6664,8 @@ void LayoutEngine::LayoutFlex(LayoutBox& box){
         crossAutoBefore(children.size()),crossAutoAfter(children.size());
     size_t mainAutoMarginCount=0;
     for(size_t i=0;i<children.size();++i){
-        auto* c=children[i];const auto margin=EdgeValues(c->style,L"margin",column?crossSize:mainSize,viewportWidth_);const float mainMargin=column?margin.top+margin.bottom:margin.left+margin.right;
+        auto* c=children[i];const auto margin=EdgeValues(c->style,L"margin",box.content.width,viewportWidth_);const float mainMargin=column?margin.top+margin.bottom:margin.left+margin.right;
+        const float mainDecoration=decorationExtent(*c,!column);
         const auto isAutoMargin=[&](const wchar_t* property){return ToLower(Trim(c->style.Get(property)))==L"auto";};
         mainAutoBefore[i]=isAutoMargin(column?L"margin-top":L"margin-left");
         mainAutoAfter[i]=isAutoMargin(column?L"margin-bottom":L"margin-right");
@@ -5304,9 +6674,11 @@ void LayoutEngine::LayoutFlex(LayoutBox& box){
         mainAutoMarginCount+=static_cast<size_t>(mainAutoBefore[i])+static_cast<size_t>(mainAutoAfter[i]);
         grows[i]=StyleSheet::Length(c->style.Get(L"flex-grow",L"0"),0,0,0);shrinks[i]=StyleSheet::Length(c->style.Get(L"flex-shrink",L"1"),0,0,1);
         auto raw=c->style.Get(L"flex-basis");if(raw.empty()||raw==L"auto")raw=c->style.Get(column?L"height":L"width");
-        bool natural=raw.empty()||raw==L"auto"||(!column&&ToLower(Trim(raw))==L"max-content");const auto minRaw=c->style.Get(column?L"min-height":L"min-width");const auto overflow=c->style.Get(column?L"overflow-y":L"overflow-x",c->style.Get(L"overflow",L"visible"));const bool automaticMinimumIsZero=(!minRaw.empty()&&StyleSheet::Length(minRaw,mainSize,column?viewportHeight_:viewportWidth_,1)==0)||(overflow!=L"visible"&&overflow!=L"clip");float base=natural&&grows[i]>0&&automaticMinimumIsZero?mainMargin:(natural?(column?NaturalHeight(*c,crossSize):NaturalWidth(*c)):StyleSheet::Length(raw,mainSize,column?viewportHeight_:viewportWidth_,0));
-        if(!natural){base=column?Constrain(c->style,L"min-height",L"max-height",base,mainSize,viewportHeight_):Constrain(c->style,L"min-width",L"max-width",base,mainSize,viewportWidth_);base+=mainMargin;}
-        sizes[i]=base;minimums[i]=column?mainMargin:MinContentWidth(*c);fixed+=base;growTotal+=grows[i];shrinkWeights[i]=shrinks[i]*std::max(0.0f,base-mainMargin);shrinkTotal+=shrinkWeights[i];
+        bool natural=raw.empty()||raw==L"auto"||ToLower(Trim(raw))==L"max-content";const auto minRaw=c->style.Get(column?L"min-height":L"min-width");const auto overflow=c->style.Get(column?L"overflow-y":L"overflow-x",c->style.Get(L"overflow",L"visible"));const bool automaticMinimumIsZero=(!minRaw.empty()&&StyleSheet::Length(minRaw,mainSize,column?viewportHeight_:viewportWidth_,1)==0)||(overflow!=L"visible"&&overflow!=L"clip");
+        float base=natural&&grows[i]>0&&automaticMinimumIsZero?mainDecoration+mainMargin:
+            natural?(column?NaturalHeight(*c,crossSize):NaturalWidth(*c)):
+            definiteExtent(*c,raw,!column,mainSize)+mainMargin;
+        sizes[i]=base;minimums[i]=std::max(mainDecoration+mainMargin,column?mainMargin:MinContentWidth(*c));fixed+=base;growTotal+=grows[i];shrinkWeights[i]=shrinks[i]*std::max(0.0f,base-mainMargin-mainDecoration);shrinkTotal+=shrinkWeights[i];
     }
     float freeSpace=mainSize-fixed;
     if(freeSpace>0&&growTotal>0){for(size_t index=0;index<children.size();++index)if(grows[index]>0)sizes[index]+=freeSpace*grows[index]/growTotal;}
@@ -5342,9 +6714,8 @@ void LayoutEngine::LayoutFlex(LayoutBox& box){
         alignments[i]=align;
         const auto crossRaw=child->style.Get(column?L"width":L"height");
         if(!crossRaw.empty()&&crossRaw!=L"auto"){
-            const auto margin=EdgeValues(child->style,L"margin",crossSize,viewportWidth_);
-            crossExtents[i]=StyleSheet::Length(crossRaw,crossSize,
-                column?viewportWidth_:viewportHeight_,crossExtents[i])+
+            const auto margin=EdgeValues(child->style,L"margin",box.content.width,viewportWidth_);
+            crossExtents[i]=definiteExtent(*child,crossRaw,column,crossSize)+
                 (column?margin.left+margin.right:margin.top+margin.bottom);
         }else if(align!=L"stretch"){
             crossExtents[i]=std::min(crossSize,column?NaturalWidth(*child):
@@ -5375,22 +6746,22 @@ void LayoutEngine::LayoutFlex(LayoutBox& box){
         cursor+=reverse?-advance:advance;
     }
     for(auto& c:box.children)if(c->visible&&(c->style.Is(L"position",L"absolute")||c->style.Is(L"position",L"fixed"))){
-        const LayoutRect area=c->style.Is(L"position",L"fixed")?LayoutRect{0,0,viewportWidth_,viewportHeight_}:AbsoluteContainingBlock(*c,viewportWidth_,viewportHeight_);
-        auto positioned=PositionedRect(*c,area,viewportWidth_,viewportHeight_);
-        if(c->style.Get(L"left").empty()&&c->style.Get(L"right").empty()&&box.style.Is(L"justify-content",L"center"))positioned.x=area.x+(area.width-positioned.width)/2;
-        if(c->style.Get(L"top").empty()&&c->style.Get(L"bottom").empty()&&box.style.Is(L"align-items",L"center"))positioned.y=area.y+(area.height-positioned.height)/2;
+        const LayoutRect area=AbsoluteContainingBlock(*c,viewportWidth_,viewportHeight_);
+        auto positioned=FlexStaticPositionedRect(box,*c,
+            PositionedRect(*c,area,viewportWidth_,viewportHeight_));
         LayoutBoxTree(*c,positioned,true);
     }
 }
 
 void LayoutEngine::LayoutGrid(LayoutBox& box,bool definiteWidth,bool definiteHeight){
     float gridWidth=box.content.width;
-    const auto overflowY=box.style.Get(L"overflow-y",box.style.Get(L"overflow",L"visible"));
+    const auto overflowY=OverflowY(box);
     const bool verticalScrollbar=overflowY==L"scroll"||
         (overflowY==L"auto"&&HasStableScrollbarGutter(box.style))||
-        (overflowY==L"auto"&&NaturalGridHeight(box,gridWidth)>box.content.height+1);
+        (overflowY==L"auto"&&!box.viewportScrollContainer&&
+            NaturalGridHeight(box,gridWidth)>box.content.height+1);
     if(verticalScrollbar)gridWidth=std::max(0.0f,gridWidth-VerticalScrollbarMetricsFor(box,styleSheet_).width);
-    const auto columnDefinitions=ExpandGridTracks(box.style.Get(L"grid-template-columns",L"1fr"),box,gridWidth);
+    const auto columnDefinitions=ExpandGridTracks(box.style.Get(L"grid-template-columns",L"none"),box,gridWidth);
     const auto rowDefinitions=ExpandGridTracks(box.style.Get(L"grid-template-rows"),box,box.content.height);
     size_t areaRows=0,areaColumns=0;const auto areas=ParseGridAreas(box.style.Get(L"grid-template-areas"),areaRows,areaColumns);
     size_t columnCount=std::max<size_t>(1,std::max(columnDefinitions->size(),areaColumns));
@@ -5422,10 +6793,10 @@ void LayoutEngine::LayoutGrid(LayoutBox& box,bool definiteWidth,bool definiteHei
         const auto cssHeight=item.box->style.Get(L"height"),cssWidth=item.box->style.Get(L"width");
         float width=cellWidth,height=cellHeight,left=x[item.column],top=y[item.row];
         if(!cssWidth.empty()&&cssWidth!=L"auto")
-            width=std::min(cellWidth,BlockOuterWidth(*item.box,cellWidth,viewportWidth_));
+            width=BlockOuterWidth(*item.box,cellWidth,viewportWidth_);
         else if(justify!=L"stretch")width=std::min(cellWidth,NaturalWidth(*item.box));
         if(!cssHeight.empty()&&cssHeight!=L"auto")
-            height=std::min(cellHeight,BlockOuterHeight(*item.box,cellHeight,cellWidth,viewportHeight_,viewportWidth_));
+            height=BlockOuterHeight(*item.box,cellHeight,cellWidth,viewportHeight_,viewportWidth_);
         else if(align!=L"stretch")height=std::min(cellHeight,NaturalHeight(*item.box,width));
         const bool autoLeft=ToLower(Trim(item.box->style.Get(L"margin-left")))==L"auto";
         const bool autoRight=ToLower(Trim(item.box->style.Get(L"margin-right")))==L"auto";
@@ -5443,8 +6814,7 @@ void LayoutEngine::LayoutGrid(LayoutBox& box,bool definiteWidth,bool definiteHei
     }
     for(auto& child:box.children)if(child->visible&&(child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed"))){
         const auto* containingBlock=AbsoluteContainingBlockAncestor(*child);
-        auto area=child->style.Is(L"position",L"fixed")?LayoutRect{0,0,viewportWidth_,viewportHeight_}:
-            AbsoluteContainingBlock(*child,viewportWidth_,viewportHeight_);
+        auto area=AbsoluteContainingBlock(*child,viewportWidth_,viewportHeight_);
         if(!child->style.Is(L"position",L"fixed")&&containingBlock==&box)
             area.width=std::max(0.0f,area.width-(box.content.width-gridWidth));
         LayoutBoxTree(*child,PositionedRect(*child,area,viewportWidth_,viewportHeight_),true);
@@ -5550,12 +6920,9 @@ void LayoutEngine::EnsureGeometryResources(ID2D1RenderTarget* target){
 
 void LayoutEngine::Paint(ID2D1RenderTarget* target,IDWriteFactory* factory,const LayoutRect* dirtyBounds){
     if(!root_||!target||!factory)return;
-    // Chromium/WebView2 rasterizes composited page text with grayscale coverage.
-    // Direct2D render targets otherwise choose their own default (commonly
-    // ClearType on an HWND-compatible surface), which makes the same CSS
-    // font-weight appear darker. Keep this a document-wide rendering rule so
-    // every DOM text run, control label and generated-content run uses the same
-    // coverage at every monitor DPI without altering CSS font metrics.
+    // Opaque page surfaces support subpixel coverage; transparent compositing
+    // surfaces require grayscale coverage so text survives alpha blending.
+    // This choice applies to every text run without changing CSS font metrics.
     ConfigureWebTextRendering(target,factory);
     EnsureGeometryResources(target);
     LayoutRect clip{0,0,viewportWidth_,viewportHeight_};
@@ -5593,6 +6960,14 @@ void LayoutEngine::Paint(ID2D1RenderTarget* target,IDWriteFactory* factory,const
         PaintStackingContext(target,factory,*dialog,clip);
     }
     paintingTopLayer_=nullptr;
+    // The viewport's scrolling UI belongs to the browsing context. Paint it
+    // after document stacking contexts and top-layer content, independently
+    // of the authored body's transform, opacity and border radius.
+    if(root_->visible&&root_->viewportScrollContainer){
+        target->PushAxisAlignedClip(PixelAlignedRect(clip,deviceScale_),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        PaintScrollbars(target,*root_);
+        target->PopAxisAlignedClip();
+    }
     canvasBackgroundBox_=nullptr;
 }
 
@@ -5627,9 +7002,10 @@ void LayoutEngine::PaintStackingContext(ID2D1RenderTarget* target,IDWriteFactory
     if(box.node&&box.node->modal&& &box!=paintingTopLayer_)return;
     target->PushAxisAlignedClip(PixelAlignedRect(clipBounds,deviceScale_),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     PaintBox(target,factory,box,clipBounds,&box);
+    const auto contextClip=ClipsOverflow(box)?IntersectRects(clipBounds,PaddingBox(box)):clipBounds;
     for(auto* context:box.nonNegativeStackingContexts)
-        if(Intersects(context->subtreeBounds,clipBounds))
-            PaintStackingContext(target,factory,*context,StackingContextClip(*context,box,clipBounds));
+        if(Intersects(context->subtreeBounds,contextClip))
+            PaintStackingContext(target,factory,*context,StackingContextClip(*context,box,contextClip));
     target->PopAxisAlignedClip();
 }
 
@@ -5683,6 +7059,10 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
         if(borders.bottom>0){brush=SolidBrush(target,BorderColor(box.style,L"bottom"));const float y=pixelCenter(outerRect.bottom+(collapsedTableCell?borders.bottom/2:-borders.bottom/2),dpiY);target->DrawLine(D2D1::Point2F(outerRect.left,y),D2D1::Point2F(outerRect.right,y),brush,borders.bottom);}
         if(borders.left>0){brush=SolidBrush(target,BorderColor(box.style,L"left"));const float x=pixelCenter(outerRect.left+borders.left/2,dpiX);target->DrawLine(D2D1::Point2F(x,outerRect.top),D2D1::Point2F(x,outerRect.bottom),brush,borders.left);}
     }
+    // A browsing context is replaced content in its owner's CSS stacking
+    // context. Paint it here, inside the owner's transform/opacity and clips,
+    // before later siblings and higher z-index contexts.
+    if(box.node->tag==L"iframe"&&framePainter_)framePainter_(target,box);
     const auto listMarker=ListMarkerText(box);
     if(!listMarker.empty()&&factory){
         auto format=TextFormat(factory,box.style);
@@ -5829,13 +7209,12 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
             target->FillGeometry(selectArrowGeometry_.Get(),brush);target->SetTransform(current);
         }
     }
-    const auto overflow=box.style.Get(L"overflow",L"visible");
-    const auto overflowX=box.style.Get(L"overflow-x",overflow);
-    const auto overflowY=box.style.Get(L"overflow-y",overflow);
+    const auto overflowX=OverflowX(box);
+    const auto overflowY=OverflowY(box);
     const auto clips=[](const std::wstring& value){
         return value==L"hidden"||value==L"clip"||value==L"auto"||value==L"scroll";
     };
-    const bool clip=clips(overflow)||clips(overflowX)||clips(overflowY);
+    const bool clip=clips(overflowX)||clips(overflowY);
     LayoutRect childClip=clipBounds;
     Microsoft::WRL::ComPtr<ID2D1Layer> roundedOverflowLayer;
     Microsoft::WRL::ComPtr<ID2D1RoundedRectangleGeometry> roundedOverflowGeometry;
@@ -5886,6 +7265,14 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
         if(roundedOverflowClip)target->PopLayer();
         target->PopAxisAlignedClip();
     }
+    if(!box.viewportScrollContainer)PaintScrollbars(target,box);
+    PaintOutline(target,box.style,box.rect,radius,viewportWidth_);
+    if(opacityLayer)target->PopLayer();
+    if(transformed)target->SetTransform(previousTransform);
+}
+
+void LayoutEngine::PaintScrollbars(ID2D1RenderTarget* target,const LayoutBox& box){
+    ID2D1SolidColorBrush* brush=nullptr;
     VerticalScrollbarGeometry scrollbar;if(VerticalScrollbarFor(box,styleSheet_,scrollbar)){
         const auto colorScheme=ToLower(Trim(box.style.Get(L"color-scheme",L"light")));
         const bool darkScheme=!colorScheme.empty()&&Words(colorScheme).front()==L"dark";
@@ -5948,9 +7335,6 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
             target->FillGeometry(horizontalArrowGeometry_.Get(),brush);target->SetTransform(current);
         }
     }
-    PaintOutline(target,box.style,box.rect,radius,viewportWidth_);
-    if(opacityLayer)target->PopLayer();
-    if(transformed)target->SetTransform(previousTransform);
 }
 
 std::shared_ptr<Node> LayoutEngine::HitTest(float x,float y)const{
@@ -6252,10 +7636,23 @@ bool LayoutEngine::TextCaretRect(const std::shared_ptr<Node>& textNode,size_t te
             }
             // Atomic inline boxes can be taller than the inherited line
             // height.  A caret at their DOM edge belongs to the line's text
-            // track, not to the bottom of the replaced element.  The inline
-            // formatter places a following text run at this same line origin.
+            // track, not to the top or bottom of the replaced element. Recover
+            // that track from the same baseline rule used by inline layout so
+            // DOM-boundary and adjacent text carets remain identical.
+            const auto margin=EdgeValues(box.style,L"margin",
+                containerBox->content.width,viewportWidth_);
+            const float outerTop=box.rect.y-margin.top;
+            const float outerHeight=box.rect.height+margin.top+margin.bottom;
+            const float inlineBaseline=outerTop+InlineOuterBaseline(
+                box,outerHeight,containerBox->content.width,viewportWidth_);
+            const auto alignment=AlignmentKeyword(
+                box.style.Get(L"vertical-align",L"baseline"));
+            float textLineTop=inlineBaseline-TextBaselineOffset(containerBox->style);
+            if(alignment==L"top"||alignment==L"text-top")textLineTop=outerTop;
+            else if(alignment==L"bottom"||alignment==L"text-bottom")
+                textLineTop=outerTop+outerHeight-lineHeight;
             result={after?box.rect.x+box.rect.width:box.rect.x,
-                    box.rect.y+caretLine.topInset,caretWidth,caretLine.height};
+                    textLineTop+caretLine.topInset,caretWidth,caretLine.height};
             return true;
         };
         std::function<bool(const std::shared_ptr<Node>&,bool,LayoutRect&)> edgeCaret;
@@ -6347,18 +7744,17 @@ std::shared_ptr<Node> LayoutEngine::HitTestStackingContext(const LayoutBox& box,
     if(!box.subtreeBounds.Contains(x,y))return {};
     for(auto it=box.nonNegativeStackingContexts.rbegin();it!=box.nonNegativeStackingContexts.rend();++it){
         const auto* context=*it;
-        if(context->subtreeBounds.Contains(x,y)&&StackingContextAllowsPoint(*context,box,x,y))
+        if((!ClipsOverflow(box)||PaddingBox(box).Contains(x,y))&&
+           context->subtreeBounds.Contains(x,y)&&StackingContextAllowsPoint(*context,box,x,y))
             if(auto node=HitTestStackingContext(*context,x,y))return node;
     }
     return HitTestBox(box,x,y);
 }
 std::shared_ptr<Node> LayoutEngine::HitTestBox(const LayoutBox& box,float x,float y)const{
     if(!box.visible||!box.subtreeBounds.Contains(x,y))return {};
-    const bool inside=box.rect.Contains(x,y);
-    const auto overflow=box.style.Get(L"overflow",L"visible");
-    const auto overflowX=box.style.Get(L"overflow-x",overflow),overflowY=box.style.Get(L"overflow-y",overflow);
-    const bool clips=overflow==L"hidden"||overflow==L"clip"||overflow==L"auto"||overflow==L"scroll"||
-        overflowX==L"hidden"||overflowX==L"clip"||overflowX==L"auto"||overflowX==L"scroll"||
+    const bool inside=(box.viewportScrollContainer?box.viewportScrollport:box.rect).Contains(x,y);
+    const auto overflowX=OverflowX(box),overflowY=OverflowY(box);
+    const bool clips=overflowX==L"hidden"||overflowX==L"clip"||overflowX==L"auto"||overflowX==L"scroll"||
         overflowY==L"hidden"||overflowY==L"clip"||overflowY==L"auto"||overflowY==L"scroll";
     if(!inside&&clips)return {};
     if(!box.verticallyOrderedChildren.empty()){
@@ -6432,7 +7828,7 @@ bool LayoutEngine::Restyle(const std::shared_ptr<Node>& node,bool* geometryChang
     // A fixed box is outside every ancestor's normal flow. Changing only its
     // inset values cannot alter the layout of the document behind it, so move
     // the already-laid-out subtree instead of rebuilding the entire page.
-    const auto positioned=PositionedRect(*box,{0,0,viewportWidth_,viewportHeight_},
+    const auto positioned=PositionedRect(*box,AbsoluteContainingBlock(*box,viewportWidth_,viewportHeight_),
                                           viewportWidth_,viewportHeight_);
     if(std::abs(positioned.width-box->rect.width)>=0.001f||
        std::abs(positioned.height-box->rect.height)>=0.001f)return true;
@@ -6463,15 +7859,16 @@ bool LayoutEngine::SyncScroll(const std::shared_ptr<Node>& node){
     if(!root_||!node)return false;
     const auto found=boxIndex_.find(node.get());if(found==boxIndex_.end())return false;
     auto& box=*found->second;
-    node->scrollLeft=std::max(0.0f,std::min(std::max(0.0f,box.scrollWidth-box.content.width),node->scrollLeft));
-    node->scrollTop=std::max(0.0f,std::min(std::max(0.0f,box.scrollHeight-box.content.height),node->scrollTop));
+    node->scrollLeft=std::max(0.0f,std::min(std::max(0.0f,box.scrollWidth-ScrollClientWidth(box)),node->scrollLeft));
+    node->scrollTop=std::max(0.0f,std::min(std::max(0.0f,box.scrollHeight-ScrollClientHeight(box)),node->scrollTop));
     const bool changed=std::abs(node->scrollLeft-box.appliedScrollLeft)>=0.001f||
         std::abs(node->scrollTop-box.appliedScrollTop)>=0.001f;
     ApplyScrollOffset(box,box.appliedScrollLeft,box.appliedScrollTop,viewportHeight_);
     return changed;
 }
-bool LayoutEngine::ScrollAt(float x,float y,float wheelDelta,std::shared_ptr<Node>* scrolledNode,bool horizontal){
+bool LayoutEngine::ScrollAt(float x,float y,float wheelDelta,std::shared_ptr<Node>* scrolledNode,bool horizontal,bool* scrollChainStopped){
     if(scrolledNode)scrolledNode->reset();
+    if(scrollChainStopped)*scrollChainStopped=false;
     if(!root_)return false;
     const auto target=HitTest(x,y);
     if(!target)return false;
@@ -6481,16 +7878,28 @@ bool LayoutEngine::ScrollAt(float x,float y,float wheelDelta,std::shared_ptr<Nod
     // every box under the coordinates lets an exhausted popup fall through to a
     // covered sibling (for example, the page behind a menu), which browsers do
     // not include in the scroll chain.
-    for(auto* box=found->second;box;box=box->parent)
+    for(auto* box=found->second;box;box=box->parent){
         if(ScrollBox(*box,x,y,wheelDelta,scrolledNode,horizontal))return true;
+        const auto overflow=horizontal?OverflowX(*box):OverflowY(*box);
+        if(overflow!=L"auto"&&overflow!=L"scroll")continue;
+        std::wistringstream behaviorTokens(box->style.Get(L"overscroll-behavior",L"auto"));
+        std::wstring behaviorX=L"auto",behaviorY;
+        behaviorTokens>>behaviorX;if(!(behaviorTokens>>behaviorY))behaviorY=behaviorX;
+        const auto axis=box->style.Get(horizontal?L"overscroll-behavior-x":L"overscroll-behavior-y",
+            horizontal?behaviorX:behaviorY);
+        if(axis==L"contain"||axis==L"none"){
+            if(scrollChainStopped)*scrollChainStopped=true;
+            return false;
+        }
+    }
     return false;
 }
 bool LayoutEngine::ScrollBox(LayoutBox& box,float x,float y,float wheelDelta,std::shared_ptr<Node>* scrolledNode,bool horizontal){
-    if(!box.visible||!box.content.Contains(x,y))return false;
-    const auto overflow=box.style.Get(L"overflow",L"visible");
-    const auto axisOverflow=box.style.Get(horizontal?L"overflow-x":L"overflow-y",overflow);
+    if(!box.visible||!PaddingBox(box).Contains(x,y))return false;
+    const auto axisOverflow=horizontal?OverflowX(box):OverflowY(box);
     if(axisOverflow!=L"auto"&&axisOverflow!=L"scroll")return false;
-    const float extent=horizontal?box.scrollWidth:box.scrollHeight,client=horizontal?box.content.width:box.content.height;
+    const float extent=horizontal?box.scrollWidth:box.scrollHeight;
+    const float client=horizontal?ScrollClientWidth(box):ScrollClientHeight(box);
     if(extent<=client+1)return false;
     const float maximum=std::max(0.0f,extent-client),oldLeft=box.node->scrollLeft,oldTop=box.node->scrollTop;
     float& value=horizontal?box.node->scrollLeft:box.node->scrollTop;
@@ -6501,6 +7910,14 @@ bool LayoutEngine::ScrollBox(LayoutBox& box,float x,float y,float wheelDelta,std
 }
 bool LayoutEngine::BeginScrollbarInteraction(float x,float y,std::shared_ptr<Node>& dragNode,float& dragOffset,bool& horizontal){
     dragNode.reset();dragOffset=0;horizontal=false;if(!root_)return false;
+    // Match the viewport scrollbar's final paint order before considering
+    // scrollbars belonging to positioned descendants at the same point.
+    if(root_->viewportScrollContainer){
+        VerticalScrollbarGeometry vertical;HorizontalScrollbarGeometry horizontalGeometry;
+        if((VerticalScrollbarFor(*root_,styleSheet_,vertical)&&vertical.track.Contains(x,y))||
+           (HorizontalScrollbarFor(*root_,styleSheet_,horizontalGeometry)&&horizontalGeometry.track.Contains(x,y)))
+            return BeginScrollbarBox(*root_,x,y,dragNode,dragOffset,horizontal);
+    }
     for(auto it=root_->nonNegativeStackingContexts.rbegin();it!=root_->nonNegativeStackingContexts.rend();++it)
         if(StackingContextAllowsPoint(**it,*root_,x,y)&&BeginScrollbarBox(**it,x,y,dragNode,dragOffset,horizontal))return true;
     return BeginScrollbarBox(*root_,x,y,dragNode,dragOffset,horizontal);
@@ -6509,10 +7926,10 @@ bool LayoutEngine::BeginScrollbarInteraction(float x,float y,std::shared_ptr<Nod
     bool horizontal=false;return BeginScrollbarInteraction(x,y,dragNode,dragOffset,horizontal);
 }
 bool LayoutEngine::BeginScrollbarBox(LayoutBox& box,float x,float y,std::shared_ptr<Node>& dragNode,float& dragOffset,bool& horizontal){
-    if(!box.visible||!box.rect.Contains(x,y))return false;VerticalScrollbarGeometry geometry;
+    if(!box.visible||!(box.viewportScrollContainer?box.viewportScrollport:box.rect).Contains(x,y))return false;VerticalScrollbarGeometry geometry;
     if(VerticalScrollbarFor(box,styleSheet_,geometry)&&geometry.track.Contains(x,y)){
         if(y>=geometry.thumb.y&&y<geometry.thumb.y+geometry.thumb.height){dragNode=box.node;dragOffset=y-geometry.thumb.y;return true;}
-        const float oldLeft=box.node->scrollLeft,oldTop=box.node->scrollTop;if(y<geometry.trackStart)box.node->scrollTop=std::max(0.0f,oldTop-90.0f);else if(y>=geometry.track.y+geometry.track.height-geometry.arrowHeight)box.node->scrollTop=std::min(geometry.maximum,oldTop+90.0f);else if(y<geometry.thumb.y)box.node->scrollTop=std::max(0.0f,oldTop-box.content.height*0.9f);else box.node->scrollTop=std::min(geometry.maximum,oldTop+box.content.height*0.9f);ApplyScrollOffset(box,oldLeft,oldTop,viewportHeight_);return true;
+        const float oldLeft=box.node->scrollLeft,oldTop=box.node->scrollTop;if(y<geometry.trackStart)box.node->scrollTop=std::max(0.0f,oldTop-90.0f);else if(y>=geometry.track.y+geometry.track.height-geometry.arrowHeight)box.node->scrollTop=std::min(geometry.maximum,oldTop+90.0f);else if(y<geometry.thumb.y)box.node->scrollTop=std::max(0.0f,oldTop-ScrollClientHeight(box)*0.9f);else box.node->scrollTop=std::min(geometry.maximum,oldTop+ScrollClientHeight(box)*0.9f);ApplyScrollOffset(box,oldLeft,oldTop,viewportHeight_);return true;
     }
     HorizontalScrollbarGeometry horizontalGeometry;
     if(HorizontalScrollbarFor(box,styleSheet_,horizontalGeometry)&&horizontalGeometry.track.Contains(x,y)){
@@ -6521,8 +7938,8 @@ bool LayoutEngine::BeginScrollbarBox(LayoutBox& box,float x,float y,std::shared_
         const float oldLeft=box.node->scrollLeft,oldTop=box.node->scrollTop;
         if(x<horizontalGeometry.trackStart)box.node->scrollLeft=std::max(0.0f,oldLeft-90.0f);
         else if(x>=horizontalGeometry.track.x+horizontalGeometry.track.width-horizontalGeometry.arrowWidth)box.node->scrollLeft=std::min(horizontalGeometry.maximum,oldLeft+90.0f);
-        else if(x<horizontalGeometry.thumb.x)box.node->scrollLeft=std::max(0.0f,oldLeft-box.content.width*0.9f);
-        else box.node->scrollLeft=std::min(horizontalGeometry.maximum,oldLeft+box.content.width*0.9f);
+        else if(x<horizontalGeometry.thumb.x)box.node->scrollLeft=std::max(0.0f,oldLeft-ScrollClientWidth(box)*0.9f);
+        else box.node->scrollLeft=std::min(horizontalGeometry.maximum,oldLeft+ScrollClientWidth(box)*0.9f);
         ApplyScrollOffset(box,oldLeft,oldTop,viewportHeight_);return true;
     }
     for(auto it=box.children.rbegin();it!=box.children.rend();++it)if(BeginScrollbarBox(**it,x,y,dragNode,dragOffset,horizontal))return true;return false;
@@ -6538,7 +7955,41 @@ bool LayoutEngine::DragScrollbar(const std::shared_ptr<Node>& node,float y,float
     return DragScrollbar(node,0,y,dragOffset,false);
 }
 
-void LayoutEngine::DumpBox(const LayoutBox& box,std::wstring& output,bool& first)const{if(!box.visible)return;if(box.node->type==NodeType::Element){if(!first)output+=L",";first=false;std::wostringstream s;s<<L"{\"tag\":\""<<EscapeJson(box.node->tag)<<L"\",\"id\":\""<<EscapeJson(box.node->Attribute(L"id"))<<L"\",\"x\":"<<std::lround(box.rect.x)<<L",\"y\":"<<std::lround(box.rect.y)<<L",\"width\":"<<std::lround(box.rect.width)<<L",\"height\":"<<std::lround(box.rect.height)<<L"}";output+=s.str();}for(auto& c:box.children)DumpBox(*c,output,first);}
+void LayoutEngine::DumpBox(const LayoutBox& box,std::wstring& output,bool& first)const{
+    if(!box.visible)return;
+    if(box.node->type==NodeType::Element){
+        if(!first)output+=L",";first=false;std::wostringstream s;
+        s<<L"{\"tag\":\""<<EscapeJson(box.node->tag)<<L"\",\"id\":\""<<EscapeJson(box.node->Attribute(L"id"))
+         <<L"\",\"x\":"<<std::lround(box.rect.x)<<L",\"y\":"<<std::lround(box.rect.y)
+         <<L",\"width\":"<<std::lround(box.rect.width)<<L",\"height\":"<<std::lround(box.rect.height);
+        // SVG descendants have no HTML layout boxes. Include their geometry
+        // and stroke inputs so a renderer dump can diagnose their paint rules.
+        if(box.node->tag==L"svg"){
+            s<<L",\"svgNodes\":[";bool firstSvg=true;
+            const std::function<void(const std::shared_ptr<Node>&,const ComputedStyle&)> collect=
+                [&](const std::shared_ptr<Node>& node,const ComputedStyle& inherited){
+                if(node->type!=NodeType::Element)return;
+                const auto style=styleSheet_.Compute(node,&inherited);
+                if(!firstSvg)s<<L',';firstSvg=false;s<<L"{\"tag\":\""<<EscapeJson(node->tag)<<L"\",\"attributes\":{";
+                bool firstAttribute=true;for(const auto& attribute:node->attributes){
+                    if(!firstAttribute)s<<L',';firstAttribute=false;
+                    s<<L'\"'<<EscapeJson(attribute.first)<<L"\":\""<<EscapeJson(attribute.second)<<L'\"';
+                }
+                s<<L"},\"style\":{";bool firstStyle=true;
+                for(const auto* property:{L"display",L"visibility",L"fill",L"fill-rule",L"stroke",L"stroke-width",
+                    L"stroke-linecap",L"stroke-dasharray",L"stroke-dashoffset",L"transform"}){
+                    if(!firstStyle)s<<L',';firstStyle=false;
+                    s<<L'\"'<<property<<L"\":\""<<EscapeJson(style.Get(property))<<L'\"';
+                }
+                s<<L"}}";for(const auto& child:node->children)collect(child,style);
+            };
+            for(const auto& child:box.node->children)collect(child,box.style);
+            s<<L']';
+        }
+        s<<L'}';output+=s.str();
+    }
+    for(const auto& child:box.children)DumpBox(*child,output,first);
+}
 std::wstring LayoutEngine::DumpJson()const{std::wstring out=L"[";bool first=true;if(root_)DumpBox(*root_,out,first);return out+L"]";}
 
 } // namespace TWebFrame::Internal

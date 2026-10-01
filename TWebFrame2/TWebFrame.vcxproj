@@ -27,6 +27,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="include\TWebFrame\TWebFrame.h" />
+    <ClInclude Include="src\ScriptDialog.h" />
+    <ClInclude Include="src\ScriptRequest.h" />
+    <ClInclude Include="src\ScriptHttp.h" />
+    <ClInclude Include="src\BigInteger.h" />
+    <ClInclude Include="src\WindowsIntl.h" />
+    <ClInclude Include="src\Streams.h" />
     <ClInclude Include="src\Accessibility.h" /><ClInclude Include="src\Canvas.h" /><ClInclude Include="src\CSS.h" /><ClInclude Include="src\DOM.h" /><ClInclude Include="src\EditingCommand.h" /><ClInclude Include="src\FastMap.h" /><ClInclude Include="src\JavaScript.h" /><ClInclude Include="src\Layout.h" /><ClInclude Include="src\NumericParser.h" /><ClInclude Include="src\RasterImage.h" /><ClInclude Include="src\TextInput.h" />
   </ItemGroup>
   <ItemGroup>

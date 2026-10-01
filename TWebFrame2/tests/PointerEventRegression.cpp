@@ -99,6 +99,19 @@ void CheckCommonEngineScale(float scale) {
               &result, &error) &&
               result == (scale == 1.5f ? L"3 x 2|true|1.5" : L"3 x 2|true|1"),
           L"delegated pointerover remains in CSS-pixel coordinates at 100% and 150%");
+    Check(javascript.Execute(LR"JS(
+        var inputEvent=null;
+        document.getElementById('b23').addEventListener('pointerdown',function(e){inputEvent=e;});
+    )JS",nullptr,&error),error.c_str());
+    pointer.buttons=1;pointer.detail=1;
+    javascript.DispatchNodeEvent(target,L"pointerdown",pointer);
+    Check(javascript.Execute(LR"JS(
+        return (inputEvent instanceof PointerEvent && inputEvent instanceof MouseEvent &&
+                inputEvent instanceof UIEvent && inputEvent instanceof Event &&
+                inputEvent.composed && inputEvent.view===window && inputEvent.pressure===0.5 &&
+                inputEvent.width===1 && inputEvent.height===1 &&
+                inputEvent.timeStamp>=0 && inputEvent.timeStamp<=performance.now());
+    )JS",&result,&error)&&result==L"true",L"native event metadata is independent of CSS pixel scale");
 }
 
 UINT CheckPointerGridAtDpi(DPI_AWARENESS_CONTEXT context) {
@@ -300,6 +313,81 @@ UINT CheckPointerGridAtDpi(DPI_AWARENESS_CONTEXT context) {
     return dpi;
 }
 
+void CheckActivationAtDpi(DPI_AWARENESS_CONTEXT context) {
+    const auto previousContext=SetThreadDpiAwarenessContext(context);
+    HWND host=CreateWindowExW(WS_EX_TOOLWINDOW,L"STATIC",L"",WS_POPUP,
+                             80,80,500,300,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    Check(host!=nullptr,L"activation test host is created");
+    if(host){
+        const float scale=static_cast<float>(GetDpiForWindow(host))/USER_DEFAULT_SCREEN_DPI;
+        RECT bounds{0,0,static_cast<LONG>(400*scale),static_cast<LONG>(200*scale)};
+        auto view=TWebFrame::View::Create(host,bounds);
+        Check(view!=nullptr,L"activation test view is created");
+        if(view){
+            Check(view->NavigateToString(LR"HTML(
+                <style>*{margin:0;padding:0;box-sizing:border-box}
+                  #first,#second{position:absolute;top:10px;width:80px;height:40px}
+                  #first{left:10px}#second{left:110px}
+                  #check{position:absolute;left:210px;top:10px;width:20px;height:20px}
+                </style>
+                <button id="first" type="button">First</button>
+                <button id="second" type="button">Second</button>
+                <input id="check" type="checkbox">
+                <script>
+                  var order=[],clicks=[],press=null,release=null,stopClick=false,stopDown=false;
+                  var first=document.getElementById('first'),second=document.getElementById('second');
+                  first.addEventListener('pointerdown',function(e){press=e;order.push('pointerdown');if(stopDown)e.preventDefault();});
+                  first.addEventListener('mousedown',function(e){order.push('mousedown');});
+                  first.addEventListener('pointerup',function(e){release=e;order.push('pointerup');});
+                  first.addEventListener('mouseup',function(e){order.push('mouseup');});
+                  document.addEventListener('click',function(e){order.push('click');clicks.push(e);if(stopClick)e.preventDefault();});
+                </script>
+            )HTML"),L"generic activation fixture loads");
+            const HWND window=view->Window();
+            const auto position=PointerPosition(20,20,scale);
+            SendMessageW(window,WM_LBUTTONDOWN,MK_LBUTTON,position);
+            ScriptEquals(*view,L"return order.join(',')+'|'+clicks.length;",L"pointerdown,mousedown|0",
+                         L"a native press does not dispatch click before release");
+            SendMessageW(window,WM_LBUTTONUP,0,position);
+            ScriptEquals(*view,LR"JS(
+                var e=clicks[0];return order.join(',')+'|'+
+                  (press instanceof PointerEvent && release instanceof PointerEvent && e instanceof PointerEvent)+'|'+
+                  (e.target===first && e.view===window && e.isTrusted && e.composed)+'|'+
+                  (Math.abs(e.clientX-20)<0.7 && Math.abs(e.clientY-20)<0.7 && e.detail===1)+'|'+
+                  (press.pressure===0.5 && release.pressure===0 && e.pressure===0)+'|'+
+                  (e.pointerId===press.pointerId && e.pointerType==='mouse' && !e.isPrimary)+'|'+
+                  (typeof press.timeStamp==='number' && press.timeStamp<=release.timeStamp && release.timeStamp<=e.timeStamp);
+            )JS",L"pointerdown,mousedown,pointerup,mouseup,click|true|true|true|true|true|true",
+                         L"native activation preserves order, interface, coordinates, pointer identity and time");
+            ScriptEquals(*view,L"second.focus();order=[];clicks=[];first.click();return clicks[0].isTrusted+'|'+clicks[0].detail+'|'+clicks[0].pointerId+'|'+clicks[0].pointerType+'|'+clicks[0].clientX+'|'+(document.activeElement===second);",
+                         L"false|0|-1||0|true",L"DOM click is untrusted and does not move focus");
+            ScriptEquals(*view,L"var recursiveClicks=0;function recursiveClick(){recursiveClicks++;first.click();}first.addEventListener('click',recursiveClick);first.click();first.removeEventListener('click',recursiveClick);return recursiveClicks;",
+                         L"1",L"DOM click prevents recursive activation of the same element");
+            ScriptEquals(*view,L"first.disabled=true;clicks=[];first.click();first.disabled=false;return clicks.length;",
+                         L"0",L"DOM click does not activate a disabled control");
+            ScriptEquals(*view,L"order=[];clicks=[];",L"undefined",L"activation log resets");
+            SendMessageW(window,WM_LBUTTONUP,0,position);
+            ScriptEquals(*view,L"return clicks.length;",L"0",L"release without a preceding press does not click");
+            SendMessageW(window,WM_LBUTTONDOWN,MK_LBUTTON,position);
+            SendMessageW(window,WM_LBUTTONUP,0,PointerPosition(120,20,scale));
+            ScriptEquals(*view,L"return clicks.length+'|'+(clicks[0].target===document.body);",L"1|true",
+                         L"uncaptured release on a sibling clicks the common ancestor");
+            ScriptEquals(*view,L"clicks=[];stopClick=true;return stopClick;",L"true",L"click cancellation is enabled");
+            const auto checkPosition=PointerPosition(215,15,scale);
+            SendMessageW(window,WM_LBUTTONDOWN,MK_LBUTTON,checkPosition);
+            SendMessageW(window,WM_LBUTTONUP,0,checkPosition);
+            ScriptEquals(*view,L"return document.getElementById('check').checked+'|'+clicks[0].defaultPrevented;",L"false|true",
+                         L"canceling native checkbox activation restores its previous checked state");
+            ScriptEquals(*view,L"stopClick=false;stopDown=true;clicks=[];order=[];",L"undefined",L"pointerdown cancellation is enabled");
+            SendMessageW(window,WM_LBUTTONDOWN,MK_LBUTTON,position);
+            SendMessageW(window,WM_LBUTTONUP,0,position);
+            ScriptEquals(*view,L"return clicks.length;",L"1",L"canceling pointerdown does not suppress click");
+        }
+        view.reset();DestroyWindow(host);
+    }
+    SetThreadDpiAwarenessContext(previousContext);
+}
+
 } // namespace
 
 int wmain() {
@@ -308,6 +396,8 @@ int wmain() {
     CheckCommonEngineScale(1.5f);
     const UINT dpi100 = CheckPointerGridAtDpi(DPI_AWARENESS_CONTEXT_UNAWARE);
     const UINT monitorDpi = CheckPointerGridAtDpi(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    CheckActivationAtDpi(DPI_AWARENESS_CONTEXT_UNAWARE);
+    CheckActivationAtDpi(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     Check(dpi100 == USER_DEFAULT_SCREEN_DPI,
           L"the DPI-unaware pointer path uses 100 percent coordinates");
     Check(monitorDpi >= USER_DEFAULT_SCREEN_DPI,

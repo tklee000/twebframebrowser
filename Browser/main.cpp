@@ -18,15 +18,16 @@
 
 namespace {
 constexpr wchar_t kClassName[] = L"TWebFrameNativeBrowser";
-constexpr wchar_t kHomeUrl[] = L"https://www.ppomppu.co.kr/zboard/view.php?id=freeboard&page=1&divpage=1893&category=2&no=10133266";
+//constexpr wchar_t kHomeUrl[] = L"https://www.ppomppu.co.kr/zboard/view.php?id=freeboard&page=1&divpage=1893&category=2&no=10133266";
 //constexpr wchar_t kHomeUrl[] = L"https://cdn4.ppomppu.co.kr/banner/kakao_ad_728x90.html?v=3";
-
+constexpr wchar_t kHomeUrl[] = L"https://www.ppomppu.co.kr/zboard/login.php?s_url=zboard%2Fview.php%3Fid%3Dfreeboard%26page%3D1%26divpage%3D1893%26no%3D10133266%26focus_target%3Dcomment_write_form";
 constexpr UINT kFetchFinished = WM_APP + 1;
+constexpr UINT kDeferredTabSelection = WM_APP + 2;
 
 enum ControlId : int {
     ID_TABS = 100, ID_BACK, ID_FORWARD, ID_REFRESH, ID_HOME,
     ID_ADDRESS, ID_GO, ID_NEW_TAB, ID_CLOSE_TAB, ID_STATUS,
-    ID_FOCUS_ADDRESS, ID_SHORTCUT_NEW_TAB, ID_SHORTCUT_CLOSE_TAB,
+    ID_FOCUS_ADDRESS, ID_FOCUS_PAGE, ID_SHORTCUT_NEW_TAB, ID_SHORTCUT_CLOSE_TAB,
     ID_SHORTCUT_BACK, ID_SHORTCUT_FORWARD
 };
 
@@ -378,10 +379,16 @@ private:
                                         UINT_PTR, DWORD_PTR data) {
         auto* app = reinterpret_cast<BrowserApp*>(data);
         if (message == WM_KEYDOWN && wparam == VK_RETURN) {
+            if(app->servicingChrome_){
+                PostMessageW(app->hwnd_,WM_COMMAND,ID_GO,0);app->pendingChromeAction_=true;return 0;
+            }
             app->NavigateAddress();
             return 0;
         }
         if (message == WM_KEYDOWN && wparam == VK_ESCAPE) {
+            if(app->servicingChrome_){
+                PostMessageW(app->hwnd_,WM_COMMAND,ID_FOCUS_PAGE,0);app->pendingChromeAction_=true;return 0;
+            }
             app->RefreshChrome();
             app->FocusPage();
             return 0;
@@ -469,6 +476,7 @@ private:
             return;
         }
         tab->view->SetParallelResourceLoading(true);
+        tab->view->SetExecutionYieldHandler([this]{return ServiceChromeDuringScript();});
         // Script execution is enabled for normal browser compatibility. The
         // --disable-scripts launch option disables page scripts without
         // changing URL, stylesheet, iframe or form behavior.
@@ -496,6 +504,29 @@ private:
         tab->view->SetNavigationHandler([this, weak](const std::wstring& target, bool newWindow) {
             if (newWindow) AddTab(target);
             else if (auto current = weak.lock()) Navigate(current, target, true);
+        });
+        tab->view->SetHistoryChangedHandler([this,weak](const std::wstring& target,bool replace,int delta){
+            if(const auto current=weak.lock()){
+                if(delta){
+                    const auto index=static_cast<long long>(current->historyIndex)+delta;
+                    if(index>=0&&index<static_cast<long long>(current->history.size()))current->historyIndex=static_cast<size_t>(index);
+                }else if(replace){
+                    if(!current->history.empty())current->history[current->historyIndex]=target;
+                }else{
+                    current->history.resize(current->historyIndex+1);current->history.push_back(target);++current->historyIndex;
+                }
+                current->url=target;
+                std::atomic_store(&current->resourceReferer,std::make_shared<const std::wstring>(target));
+                if(ActiveTab()==current)RefreshChrome();
+            }
+        });
+        tab->view->SetHistoryTraversalHandler([this,weak](int delta){
+            if(const auto current=weak.lock()){
+                const auto index=static_cast<long long>(current->historyIndex)+delta;
+                if(index>=0&&index<static_cast<long long>(current->history.size())){
+                    current->historyIndex=static_cast<size_t>(index);Navigate(current,current->history[current->historyIndex],false);
+                }
+            }
         });
         tab->view->SetLoadHandler([this, weak](bool success, const std::wstring& error) {
             if (auto current = weak.lock()) {
@@ -677,7 +708,44 @@ private:
         if (tab && tab->view) SetFocus(tab->view->Window());
     }
 
+    bool ServiceChromeDuringScript(){
+        if(pendingChromeAction_)return false;
+        servicingChrome_=true;std::vector<MSG> deferred;deferred.reserve(128);
+        MSG message{};
+        for(unsigned count=0;count<128&&PeekMessageW(&message,nullptr,0,0,PM_REMOVE);++count){
+            const bool chrome=message.hwnd==hwnd_||message.hwnd==tabsControl_||message.hwnd==back_||
+                message.hwnd==forward_||message.hwnd==refresh_||message.hwnd==home_||message.hwnd==address_||
+                message.hwnd==go_||message.hwnd==newTab_||message.hwnd==closeTab_||message.hwnd==status_;
+            if(message.message==WM_QUIT){PostQuitMessage(static_cast<int>(message.wParam));pendingChromeAction_=true;break;}
+            if(!chrome){
+                bool rendered=false;
+                for(const auto& tab:tabs_)if(tab->view&&tab->view->ServiceRenderingMessage(message)){rendered=true;break;}
+                if(!rendered)deferred.push_back(message);
+                continue;
+            }
+            if(!TranslateAcceleratorW(hwnd_,accelerators_,&message)){
+                TranslateMessage(&message);DispatchMessageW(&message);
+            }
+            if(pendingChromeAction_)break;
+        }
+        servicingChrome_=false;
+        // Page messages remain ordinary queued tasks. They cannot dispatch
+        // input handlers, timers or another script inside the current job.
+        for(const auto& queued:deferred)PostMessageW(queued.hwnd,queued.message,queued.wParam,queued.lParam);
+        return !pendingChromeAction_;
+    }
+
     LRESULT Handle(UINT message, WPARAM wparam, LPARAM lparam) {
+        if(servicingChrome_){
+            if(message==WM_COMMAND||message==WM_CLOSE||message==WM_SIZE||message==kFetchFinished){
+                PostMessageW(hwnd_,message,wparam,lparam);pendingChromeAction_=true;return 0;
+            }
+            if(message==WM_NOTIFY&&reinterpret_cast<NMHDR*>(lparam)->idFrom==ID_TABS&&
+               reinterpret_cast<NMHDR*>(lparam)->code==TCN_SELCHANGE){
+                PostMessageW(hwnd_,kDeferredTabSelection,TabCtrl_GetCurSel(tabsControl_),0);
+                pendingChromeAction_=true;return 0;
+            }
+        }else pendingChromeAction_=false;
         switch (message) {
         case WM_CREATE:
             InitControls();
@@ -692,6 +760,9 @@ private:
         case kFetchFinished:
             FetchFinished(std::unique_ptr<FetchResult>(reinterpret_cast<FetchResult*>(lparam)));
             return 0;
+        case kDeferredTabSelection:
+            if(static_cast<size_t>(wparam)<tabs_.size())Activate(static_cast<size_t>(wparam));
+            return 0;
         case WM_NOTIFY:
             if (reinterpret_cast<NMHDR*>(lparam)->idFrom == ID_TABS &&
                 reinterpret_cast<NMHDR*>(lparam)->code == TCN_SELCHANGE) {
@@ -703,10 +774,12 @@ private:
             auto tab = ActiveTab();
             switch (LOWORD(wparam)) {
             case ID_BACK: case ID_SHORTCUT_BACK:
-                if (tab && tab->historyIndex > 0) Navigate(tab, tab->history[--tab->historyIndex], false);
+                if(tab&&tab->view->CanTraverseHistory(-1))tab->view->TraverseHistory(-1);
+                else if (tab && tab->historyIndex > 0) Navigate(tab, tab->history[--tab->historyIndex], false);
                 return 0;
             case ID_FORWARD: case ID_SHORTCUT_FORWARD:
-                if (tab && tab->historyIndex + 1 < tab->history.size())
+                if(tab&&tab->view->CanTraverseHistory(1))tab->view->TraverseHistory(1);
+                else if (tab && tab->historyIndex + 1 < tab->history.size())
                     Navigate(tab, tab->history[++tab->historyIndex], false);
                 return 0;
             case ID_REFRESH: StopOrReload(); return 0;
@@ -716,6 +789,7 @@ private:
             case ID_CLOSE_TAB: case ID_SHORTCUT_CLOSE_TAB: CloseTab(); return 0;
             case ID_FOCUS_ADDRESS:
                 SetFocus(address_); SendMessageW(address_, EM_SETSEL, 0, -1); return 0;
+            case ID_FOCUS_PAGE: FocusPage(); return 0;
             }
             break;
         }
@@ -740,6 +814,7 @@ private:
     HACCEL accelerators_ = nullptr;
     std::wstring initial_;
     bool pageScriptsEnabled_ = true;
+    bool servicingChrome_=false,pendingChromeAction_=false;
     unsigned nextTabId_ = 0;
     std::vector<std::shared_ptr<Tab>> tabs_;
     std::shared_ptr<ResourceScheduler> network_;

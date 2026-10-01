@@ -29,7 +29,18 @@ struct CssRule {
     float minViewportHeight = 0.0f;
     float maxViewportHeight = std::numeric_limits<float>::infinity();
     bool mediaEnabled = true;
+    std::vector<std::wstring> mediaQueries;
     bool hasCustomDeclarations = false;
+};
+
+struct CssKeyframe {
+    float offset = 0;
+    std::vector<CssDeclaration> declarations;
+};
+struct CssKeyframes {
+    std::wstring name;
+    std::vector<CssKeyframe> frames;
+    std::vector<std::wstring> mediaQueries;
 };
 
 struct ComputedStyle {
@@ -58,10 +69,14 @@ class StyleSheet {
 public:
     bool Parse(const std::wstring& css, std::wstring* error = nullptr);
     void SetViewport(float width, float height) noexcept;
+    void SetDisplay(float width,float height,float scale) noexcept;
+    static bool MediaQueryMatches(const std::wstring& query,double width,double height,
+                                  double displayWidth,double displayHeight,double scale);
     ComputedStyle Compute(const std::shared_ptr<Node>& node,
                           const ComputedStyle* parent = nullptr,
                           const std::wstring& pseudo = L"") const;
     const std::vector<CssRule>& Rules() const { return rules_; }
+    const CssKeyframes* FindKeyframes(const std::shared_ptr<Node>& node,const std::wstring& name) const;
     bool UsesNthChild() const noexcept { return usesNthChild_; }
     bool UsesNthChildFor(const std::shared_ptr<Node>& node) const;
     bool AttributeAffectsStyle(const std::wstring& name) const;
@@ -77,11 +92,16 @@ public:
     static unsigned int Color(const std::wstring& value, unsigned int fallback = 0xff000000u);
 
 private:
+    std::shared_ptr<StyleSheet> ShadowStyles(const std::shared_ptr<Node>& node) const;
+    bool RuleApplies(const CssRule& rule,float width,float height) const;
     std::vector<const CssRule*> CandidateRules(const std::shared_ptr<Node>& node) const;
     std::wstring ResolveVariables(const std::wstring& value,
                                   const FastMap<std::wstring, std::wstring>& vars,
                                   int depth = 0) const;
     std::vector<CssRule> rules_;
+    std::vector<CssKeyframes> keyframes_;
+    struct ShadowStyleCache {std::weak_ptr<Node> root;std::wstring css;std::shared_ptr<StyleSheet> sheet;};
+    mutable std::vector<ShadowStyleCache> shadowStyles_;
     FastMap<std::wstring, std::vector<size_t>> ruleIndex_;
     std::vector<size_t> universalRuleIndexes_;
     FastMap<std::wstring, bool> selectorAttributes_;
@@ -96,7 +116,11 @@ private:
     bool usesViewportFontSize_ = false;
     float viewportWidth_ = std::numeric_limits<float>::infinity();
     float viewportHeight_ = std::numeric_limits<float>::infinity();
+    float displayWidth_ = 0;
+    float displayHeight_ = 0;
+    float displayScale_ = 1;
     std::uint64_t version_ = 0;
+    bool shadowScope_ = false;
 };
 
 } // namespace TWebFrame::Internal

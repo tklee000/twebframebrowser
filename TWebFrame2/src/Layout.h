@@ -24,6 +24,16 @@ struct LayoutRect {
     }
 };
 
+// Object bounds in SVG user coordinates. The queried element's own transform
+// is excluded, while transforms on its descendants participate in the bounds.
+bool SvgObjectBoundingBox(const std::shared_ptr<Node>& node,StyleSheet& styles,
+                          LayoutRect& bounds,ID2D1Factory* factory=nullptr,
+                          IDWriteFactory* writeFactory=nullptr);
+// Shaped text advance in SVG user units, before transforms or monitor scaling.
+bool SvgTextAdvanceLength(const std::shared_ptr<Node>& node,StyleSheet& styles,
+                          float& length,IDWriteFactory* writeFactory=nullptr,
+                          std::vector<LayoutRect>* characters=nullptr);
+
 struct LayoutBox {
     std::shared_ptr<Node> node;
     // Generated CSS boxes keep their originating DOM node separate so they
@@ -61,6 +71,14 @@ struct LayoutBox {
     float scrollHeight = 0.0f;
     float appliedScrollLeft = 0.0f;
     float appliedScrollTop = 0.0f;
+    // The document root remains the authored body box for normal-flow
+    // geometry, while its overflow is propagated to the browsing-context
+    // viewport. Keep that scrollport separate so body margins do not pull the
+    // page scrollbar away from the client edge.
+    bool viewportScrollContainer = false;
+    LayoutRect viewportScrollport;
+    std::wstring viewportOverflowX;
+    std::wstring viewportOverflowY;
     // Synthetic line fragments retain their offset in the originating DOM
     // text node so pointer/caret geometry maps back to DOM offsets.
     size_t textSourceOffset = 0;
@@ -73,6 +91,16 @@ struct LayoutBox {
     mutable bool naturalHeightValid = false;
     mutable float naturalHeightReference = 0.0f;
     mutable float naturalHeight = 0.0f;
+    // Floats in ordinary descendants remain part of the nearest enclosing
+    // block formatting context, even through a fixed-height visible-overflow box.
+    mutable float naturalFloatBottom = 0.0f;
+    mutable bool blockMarginsValid = false;
+    mutable float blockMarginsReference = 0.0f;
+    mutable float marginTopPositive = 0.0f, marginTopNegative = 0.0f;
+    mutable float marginBottomPositive = 0.0f, marginBottomNegative = 0.0f;
+    mutable bool collapseFirstChildMargin = false;
+    mutable bool collapseLastChildMargin = false;
+    mutable bool selfCollapsingMargins = false;
 };
 
 struct StyleTransition {
@@ -89,13 +117,23 @@ struct StyleTransition {
     bool discrete = false;
 };
 
+struct StyleAnimation {
+    std::wstring name,signature,direction=L"normal",fill=L"none";
+    std::vector<CssKeyframe> frames;
+    float elapsedMs=0,durationMs=0,delayMs=0,iterations=1;
+    float x1=.25f,y1=.1f,x2=.25f,y2=1;
+    bool paused=false;
+};
+
 class LayoutEngine {
 public:
     using RasterImageResolver = std::function<std::shared_ptr<RasterImage>(const std::wstring&)>;
+    using FramePainter = std::function<void(ID2D1RenderTarget*, const LayoutBox&)>;
 
     LayoutEngine(Document& document, StyleSheet& styleSheet);
     ~LayoutEngine();
     void SetRasterImageResolver(RasterImageResolver resolver);
+    void SetFramePainter(FramePainter painter) { framePainter_ = std::move(painter); }
     void Layout(float width, float height, float deviceScale = 1.0f);
     // Reuse the current style/layout tree for viewport-only changes. A media
     // query boundary crossing automatically falls back to a full rebuild.
@@ -104,7 +142,7 @@ public:
                const LayoutRect* dirtyBounds = nullptr);
     bool ScrollAt(float x, float y, float wheelDelta,
                   std::shared_ptr<Node>* scrolledNode = nullptr,
-                  bool horizontal = false);
+                  bool horizontal = false, bool* scrollChainStopped = nullptr);
     bool SyncScroll(const std::shared_ptr<Node>& node);
     bool BeginScrollbarInteraction(float x, float y, std::shared_ptr<Node>& dragNode,
                                    float& dragOffset, bool& horizontal);
@@ -163,6 +201,7 @@ private:
     void PaintBox(ID2D1RenderTarget* target, IDWriteFactory* factory, LayoutBox& box,
                   const LayoutRect& clipBounds,
                   const LayoutBox* deferredScope = nullptr);
+    void PaintScrollbars(ID2D1RenderTarget* target, const LayoutBox& box);
     std::shared_ptr<Node> HitTestStackingContext(const LayoutBox& box, float x, float y) const;
     std::shared_ptr<Node> HitTestBox(const LayoutBox& box, float x, float y) const;
     bool ScrollBox(LayoutBox& box, float x, float y, float wheelDelta,
@@ -176,6 +215,7 @@ private:
                     bool* fixedOffsetOnly = nullptr);
     void ApplyTransitions(LayoutBox& box);
     void RefreshTransitionFrame(LayoutBox& box);
+    void ApplyAnimations(LayoutBox& box,bool updateDefinitions);
     void InvalidateMeasurements(LayoutBox& box);
     ID2D1SolidColorBrush* SolidBrush(ID2D1RenderTarget* target, unsigned int color);
     ID2D1SolidColorBrush* SolidBrush(ID2D1RenderTarget* target, const D2D1_COLOR_F& color);
@@ -189,6 +229,8 @@ private:
     FastMap<std::uint64_t, ComputedStyle> styleCache_;
     FastMap<const Node*, ComputedStyle> transitionTargets_;
     FastMap<const Node*, std::vector<StyleTransition>> transitions_;
+    FastMap<const Node*, ComputedStyle> animationTargets_;
+    FastMap<const Node*, std::vector<StyleAnimation>> animations_;
     std::uint64_t styleCacheVersion_ = 0;
     float viewportWidth_ = 0;
     float viewportHeight_ = 0;
@@ -207,6 +249,7 @@ private:
     FastMap<std::wstring, Microsoft::WRL::ComPtr<ID2D1PathGeometry>> svgGeometryCache_;
     FastMap<std::wstring, std::shared_ptr<Node>> svgBackgroundCache_;
     RasterImageResolver rasterImageResolver_;
+    FramePainter framePainter_;
     ID2D1RenderTarget* imageBitmapCacheTarget_ = nullptr;
     FastMap<const RasterImageFrame*, Microsoft::WRL::ComPtr<ID2D1Bitmap>> imageBitmapCache_;
     ID2D1RenderTarget* shadowBitmapCacheTarget_ = nullptr;

@@ -1,0 +1,10 @@
+var transferState={items:new Map([['first', {ready:true}]]),attempts:0};
+var carrier={},stateKey=Symbol('transfer-state');
+Object.defineProperty(carrier,stateKey,{configurable:true,enumerable:false,value:transferState});
+var descriptor=Object.getOwnPropertyDescriptor(carrier,stateKey);
+var restored=Reflect.get(descriptor,'value');
+console.log('map instance',restored.items instanceof Map,'set instance',new Set() instanceof Set);
+if(!(restored.items instanceof Map))throw new Error('Map instance lost its constructor prototype');
+if(!(new Set() instanceof Set))throw new Error('Set instance lost its constructor prototype');
+if(Object.getOwnPropertySymbols(carrier)[0]!==stateKey)throw new Error('Symbol descriptor was not preserved');
+if([...restored.items.values()].length!==1)throw new Error('Restored collection lost its entries');

@@ -18,8 +18,10 @@ using Microsoft::WRL::ComPtr;
 
 namespace {
 constexpr wchar_t kClassName[] = L"WebView2ComparisonBrowser";
-constexpr wchar_t kHomeUrl[] =
-    L"https://www.ppomppu.co.kr/zboard/view.php?id=freeboard&page=1&divpage=1893&category=2&no=10133266";
+//constexpr wchar_t kHomeUrl[] =
+  //  L"https://www.ppomppu.co.kr/zboard/view.php?id=freeboard&page=1&divpage=1893&category=2&no=10133266";
+
+constexpr wchar_t kHomeUrl[] = L"https://www.ppomppu.co.kr/zboard/login.php?s_url=zboard%2Fview.php%3Fid%3Dfreeboard%26page%3D1%26divpage%3D1893%26no%3D10133266%26focus_target%3Dcomment_write_form";
 
 enum ControlId : int {
     ID_TABS = 100, ID_BACK, ID_FORWARD, ID_REFRESH, ID_HOME,

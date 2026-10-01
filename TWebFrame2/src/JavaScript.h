@@ -1,16 +1,29 @@
 #pragma once
 
 #include "EditingCommand.h"
+#include "ScriptRequest.h"
 
 #include <functional>
 #include <cstddef>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace TWebFrame::Internal {
 
+struct LayoutRect;
+
 class JavaScriptRuntime {
 public:
+    struct HeapStatistics {
+        size_t objects = 0;
+        size_t functions = 0;
+        size_t nativeFunctions = 0;
+        size_t environments = 0;
+        size_t nodeListeners = 0;
+        size_t prototypeSlots = 0;
+        size_t collections = 0;
+    };
     struct JitStatistics {
         size_t compiledFunctions = 0;
         size_t generatedCodeBytes = 0;
@@ -32,21 +45,31 @@ public:
     using MutationSink = std::function<void(const Mutation&)>;
     using FrameScheduler = std::function<void()>;
     using TimerScheduler = std::function<void(unsigned)>;
+    // Called at interpreter safepoints on the owner thread. The host may
+    // service its own UI here, but must not enter or mutate this View/realm.
+    // Returning false interrupts the current script job.
+    using ExecutionYieldHandler = std::function<bool()>;
     using ResourceLoader = std::function<bool(const std::wstring&, std::wstring&)>;
     using AsyncResourceLoader = std::function<void(
         const std::wstring&, std::function<void(bool, std::wstring)>)>;
     using NavigationSink = std::function<void(const std::wstring&)>;
+    using SameDocumentNavigationSink = std::function<void(const std::wstring&,bool,int)>;
+    using HistoryTraversalSink = std::function<void(int)>;
     using DialogSink = std::function<void(const std::wstring&)>;
+    using ConfirmSink = std::function<bool(const std::wstring&)>;
     using DocumentWriteSink = std::function<void(const std::wstring&)>;
     using FrameMessageSink = std::function<void(const std::shared_ptr<Node>&,
                                                 const std::wstring&,
                                                 const std::wstring&)>;
     using FrameDocumentSink = std::function<void(const std::shared_ptr<Node>&,
                                                  const std::wstring&)>;
+    using FrameDocumentProvider = std::function<std::shared_ptr<Document>(const std::shared_ptr<Node>&)>;
+    using FrameRuntimeProvider = std::function<std::shared_ptr<JavaScriptRuntime>(const std::shared_ptr<Node>&)>;
     using ParentMessageSink = std::function<void(const std::wstring&,
                                                  const std::wstring&)>;
     using TopMessageSink = ParentMessageSink;
     using FocusSink = std::function<void(const std::shared_ptr<Node>&)>;
+    using WindowFocusSink = std::function<void(const std::shared_ptr<Node>&,bool)>;
     using DocumentFocusProvider = std::function<bool()>;
     using ActivationSink = std::function<void(const std::shared_ptr<Node>&)>;
     using PointerCaptureSink = std::function<void(bool)>;
@@ -55,6 +78,8 @@ public:
     using DomSelection = EditingSelection;
     using DomSelectionProvider = std::function<bool(DomSelection&)>;
     using DomSelectionSetter = std::function<void(const DomSelection&)>;
+    using FrameSelectionProvider = std::function<bool(const std::shared_ptr<Node>&,DomSelection&)>;
+    using FrameSelectionSetter = std::function<void(const std::shared_ptr<Node>&,const DomSelection&)>;
     struct EventInit {
         std::wstring key;
         std::wstring data;
@@ -76,6 +101,7 @@ public:
         bool altKey = false;
         bool metaKey = false;
         bool isComposing = false;
+        bool isTrusted = true;
         bool bubbles = true;
         bool cancelable = true;
     };
@@ -84,6 +110,7 @@ public:
         double clientWidth=0,clientHeight=0,scrollWidth=0,scrollHeight=0;
     };
     using GeometryProvider = std::function<NodeGeometry(const std::shared_ptr<Node>&)>;
+    using SvgTextLengthProvider = std::function<bool(const std::shared_ptr<Node>&,float&,std::vector<LayoutRect>*)>;
     using StylePropertyProvider = std::function<std::wstring(const std::shared_ptr<Node>&,
                                                              const std::wstring&)>;
 
@@ -96,18 +123,41 @@ public:
     void SetMutationSink(MutationSink sink);
     void SetFrameScheduler(FrameScheduler scheduler);
     void SetTimerScheduler(TimerScheduler scheduler);
+    void SetExecutionYieldHandler(ExecutionYieldHandler handler);
+    // Scheduling only: called when the last interpreter frame unwinds.
+    // The callback must not throw or enter/mutate a JavaScript realm.
+    void SetExecutionCompletionHandler(std::function<void()> handler);
+    bool IsExecuting() const noexcept;
+    void SetSecureContextAncestors(std::function<bool()> provider);
+    bool IsSecureContext() const;
     void SetGeometryProvider(GeometryProvider provider);
+    void SetSvgGeometryProvider(GeometryProvider provider);
+    void SetSvgTextLengthProvider(SvgTextLengthProvider provider);
     void SetStylePropertyProvider(StylePropertyProvider provider);
     void SetResourceLoader(ResourceLoader loader);
     void SetAsyncResourceLoader(AsyncResourceLoader loader);
+    void SetRequestLoader(ScriptRequestLoader loader);
+    void SetAsyncRequestLoader(AsyncScriptRequestLoader loader);
     void SetNavigationSink(NavigationSink sink);
+    void SetSameDocumentNavigationSink(SameDocumentNavigationSink sink);
+    void SetHistoryTraversalSink(HistoryTraversalSink sink);
+    bool CanTraverseHistory(int delta) const;
+    bool TraverseHistory(int delta);
     void SetDialogSink(DialogSink sink);
+    void SetConfirmSink(ConfirmSink sink);
     void SetDocumentWriteSink(DocumentWriteSink sink);
     void SetFrameMessageSink(FrameMessageSink sink);
     void SetFrameDocumentSink(FrameDocumentSink sink);
+    void SetFrameDocumentProvider(FrameDocumentProvider provider);
+    void SetFrameRuntimeProvider(FrameRuntimeProvider provider);
+    void SetFrameSelectionProvider(FrameSelectionProvider provider,FrameSelectionSetter setter);
+    bool ReadDomSelection(DomSelection& selection) const;
+    void WriteDomSelection(const DomSelection& selection);
     void SetParentMessageSink(ParentMessageSink sink);
+    void SetEmbeddingFrame(JavaScriptRuntime* parent,const std::shared_ptr<Node>& frame);
     void SetTopMessageSink(TopMessageSink sink);
     void SetFocusSink(FocusSink sink);
+    void SetWindowFocusSink(WindowFocusSink sink);
     void SetDocumentFocusProvider(DocumentFocusProvider provider);
     void SetActivationSink(ActivationSink sink);
     void SetPointerCaptureSink(PointerCaptureSink sink);
@@ -118,6 +168,7 @@ public:
     void SetInlineEventHandlersEnabled(bool enabled);
     void SetViewportSize(double width, double height);
     void SetDevicePixelRatio(double ratio);
+    void SetDisplaySize(double width,double height);
     void SetLocation(const std::wstring& location);
     void SetWindowName(const std::wstring& name);
     void SetCurrentScript(const std::shared_ptr<Node>& script);
@@ -130,9 +181,11 @@ public:
     // Zero disables JIT compilation and execution for this runtime.
     void SetJitCompilationThreshold(size_t calls);
     JitStatistics GetJitStatistics() const;
+    HeapStatistics GetHeapStatistics() const;
     std::wstring LastError() const;
     std::wstring LastCreatedError() const;
     std::wstring CreatedErrorTrace() const;
+    std::wstring DiagnosticsJson() const;
     void DispatchDocumentEvent(const std::wstring& eventName);
     void DispatchWindowEvent(const std::wstring& eventName);
     void RunAnimationFrame();

@@ -10,7 +10,7 @@
 
 namespace TWebFrame::Internal {
 
-enum class NodeType { Document, Element, Text, Comment };
+enum class NodeType { Document, Element, Text, Comment, CData };
 
 class Document;
 struct CanvasSurface;
@@ -26,13 +26,35 @@ struct Node : std::enable_shared_from_this<Node> {
     NodeType type = NodeType::Element;
     std::wstring tag;
     std::wstring text;
+    // The nonce IDL setter updates this slot without changing the attribute.
+    std::wstring cryptographicNonce;
     FastMap<std::wstring, std::wstring> attributes;
     FastMap<std::wstring, std::wstring> inlineStyle;
     FastMap<std::wstring, std::wstring> inlineStylePriority;
     std::vector<std::shared_ptr<Node>> children;
+    // Shadow trees are owned by their host, but remain outside light-DOM
+    // children and document selector indexes. Rendering uses their children.
+    std::shared_ptr<Node> shadowRoot;
+    std::weak_ptr<Node> shadowHost;
+    bool closedShadowRoot = false;
+    const std::vector<std::shared_ptr<Node>>& RenderChildren() const {
+        return shadowRoot ? shadowRoot->children : children;
+    }
+    std::shared_ptr<Node> ComposedParent() const {
+        const auto lightParent=parent.lock();
+        return lightParent ? lightParent : shadowHost.lock();
+    }
     std::vector<FileInfo> files;
     std::weak_ptr<Node> parent;
     Document* ownerDocument = nullptr;
+    bool xml = false;
+    std::wstring namespaceUri;
+    std::wstring qualifiedName;
+    bool stylesheetOverride = false;
+    std::wstring stylesheetText;
+    // An isolated XML DOM has no View owner. Wrappers retain its Document,
+    // while the tree uses weak ownership to avoid a Document/tree cycle.
+    std::weak_ptr<Document> isolatedDocument;
     bool checked = false;
     bool indeterminate = false;
     bool disabled = false;
@@ -80,6 +102,10 @@ public:
     Document(Document&&) = delete;
     Document& operator=(Document&&) = delete;
     bool Parse(const std::wstring& html, std::wstring* error = nullptr);
+    bool ParseXml(const std::wstring& xml, std::wstring* error = nullptr);
+    bool IsXml() const noexcept { return xml_; }
+    bool ScriptingEnabled() const noexcept { return scriptingEnabled_; }
+    void SetScriptingEnabled(bool enabled) noexcept { scriptingEnabled_=enabled; }
     // Replaces this document with a tree parsed in an isolated worker-owned
     // Document, rebinding every node to this stable UI-thread owner.
     void AdoptParsed(Document& source);
@@ -87,6 +113,8 @@ public:
                                                      std::wstring* error = nullptr);
 
     std::shared_ptr<Node> Root() const { return root_; }
+    bool QuirksMode() const noexcept { return quirksMode_; }
+    bool LimitedQuirksMode() const noexcept { return limitedQuirksMode_; }
     std::shared_ptr<Node> Body() const;
     std::shared_ptr<Node> GetElementById(const std::wstring& id) const;
     std::vector<std::shared_ptr<Node>> GetElementsByName(const std::wstring& name) const;
@@ -126,6 +154,10 @@ public:
 
 private:
     std::shared_ptr<Node> root_;
+    bool quirksMode_ = true;
+    bool limitedQuirksMode_ = false;
+    bool xml_ = false;
+    bool scriptingEnabled_ = true;
     using NodeIndexBucket = std::unordered_map<const Node*, std::weak_ptr<Node>>;
     FastMap<std::wstring, std::weak_ptr<Node>> ids_;
     FastMap<std::wstring, size_t> idCounts_;

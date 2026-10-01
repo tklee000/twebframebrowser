@@ -11,6 +11,8 @@
 // own source file.  Some downstream TWebFrame consumers maintain a fixed
 // source list and would otherwise omit the new raster implementation.
 #include "RasterImage.cpp"
+#include "ScriptDialog.h"
+#include "ScriptHttp.h"
 #include "TextInput.h"
 
 #include <d2d1.h>
@@ -61,12 +63,17 @@ constexpr UINT_PTR kCaretBlinkTimer = 0x5749;
 constexpr UINT_PTR kImageAnimationTimer = 0x574a;
 constexpr UINT kAnimationFrameFallbackMessage = WM_APP + 0x57;
 constexpr UINT kNavigationMessage = WM_APP + 0x59;
+constexpr UINT kHistoryTraversalMessage = WM_APP + 0x64;
 constexpr UINT kAsyncImageReadyMessage = WM_APP + 0x5a;
 constexpr UINT kAsyncDocumentReadyMessage = WM_APP + 0x5b;
 constexpr UINT kAsyncTextReadyMessage = WM_APP + 0x5c;
 constexpr UINT kAsyncFrameReadyMessage = WM_APP + 0x5d;
 constexpr UINT kAsyncFrameSourceReadyMessage = WM_APP + 0x5e;
 constexpr UINT kSyncChildFramesMessage = WM_APP + 0x5f;
+constexpr UINT kViewportResizeMessage = WM_APP + 0x60;
+constexpr UINT kDeferredExecutionMessage = WM_APP + 0x65;
+thread_local unsigned executionUiServiceDepth=0;
+thread_local std::vector<HWND> executionReplayWindows;
 constexpr UINT_PTR kTooltipToolId = 0x5750;
 
 class BackgroundWorkQueue {
@@ -141,6 +148,8 @@ struct AsyncTextResult {
     bool loaded=false;
     std::wstring content;
     std::function<void(bool,std::wstring)> completion;
+    ScriptResponse response;
+    std::function<void(ScriptResponse)> requestCompletion;
 };
 
 struct AsyncFrameResult {
@@ -214,6 +223,61 @@ bool LoadTextResourceForBase(const View::ResourceLoader& loader,
     if(path.is_relative()&&!base.empty())path=std::filesystem::path(base)/path;
     std::ifstream input(path,std::ios::binary);if(!input)return false;
     std::ostringstream bytes;bytes<<input.rdbuf();content=Utf8ToWide(bytes.str());return true;
+}
+
+std::wstring ResolveStylesheetUrls(const std::wstring& source,const std::wstring& location){
+    std::wstring result;size_t copied=0;wchar_t quote=0;bool comment=false;
+    for(size_t index=0;index<source.size();++index){
+        const auto c=source[index];
+        if(comment){if(c==L'*'&&index+1<source.size()&&source[index+1]==L'/'){comment=false;++index;}continue;}
+        if(quote){if(c==L'\\')++index;else if(c==quote)quote=0;continue;}
+        if(c==L'/'&&index+1<source.size()&&source[index+1]==L'*'){comment=true;++index;continue;}
+        if(c==L'\''||c==L'"'){quote=c;continue;}
+        if((c!=L'u'&&c!=L'U')||index+4>source.size()||ToLower(source.substr(index,4))!=L"url(")continue;
+        size_t end=index+4;wchar_t urlQuote=0;
+        for(;end<source.size();++end){
+            const auto value=source[end];
+            if(value==L'\\'){++end;continue;}
+            if(urlQuote){if(value==urlQuote)urlQuote=0;}
+            else if(value==L'\''||value==L'"')urlQuote=value;
+            else if(value==L')')break;
+        }
+        if(end==source.size())break;
+        auto reference=Trim(source.substr(index+4,end-index-4));
+        if(reference.size()>1&&(reference.front()==L'\''||reference.front()==L'"'))reference=reference.substr(1,reference.size()-2);
+        if(!reference.empty()&&reference.front()!=L'#'&&reference.find(L':')==std::wstring::npos){
+            std::wstring resolved(4096,L'\0');DWORD size=static_cast<DWORD>(resolved.size());
+            if(SUCCEEDED(UrlCombineW(location.c_str(),reference.c_str(),resolved.data(),&size,URL_DONT_ESCAPE_EXTRA_INFO)))resolved.resize(size);
+            else resolved=ResolveResourceForBase(location,reference);
+            result+=source.substr(copied,index-copied)+L"url(\""+resolved+L"\")";copied=end+1;
+        }
+        index=end;
+    }
+    return copied?result+source.substr(copied):source;
+}
+
+template<class Loader>
+std::wstring CollectDocumentStyles(const Document& document,const std::wstring& base,Loader&& load,bool strict,std::wstring& error){
+    std::wstring css;
+    for(const auto& node:document.QuerySelectorAll(L"style,link")){
+        if(node->attributes.count(L"disabled"))continue;
+        std::wstring source;
+        if(node->tag==L"style")source=node->InnerText();
+        else{
+            if(ToLower(Trim(node->Attribute(L"rel")))!=L"stylesheet")continue;
+            const auto href=node->Attribute(L"href");if(href.empty())continue;
+            if(node->stylesheetOverride)source=node->stylesheetText;
+            else if(!load(href,source)){
+                if(strict){error=L"Cannot load stylesheet: "+href;return L"";}
+                continue;
+            }
+            source=ResolveStylesheetUrls(source,ResolveResourceForBase(base,href));
+        }
+        const auto media=Trim(node->Attribute(L"media"));
+        if(!media.empty())css+=L"@media "+media+L" {\n"+source+L"\n}\n";
+        else css+=source+L"\n";
+    }
+    return css;
 }
 
 std::wstring EncodeFormComponent(const std::wstring& value,UINT codePage){
@@ -409,7 +473,7 @@ unsigned int EffectiveBackgroundColor(const LayoutBox* box) {
     std::vector<const LayoutBox*> ancestors;
     for(auto* current=box;current;current=current->parent)ancestors.push_back(current);
     // This is also the clear color used for a TWebFrame document.
-    unsigned int result=0xfff3f5f8u;
+    unsigned int result=0xffffffffu;
     constexpr unsigned int invalid=0x01020304u;
     for(auto it=ancestors.rbegin();it!=ancestors.rend();++it){
         auto value=(*it)->style.Get(L"background-color");
@@ -425,15 +489,28 @@ unsigned int EffectiveBackgroundColor(const LayoutBox* box) {
 
 struct View::Impl {
     HWND hwnd=nullptr;
-    Document document;
+    std::shared_ptr<Document> documentOwner=std::make_shared<Document>();
+    Document& document=*documentOwner;
     StyleSheet styles;
     JavaScriptRuntime javascript{document};
     LayoutEngine layout{document,styles};
     MessageHandler messageHandler;
     LoadHandler loadHandler;
     View::ResourceLoader resourceLoader;
+    std::shared_ptr<ScriptHttpSession> scriptHttp=std::make_shared<ScriptHttpSession>();
     View::BinaryResourceLoader binaryResourceLoader;
     View::NavigationHandler navigationHandler;
+    View::HistoryChangedHandler historyChangedHandler;
+    View::HistoryTraversalHandler historyTraversalHandler;
+    View::ExecutionYieldHandler javascriptExecutionYieldHandler;
+    struct DeferredExecutionMessage {
+        MSG message{};
+        RECT dpiBounds{};
+        bool hasDpiBounds=false;
+    };
+    std::vector<DeferredExecutionMessage> deferredExecutionMessages;
+    bool deferredExecutionMessagePosted=false;
+    bool executionChromeInterrupted=false;
     bool pageScriptsEnabled=true;
     bool parallelResourceLoading=false;
     std::uint64_t navigationGeneration=0;
@@ -463,17 +540,28 @@ struct View::Impl {
     std::shared_ptr<AsyncViewLifetime> asyncLifetime=std::make_shared<AsyncViewLifetime>();
     struct ChildFrame {
         std::shared_ptr<Node> node;
-        std::unique_ptr<View> view;
+        std::shared_ptr<View> view;
         std::wstring source;
         std::uint64_t request=0;
     };
     std::vector<ChildFrame> childFrames;
+    Impl* compositionParent=nullptr;
+    // Cross-realm functions can keep a detached frame alive beyond this view.
+    // Remember weak owners so teardown can sever every parent/UI bridge.
+    std::vector<std::weak_ptr<View>> createdChildViews;
+    float frameViewportWidth=0,frameViewportHeight=0;
+    HWND pointerFrame=nullptr;
+    bool painting=false;
+    unsigned childFrameDestructionDepth=0;
     JavaScriptRuntime::TopMessageSink topMessageRelay;
     std::uint64_t nextChildFrameRequest=0;
     bool childFrameSyncPending=false;
     std::wstring lastError;
     std::wstring basePath;
     std::wstring currentLocation;
+    std::wstring installedStylesheetText;
+    std::unordered_map<std::wstring,std::wstring> stylesheetResources;
+    bool stylesheetSourcesDirty=true;
     std::wstring pendingNavigation;
     bool pendingNavigationNewWindow=false;
     ComPtr<ID2D1Factory> d2dFactory;
@@ -500,6 +588,8 @@ struct View::Impl {
     // while the same call made during keyboard navigation must retain it.
     bool focusVisibleFromKeyboard = true;
     std::shared_ptr<Node> hovered;
+    std::weak_ptr<Node> primaryPointerDownTarget;
+    int primaryClickDetail=0;
     std::vector<std::shared_ptr<Node>> hoverPath;
     std::shared_ptr<Node> scrollbarDragNode;
     float scrollbarDragOffset=0;
@@ -510,6 +600,7 @@ struct View::Impl {
     bool selectPopupShowAll=false;
     bool selectPopupScrollDragging=false;
     float selectPopupScrollDragOffset=0;
+    std::unique_ptr<ScriptDialog> scriptDialog;
     std::shared_ptr<Node> editingNode;
     // A collapsed contenteditable selection may live between child nodes
     // (notably immediately after an img).  Keep that DOM boundary as a real
@@ -565,7 +656,134 @@ struct View::Impl {
         [this](const std::wstring& text){CommitTextComposition(text);},
         [this]{CancelTextComposition();},
         [this]{return CaretClientRect();}
-    }){}
+    }){
+        // Every View, including iframe realms, has a safepoint even when its
+        // embedding application has not installed a custom UI callback.
+        javascript.SetExecutionYieldHandler([this]{return ServiceExecutionMessages();});
+        javascript.SetExecutionCompletionHandler([this]{ScheduleExecutionMessages();});
+    }
+
+    void ScheduleDeferredExecutionMessages(){
+        if(!deferredExecutionMessagePosted&&!deferredExecutionMessages.empty()&&hwnd)
+            deferredExecutionMessagePosted=PostMessageW(hwnd,kDeferredExecutionMessage,0,0)!=FALSE;
+    }
+    void ScheduleDeferredExecutionTree(){
+        ScheduleDeferredExecutionMessages();
+        if(childFrameDestructionDepth)return;
+        for(const auto& frame:childFrames)if(frame.view&&frame.view->impl_)
+            frame.view->impl_->ScheduleDeferredExecutionTree();
+    }
+    void ScheduleExecutionMessages(){
+        auto* root=this;while(root->compositionParent)root=root->compositionParent;
+        root->ScheduleDeferredExecutionTree();
+        auto pending=std::move(executionReplayWindows);executionReplayWindows.clear();
+        for(const HWND window:pending)if(IsWindow(window)){
+            wchar_t name[64]{};
+            if(GetClassNameW(window,name,64)&&wcscmp(name,kWindowClass)==0)
+                if(auto* view=reinterpret_cast<Impl*>(GetWindowLongPtrW(window,GWLP_USERDATA)))
+                    view->ScheduleDeferredExecutionMessages();
+        }
+    }
+    void DeferExecutionMessage(HWND target,UINT message,WPARAM wParam,LPARAM lParam){
+        // Windows timers repeat until killed. Keep a single queued JavaScript
+        // timer task while the active job runs, rather than accumulating ticks.
+        if(message==WM_TIMER&&(wParam==kAnimationFrameTimer||wParam==kJavaScriptTimer)){
+            wchar_t name[64]{};
+            if(GetClassNameW(target,name,64)&&wcscmp(name,kWindowClass)==0)KillTimer(target,wParam);
+        }
+        DeferredExecutionMessage queued;queued.message={target,message,wParam,lParam};
+        // WM_DPICHANGED's suggested rectangle belongs to the sender's stack.
+        if(message==WM_DPICHANGED&&lParam){
+            queued.dpiBounds=*reinterpret_cast<const RECT*>(lParam);queued.hasDpiBounds=true;
+        }
+        // Coalesce viewport updates; keep input and completion tasks in order.
+        if(message==WM_SIZE||message==WM_MOVE||message==WM_DPICHANGED||
+           (message==WM_TIMER&&(wParam==kAnimationFrameTimer||wParam==kJavaScriptTimer)))
+            for(auto& pending:deferredExecutionMessages)
+                if(pending.message.hwnd==target&&pending.message.message==message&&
+                   (message!=WM_TIMER||pending.message.wParam==wParam)){pending=queued;return;}
+        deferredExecutionMessages.push_back(queued);ScheduleDeferredExecutionMessages();
+    }
+    void ReleaseDeferredExecutionMessages(bool deliverDpi=true){
+        auto pending=std::move(deferredExecutionMessages);deferredExecutionMessages.clear();
+        // Posting restores the ordinary host/page task ordering. DPI messages
+        // require synchronous delivery of our owned rectangle while idle.
+        for(auto& queued:pending){
+            if(!queued.message.hwnd){
+                PostThreadMessageW(GetCurrentThreadId(),queued.message.message,
+                    queued.message.wParam,queued.message.lParam);continue;
+            }
+            if(!IsWindow(queued.message.hwnd))continue;
+            if(queued.hasDpiBounds){
+                if(deliverDpi)SendMessageW(queued.message.hwnd,queued.message.message,queued.message.wParam,
+                    reinterpret_cast<LPARAM>(&queued.dpiBounds));
+            }
+            else PostMessageW(queued.message.hwnd,queued.message.message,
+                queued.message.wParam,queued.message.lParam);
+        }
+    }
+    static LRESULT CALLBACK ExecutionChromeProc(HWND window,UINT message,WPARAM wParam,
+                                                LPARAM lParam,UINT_PTR,DWORD_PTR data){
+        auto* self=reinterpret_cast<Impl*>(data);
+        // DefWindowProc runs a nested message loop while moving or sizing a
+        // window. Protect the host's page-owning actions throughout that loop.
+        // Registered messages (0xC000+) include OS/accessibility queries with
+        // borrowed pointers. They must never be mistaken for queued host jobs.
+        const bool hostJob=message>=WM_APP&&message<0xc000;
+        if(message==WM_SIZE||message==WM_MOVE||message==WM_DPICHANGED||
+           message==WM_COMMAND||message==WM_CLOSE||message==WM_TIMER||hostJob){
+            self->DeferExecutionMessage(window,message,wParam,lParam);
+            if(message==WM_COMMAND||message==WM_CLOSE||hostJob)
+                self->executionChromeInterrupted=true;
+            return 0;
+        }
+        if(message==WM_SYSCOMMAND&&(wParam&0xfff0)==SC_CLOSE){
+            self->DeferExecutionMessage(window,message,wParam,lParam);
+            self->executionChromeInterrupted=true;return 0;
+        }
+        return DefSubclassProc(window,message,wParam,lParam);
+    }
+    bool ServiceExecutionMessages(){
+        executionChromeInterrupted=false;
+        struct ServiceScope {
+            ServiceScope(){++executionUiServiceDepth;}
+            ~ServiceScope(){--executionUiServiceDepth;}
+        } serviceScope;
+        const HWND root=hwnd?GetAncestor(hwnd,GA_ROOT):nullptr;
+        const UINT_PTR guardId=reinterpret_cast<UINT_PTR>(this);
+        const bool guarded=root&&SetWindowSubclass(root,ExecutionChromeProc,guardId,
+                                                   reinterpret_cast<DWORD_PTR>(this));
+        struct ChromeGuard {
+            HWND window;UINT_PTR id;bool installed;
+            ~ChromeGuard(){if(installed&&IsWindow(window))RemoveWindowSubclass(window,ExecutionChromeProc,id);}
+        } guard{root,guardId,guarded};
+        bool keepRunning=!javascriptExecutionYieldHandler||javascriptExecutionYieldHandler();
+        // Drain a bounded slice of the thread queue, dispatching only chrome
+        // and render snapshots. Holding other tasks until the job ends also
+        // lets the low-priority WM_QUIT flag materialize with page jobs pending.
+        MSG message{};
+        for(unsigned count=0;keepRunning&&!executionChromeInterrupted&&count<64&&
+            PeekMessageW(&message,nullptr,0,0,PM_REMOVE);++count){
+            if(message.message==WM_QUIT){
+                PostQuitMessage(static_cast<int>(message.wParam));
+                executionChromeInterrupted=true;break;
+            }
+            const bool nativeChrome=guarded&&message.hwnd==root&&
+                ((message.message>=WM_NCMOUSEMOVE&&message.message<=WM_NCXBUTTONDBLCLK)||
+                 message.message==WM_SYSCOMMAND||message.message==WM_CLOSE);
+            wchar_t targetClass[64]{};
+            const bool frameMessage=(message.message==kDeferredExecutionMessage||
+                (message.message==WM_TIMER&&message.wParam==kCssTransitionTimer))&&
+                GetClassNameW(message.hwnd,targetClass,64)&&wcscmp(targetClass,kWindowClass)==0;
+            const bool ownDrain=frameMessage&&message.message==kDeferredExecutionMessage;
+            const bool cssTimeline=frameMessage&&message.message==WM_TIMER;
+            if(ownDrain||message.message==WM_PAINT||nativeChrome||cssTimeline||message.message>=0xc000)
+                DispatchMessageW(&message);
+            else DeferExecutionMessage(message.hwnd,message.message,message.wParam,message.lParam);
+        }
+        ScheduleExecutionMessages();
+        return keepRunning&&!executionChromeInterrupted;
+    }
 
     void PublishAsyncGenerations(){
         std::lock_guard<std::mutex> lock(asyncLifetime->mutex);
@@ -743,7 +961,7 @@ struct View::Impl {
         }
         for(const auto& node:document.QuerySelectorAll(L"img"))append(node);
         layoutDirty=true;viewportOnlyDirty=false;SyncImageAnimationTimer();
-        InvalidateRect(hwnd,nullptr,FALSE);
+        InvalidateView();
         for(const auto& node:completed){
             if(result->generation!=resourceGeneration)break;
             JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
@@ -755,11 +973,12 @@ struct View::Impl {
         KillTimer(hwnd,kImageAnimationTimer);imageAnimationTimerActive=false;
         const auto now=GetTickCount64();bool changed=false;
         for(const auto& image:ActiveRasterImages())changed=image->Advance(now)||changed;
-        if(changed)InvalidateRect(hwnd,nullptr,FALSE);
+        if(changed)InvalidateView();
         SyncImageAnimationTimer();
     }
 
     float DpiScale()const{
+        if(compositionParent)return compositionParent->DpiScale();
         const UINT dpi=hwnd?GetDpiForWindow(hwnd):USER_DEFAULT_SCREEN_DPI;
         return std::max(1.0f,static_cast<float>(dpi)/static_cast<float>(USER_DEFAULT_SCREEN_DPI));
     }
@@ -876,6 +1095,16 @@ struct View::Impl {
         const float bottom=std::max(bounds.y+bounds.height,item.y+item.height);
         bounds={left,top,right-left,bottom-top};
     }
+    void InvalidateView(const RECT* dirty=nullptr){
+        InvalidateRect(hwnd,dirty,FALSE);
+        if(compositionParent){
+            RECT bounds{};
+            if(dirty)bounds=*dirty;else GetClientRect(hwnd,&bounds);
+            MapWindowPoints(hwnd,compositionParent->hwnd,reinterpret_cast<POINT*>(&bounds),2);
+            InflateRect(&bounds,1,1);
+            compositionParent->InvalidateView(&bounds);
+        }
+    }
     void InvalidateDipBounds(const LayoutRect& bounds){
         const float scale=DpiScale();
         RECT dirty{static_cast<LONG>(std::floor(bounds.x*scale)),
@@ -883,7 +1112,7 @@ struct View::Impl {
             static_cast<LONG>(std::ceil((bounds.x+bounds.width)*scale)),
             static_cast<LONG>(std::ceil((bounds.y+bounds.height)*scale))};
         InflateRect(&dirty,1,1);RECT client{};GetClientRect(hwnd,&client);
-        RECT clipped{};if(IntersectRect(&clipped,&dirty,&client))InvalidateRect(hwnd,&clipped,FALSE);
+        RECT clipped{};if(IntersectRect(&clipped,&dirty,&client))InvalidateView(&clipped);
     }
     void InvalidateScrollViewport(const std::shared_ptr<Node>& node){
         // Replaced elements backed by child HWNDs participate in the same
@@ -897,13 +1126,22 @@ struct View::Impl {
             // InvalidateDipBounds so the rule remains correct at every monitor DPI.
             InvalidateDipBounds(box->rect);return;
         }
-        InvalidateRect(hwnd,nullptr,FALSE);
+        InvalidateView();
     }
     void UpdateJavaScriptViewport(){
         RECT bounds{};GetClientRect(hwnd,&bounds);const float scale=DpiScale();
-        javascript.SetViewportSize(static_cast<double>(std::max(1L,bounds.right-bounds.left))/scale,
-                                   static_cast<double>(std::max(1L,bounds.bottom-bounds.top))/scale);
+        javascript.SetViewportSize(frameViewportWidth>0?frameViewportWidth:
+            static_cast<double>(std::max(1L,bounds.right-bounds.left))/scale,
+            frameViewportHeight>0?frameViewportHeight:
+            static_cast<double>(std::max(1L,bounds.bottom-bounds.top))/scale);
         javascript.SetDevicePixelRatio(scale);
+        MONITORINFO monitor{sizeof(monitor)};
+        if(GetMonitorInfoW(MonitorFromWindow(hwnd,MONITOR_DEFAULTTONEAREST),&monitor)){
+            const float displayWidth=(monitor.rcMonitor.right-monitor.rcMonitor.left)/scale;
+            const float displayHeight=(monitor.rcMonitor.bottom-monitor.rcMonitor.top)/scale;
+            javascript.SetDisplaySize(displayWidth,displayHeight);
+            styles.SetDisplay(displayWidth,displayHeight,scale);
+        }
     }
 
     static LRESULT CALLBACK WindowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
@@ -922,17 +1160,28 @@ struct View::Impl {
         layout.SetRasterImageResolver([this](const std::wstring& reference){
             return ResolveRasterImage(reference);
         });
+        layout.SetFramePainter([this](ID2D1RenderTarget* target,const LayoutBox& box){
+            PaintChildFrame(target,box);
+        });
         javascript.SetMessageSink([this](const std::wstring& msg){if(messageHandler)messageHandler(msg);});
         javascript.SetMutationSink([this](const JavaScriptRuntime::Mutation& mutation){HandleMutation(mutation);});
         javascript.SetFocusSink([this](const std::shared_ptr<Node>& node){
+            if(node&&node->ownerDocument&&node->ownerDocument!=&document)
+                if(const auto child=FindDocumentView(node->ownerDocument)){
+                    child->impl_->SetFocusedNode(node,focusVisibleFromKeyboard,true);return;
+                }
             SetFocusedNode(node,focusVisibleFromKeyboard,true);
         });
         javascript.SetDocumentFocusProvider([this]{
             const auto focus=GetFocus();
             return focus==hwnd||(focus&&IsChild(hwnd,focus));
         });
+        javascript.SetWindowFocusSink([this](const auto& frame,bool focus){
+            SetBrowsingContextFocus(frame,focus);
+        });
         javascript.SetActivationSink([this](const std::shared_ptr<Node>& node){
-            if(!node)return;if(layoutDirty)Rebuild();float x=0,y=0;if(const auto* box=layout.BoxFor(node)){x=box->content.x+box->content.width/2;y=box->content.y+box->content.height/2;}Activate(node,x,y,true);
+            if(!node)return;JavaScriptRuntime::EventInit click{};click.isTrusted=false;
+            Activate(node,0,0,false,click,false);
         });
         javascript.SetPointerCaptureSink([this](bool capture){
             if(capture){if(GetCapture()!=hwnd)SetCapture(hwnd);}else if(GetCapture()==hwnd)ReleaseCapture();
@@ -1002,12 +1251,73 @@ struct View::Impl {
                                                const std::wstring& html){
             CommitChildFrameDocument(node,html);
         });
+        javascript.SetFrameDocumentProvider([this](const std::shared_ptr<Node>& node){
+            auto found=std::find_if(childFrames.begin(),childFrames.end(),[&](const ChildFrame& frame){return frame.node==node;});
+            if(found==childFrames.end()){
+                StartChildFrame(node);
+                found=std::find_if(childFrames.begin(),childFrames.end(),[&](const ChildFrame& frame){return frame.node==node;});
+            }
+            if(found==childFrames.end())return std::shared_ptr<Document>{};
+            // An initial about:blank document is available synchronously to
+            // scripts immediately after inserting the iframe.
+            if(!found->view->impl_->document.Body())
+                found->view->impl_->document.Parse(L"<!doctype html><html><head></head><body></body></html>");
+            return found->view->impl_->documentOwner;
+        });
+        javascript.SetFrameRuntimeProvider([this](const std::shared_ptr<Node>& node){
+            auto found=std::find_if(childFrames.begin(),childFrames.end(),[&](const ChildFrame& frame){return frame.node==node;});
+            if(found==childFrames.end()){
+                StartChildFrame(node);
+                found=std::find_if(childFrames.begin(),childFrames.end(),[&](const ChildFrame& frame){return frame.node==node;});
+            }
+            if(found==childFrames.end())return std::shared_ptr<JavaScriptRuntime>{};
+            // Retained functions keep their originating browsing context alive
+            // even after its iframe is removed from the parent document.
+            auto child=found->view;
+            return std::shared_ptr<JavaScriptRuntime>(std::move(child),&found->view->impl_->javascript);
+        });
+        javascript.SetFrameSelectionProvider([this](const auto& node,auto& selection){
+            for(const auto& frame:childFrames)if(frame.node==node)return frame.view->impl_->javascript.ReadDomSelection(selection);
+            return false;
+        },[this](const auto& node,const auto& selection){
+            for(const auto& frame:childFrames)if(frame.node==node){auto child=frame.view;child->impl_->javascript.WriteDomSelection(selection);break;}
+        });
         javascript.SetTimerScheduler([this](unsigned delay){
             KillTimer(hwnd,kJavaScriptTimer);
             if(delay)SetTimer(hwnd,kJavaScriptTimer,std::max(1u,delay),nullptr);
         });
         javascript.SetResourceLoader([this](const std::wstring& resource,std::wstring& content){
             return LoadTextResource(resource,content);
+        });
+        const auto sendRequest=[](const ScriptRequest& request,const View::ResourceLoader& loader,
+                                  const std::wstring& base,const std::shared_ptr<ScriptHttpSession>& http){
+            // The text resource callback cannot represent HTTP status, headers,
+            // redirects or CORS. All script HTTP methods use the full transport.
+            if(request.url.rfind(L"https://",0)==0||request.url.rfind(L"http://",0)==0)return http->Send(request);
+            ScriptResponse response;response.url=request.url;
+            if(LoadTextResourceForBase(loader,base,request.url,response.body)){
+                response.status=200;response.statusText=L"OK";
+            }return response;
+        };
+        javascript.SetRequestLoader([this,sendRequest](const ScriptRequest& request){
+            return sendRequest(request,resourceLoader,basePath,scriptHttp);
+        });
+        javascript.SetAsyncRequestLoader([this,sendRequest](const ScriptRequest& request,std::function<void(ScriptResponse)> complete){
+            if(!parallelResourceLoading){complete(sendRequest(request,resourceLoader,basePath,scriptHttp));return;}
+            const auto loader=resourceLoader;const auto base=basePath;const auto http=scriptHttp;
+            const auto lifetime=asyncLifetime;const auto generation=resourceGeneration;
+            ImageWorkers().Submit(BackgroundWorkQueue::Priority::Critical,
+                [request,complete=std::move(complete),sendRequest,loader,base,http,lifetime,generation]() mutable {
+                {
+                    std::lock_guard<std::mutex> lock(lifetime->mutex);
+                    if(!lifetime->alive||!lifetime->hwnd||lifetime->resourceGeneration!=generation)return;
+                }
+                auto result=std::make_unique<AsyncTextResult>();result->generation=generation;
+                result->requestCompletion=std::move(complete);result->response=sendRequest(request,loader,base,http);
+                std::lock_guard<std::mutex> lock(lifetime->mutex);
+                if(!lifetime->alive||!lifetime->hwnd||lifetime->resourceGeneration!=generation)return;
+                if(PostMessageW(lifetime->hwnd,kAsyncTextReadyMessage,0,reinterpret_cast<LPARAM>(result.get())))result.release();
+            });
         });
         javascript.SetAsyncResourceLoader([this](const std::wstring& resource,
                                                   std::function<void(bool,std::wstring)> complete){
@@ -1041,8 +1351,16 @@ struct View::Impl {
             pendingNavigationNewWindow=false;
             PostMessageW(hwnd,kNavigationMessage,0,0);
         });
-        javascript.SetDialogSink([this](const std::wstring& message){
-            MessageBoxW(hwnd,message.c_str(),L"",MB_OK|MB_ICONINFORMATION);
+        javascript.SetSameDocumentNavigationSink([this](const std::wstring& target,bool replace,int delta){
+            currentLocation=target;basePath=target;
+            if(historyChangedHandler)historyChangedHandler(target,replace,delta);
+        });
+        javascript.SetHistoryTraversalSink([this](int delta){
+            PostMessageW(hwnd,kHistoryTraversalMessage,static_cast<WPARAM>(static_cast<INT_PTR>(delta)),0);
+        });
+        javascript.SetDialogSink([this](const std::wstring& message){RunScriptDialog(message,false);});
+        javascript.SetConfirmSink([this](const std::wstring& message){
+            return RunScriptDialog(message,true);
         });
         javascript.SetDocumentWriteSink([this](const std::wstring& html){
             // document.open()/write()/close() creates a replacement Document
@@ -1056,11 +1374,71 @@ struct View::Impl {
             for(auto& frame:childFrames)if(frame.node==node){
                 frame.view->impl_->javascript.DispatchWindowMessageAsJson(data,{},origin);
                 frame.view->impl_->layoutDirty=true;
-                InvalidateRect(frame.view->Window(),nullptr,FALSE);
+                frame.view->impl_->InvalidateView();
                 break;
             }
         });
         javascript.SetGeometryProvider([this](const std::shared_ptr<Node>& node){
+            return ReadNodeGeometry(node);
+        });
+        javascript.SetSvgGeometryProvider([this](const std::shared_ptr<Node>& node){
+            auto* owner=this;auto child=node?FindDocumentView(node->ownerDocument):std::shared_ptr<View>{};
+            if(child)owner=child->impl_.get();
+            LayoutRect bounds;JavaScriptRuntime::NodeGeometry result;
+            if(SvgObjectBoundingBox(node,owner->styles,bounds,owner->d2dFactory.Get(),owner->writeFactory.Get())){
+                result.x=bounds.x;result.y=bounds.y;result.width=bounds.width;result.height=bounds.height;
+            }
+            return result;
+        });
+        javascript.SetSvgTextLengthProvider([this](const std::shared_ptr<Node>& node,float& length,std::vector<LayoutRect>* characters){
+            auto* owner=this;auto child=node?FindDocumentView(node->ownerDocument):std::shared_ptr<View>{};
+            if(child)owner=child->impl_.get();
+            return SvgTextAdvanceLength(node,owner->styles,length,owner->writeFactory.Get(),characters);
+        });
+        javascript.SetStylePropertyProvider([this](const std::shared_ptr<Node>& node,const std::wstring& property){
+            auto* owner=this;auto child=node?FindDocumentView(node->ownerDocument):std::shared_ptr<View>{};
+            if(child)owner=child->impl_.get();
+            if(owner->layoutDirty)owner->Rebuild();
+            if(const auto* box=owner->layout.BoxFor(node))return box->style.Get(property);
+            return owner->styles.Compute(node).Get(property);
+        });
+        InitializeAccessibility();
+        return true;
+    }
+    std::shared_ptr<View> FindDocumentView(const Document* owner) const {
+        if(!owner||owner==&document)return {};
+        for(const auto& frame:childFrames){
+            if(frame.view->impl_->documentOwner.get()==owner)return frame.view;
+            if(const auto nested=frame.view->impl_->FindDocumentView(owner))return nested;
+        }
+        return {};
+    }
+    void SetBrowsingContextFocus(const std::shared_ptr<Node>& frame,bool focus){
+        if(frame){
+            if(frame->ownerDocument&&frame->ownerDocument!=&document){
+                if(const auto owner=FindDocumentView(frame->ownerDocument))
+                    owner->impl_->SetBrowsingContextFocus(frame,focus);
+                return;
+            }
+            auto found=std::find_if(childFrames.begin(),childFrames.end(),
+                [&](const ChildFrame& child){return child.node==frame;});
+            if(found==childFrames.end()){
+                StartChildFrame(frame);
+                found=std::find_if(childFrames.begin(),childFrames.end(),
+                    [&](const ChildFrame& child){return child.node==frame;});
+            }
+            if(found!=childFrames.end()){
+                auto retained=found->view;
+                retained->impl_->SetBrowsingContextFocus({},focus);
+            }
+            return;
+        }
+        if(focus)SetFocus(hwnd);
+        else if(GetFocus()==hwnd)SetFocus(GetParent(hwnd));
+    }
+    JavaScriptRuntime::NodeGeometry ReadNodeGeometry(const std::shared_ptr<Node>& node){
+            if(node&&node->ownerDocument&&node->ownerDocument!=&document)
+                if(const auto child=FindDocumentView(node->ownerDocument))return child->impl_->ReadNodeGeometry(node);
             JavaScriptRuntime::NodeGeometry geometry;
             if(layoutDirty)Rebuild();
             if(const auto* box=layout.BoxFor(node)){
@@ -1077,21 +1455,26 @@ struct View::Impl {
                 RECT client{};GetClientRect(hwnd,&client);const float scale=DpiScale();
                 geometry.clientWidth=static_cast<float>(std::max(1L,client.right))/scale;
                 geometry.clientHeight=static_cast<float>(std::max(1L,client.bottom))/scale;
-                geometry.scrollWidth=std::max(geometry.scrollWidth,geometry.clientWidth);
-                geometry.scrollHeight=std::max(geometry.scrollHeight,geometry.clientHeight);
+                const auto* scrollingBox=layout.Root();
+                geometry.scrollWidth=std::max(
+                    static_cast<double>(scrollingBox?scrollingBox->scrollWidth:0.0f),
+                    geometry.clientWidth);
+                geometry.scrollHeight=std::max(
+                    static_cast<double>(scrollingBox?scrollingBox->scrollHeight:0.0f),
+                    geometry.clientHeight);
             }
             return geometry;
-        });
-        javascript.SetStylePropertyProvider([this](const std::shared_ptr<Node>& node,const std::wstring& property){
-            if(layoutDirty)Rebuild();if(const auto* box=layout.BoxFor(node))return box->style.Get(property);return styles.Compute(node).Get(property);
-        });
-        InitializeAccessibility();
-        return true;
     }
-    void ResetRenderTargets(){layout.DiscardDeviceResources();backBuffer.Reset();backBufferPixelSize={};backBufferDpi=0;renderTarget.Reset();}
+    void DiscardCompositedResources(){
+        layout.DiscardDeviceResources();
+        if(scriptDialog)scriptDialog->layout.DiscardDeviceResources();
+        for(const auto& frame:childFrames)if(frame.view)
+            frame.view->impl_->DiscardCompositedResources();
+    }
+    void ResetRenderTargets(){DiscardCompositedResources();backBuffer.Reset();backBufferPixelSize={};backBufferDpi=0;renderTarget.Reset();}
     void EnsureTarget(){
         if(renderTarget||!d2dFactory)return;
-        layout.DiscardDeviceResources();backBuffer.Reset();backBufferPixelSize={};backBufferDpi=0;
+        DiscardCompositedResources();backBuffer.Reset();backBufferPixelSize={};backBufferDpi=0;
         RECT r{};GetClientRect(hwnd,&r);const auto size=D2D1::SizeU(
             static_cast<UINT32>(std::max(1L,r.right-r.left)),
             static_cast<UINT32>(std::max(1L,r.bottom-r.top)));
@@ -1115,10 +1498,11 @@ struct View::Impl {
             capacity.width=std::max(required.width,backBufferPixelSize.width+std::max(64u,backBufferPixelSize.width/4u));
             capacity.height=std::max(required.height,backBufferPixelSize.height+std::max(64u,backBufferPixelSize.height/4u));
         }
-        layout.DiscardDeviceResources();backBuffer.Reset();backBufferPixelSize={};backBufferDpi=0;
+        DiscardCompositedResources();backBuffer.Reset();backBufferPixelSize={};backBufferDpi=0;
         const auto dipSize=D2D1::SizeF(capacity.width*USER_DEFAULT_SCREEN_DPI/dpi,
             capacity.height*USER_DEFAULT_SCREEN_DPI/dpi);
-        if(FAILED(renderTarget->CreateCompatibleRenderTarget(&dipSize,&capacity,nullptr,
+        const auto pixelFormat=D2D1::PixelFormat(DXGI_FORMAT_UNKNOWN,D2D1_ALPHA_MODE_IGNORE);
+        if(FAILED(renderTarget->CreateCompatibleRenderTarget(&dipSize,&capacity,&pixelFormat,
             D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE,backBuffer.ReleaseAndGetAddressOf())))return false;
         backBuffer->SetDpi(dpi,dpi);backBufferPixelSize=capacity;backBufferDpi=dpi;return true;
     }
@@ -1136,6 +1520,12 @@ struct View::Impl {
             if(!box||!box->visible||box->content.width<=0||box->content.height<=0){
                 placements.push_back(placement);continue;
             }
+            auto* child=frame.view->impl_.get();
+            if(child->frameViewportWidth!=box->content.width||child->frameViewportHeight!=box->content.height){
+                child->frameViewportWidth=box->content.width;child->frameViewportHeight=box->content.height;
+                const bool viewportOnly=!child->layoutDirty||child->viewportOnlyDirty;
+                child->layoutDirty=true;child->viewportOnlyDirty=viewportOnly;child->UpdateJavaScriptViewport();
+            }
             RECT bounds{static_cast<LONG>(std::floor(box->content.x*scale)),
                 static_cast<LONG>(std::floor(box->content.y*scale)),
                 static_cast<LONG>(std::ceil((box->content.x+box->content.width)*scale)),
@@ -1147,7 +1537,7 @@ struct View::Impl {
             if(!placement.visible){ShowWindow(placement.window,SW_HIDE);continue;}
             MoveWindow(placement.window,placement.bounds.left,placement.bounds.top,
                 placement.bounds.right-placement.bounds.left,
-                placement.bounds.bottom-placement.bounds.top,TRUE);
+                placement.bounds.bottom-placement.bounds.top,FALSE);
             if(IsWindow(placement.window))ShowWindow(placement.window,SW_SHOW);
         }
     }
@@ -1161,7 +1551,26 @@ struct View::Impl {
             KillTimer(hwnd,kCssTransitionTimer);cssTransitionTimerActive=false;
         }
     }
-    void Rebuild(){RECT r{};GetClientRect(hwnd,&r);const float scale=DpiScale();const float width=static_cast<float>(std::max(1L,r.right))/scale,height=static_cast<float>(std::max(1L,r.bottom))/scale;javascript.SetViewportSize(width,height);if(viewportOnlyDirty)layout.Relayout(width,height,scale);else layout.Layout(width,height,scale);layoutDirty=false;viewportOnlyDirty=false;accessibilityTreeDirty=true;if(accessibility)accessibility->Invalidate();UpdateFrameBounds();SyncCssTransitionTimer();}
+    void SyncDocumentStyles(){
+        if(!stylesheetSourcesDirty)return;
+        stylesheetSourcesDirty=false;
+        std::unordered_map<std::wstring,std::wstring> used;
+        std::wstring error;
+        const auto css=CollectDocumentStyles(document,basePath,[&](const auto& reference,auto& content){
+            const auto key=ResolveResourceReference(reference);
+            const auto cached=stylesheetResources.find(key);
+            if(cached!=stylesheetResources.end())content=cached->second;
+            else LoadTextResource(reference,content);
+            used.emplace(key,content);return true;
+        },false,error);
+        stylesheetResources.swap(used);
+        if(css==installedStylesheetText)return;
+        if(styles.Parse(css,&error)){
+            installedStylesheetText=css;UpdateJavaScriptViewport();
+            layoutDirty=true;viewportOnlyDirty=false;
+        }
+    }
+    void Rebuild(){SyncDocumentStyles();RECT r{};GetClientRect(hwnd,&r);const float scale=DpiScale();const float width=frameViewportWidth>0?frameViewportWidth:static_cast<float>(std::max(1L,r.right))/scale,height=frameViewportHeight>0?frameViewportHeight:static_cast<float>(std::max(1L,r.bottom))/scale;javascript.SetViewportSize(width,height);if(viewportOnlyDirty)layout.Relayout(width,height,scale);else layout.Layout(width,height,scale);layoutDirty=false;viewportOnlyDirty=false;accessibilityTreeDirty=true;if(accessibility)accessibility->Invalidate();UpdateFrameBounds();SyncCssTransitionTimer();}
     bool AccessibilityHidden(const std::shared_ptr<Node>& node)const{
         for(auto current=node;current;current=current->parent.lock())
             if(ToLower(current->Attribute(L"aria-hidden"))==L"true"||current->attributes.count(L"hidden"))return true;
@@ -1383,9 +1792,9 @@ struct View::Impl {
             [this]{return focused;},
             [this](const auto& node)->HRESULT{if(!IsFocusable(node))return UIA_E_NOTSUPPORTED;SetFocus(hwnd);SetFocusedNode(node,true,true);return S_OK;},
             [this](const auto& node)->HRESULT{if(!node||!AccessibilityInfo(node).enabled)return UIA_E_ELEMENTNOTENABLED;if(layoutDirty)Rebuild();const auto* box=layout.BoxFor(node);if(!box)return UIA_E_ELEMENTNOTAVAILABLE;Activate(node,box->rect.x+box->rect.width/2.0f,box->rect.y+box->rect.height/2.0f);return S_OK;},
-            [this](const auto& node,const std::wstring& value)->HRESULT{if(!node||(!IsTextInput(node)&&node->tag!=L"textarea"&&ToLower(node->Attribute(L"role"))!=L"textbox"))return UIA_E_NOTSUPPORTED;if(node->disabled||node->attributes.count(L"readonly"))return UIA_E_ELEMENTNOTENABLED;const auto old=node->Attribute(L"value");if(old==value)return S_OK;node->SetAttribute(L"value",value);javascript.DispatchNodeEvent(node,L"input");javascript.DispatchNodeEvent(node,L"change");RefreshTextSelectionFromDom();layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);return S_OK;},
-            [this](const auto& node)->HRESULT{const auto select=OwningSelect(node);if(select){const auto options=SelectOptions(select);const auto it=std::find(options.begin(),options.end(),node);if(it==options.end()||node->disabled)return UIA_E_ELEMENTNOTENABLED;SelectOption(select,static_cast<size_t>(std::distance(options.begin(),it)));return S_OK;}if(node&&ToLower(node->Attribute(L"role"))==L"option"){const auto parent=node->parent.lock();if(!parent)return UIA_E_NOTSUPPORTED;for(const auto& sibling:parent->children)if(ToLower(sibling->Attribute(L"role"))==L"option")sibling->SetAttribute(L"aria-selected",sibling==node?L"true":L"false");javascript.DispatchNodeEvent(node,L"click");javascript.DispatchNodeEvent(node,L"change");layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);return S_OK;}return UIA_E_NOTSUPPORTED;},
-            [this](const auto& node)->HRESULT{if(!node)return UIA_E_ELEMENTNOTAVAILABLE;const auto role=ToLower(node->Attribute(L"role")),type=ToLower(node->Attribute(L"type"));const bool native=node->tag==L"input"&&(type==L"checkbox"||type==L"radio");if(!native&&role!=L"checkbox"&&role!=L"radio"&&role!=L"switch")return UIA_E_NOTSUPPORTED;const auto before=ToLower(node->Attribute(L"aria-checked"));if(layoutDirty)Rebuild();const auto* box=layout.BoxFor(node);Activate(node,box?box->rect.x:0,box?box->rect.y:0);if(!native&&ToLower(node->Attribute(L"aria-checked"))==before)node->SetAttribute(L"aria-checked",before==L"true"?L"false":L"true");layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);return S_OK;},
+            [this](const auto& node,const std::wstring& value)->HRESULT{if(!node||(!IsTextInput(node)&&node->tag!=L"textarea"&&ToLower(node->Attribute(L"role"))!=L"textbox"))return UIA_E_NOTSUPPORTED;if(node->disabled||node->attributes.count(L"readonly"))return UIA_E_ELEMENTNOTENABLED;const auto old=node->Attribute(L"value");if(old==value)return S_OK;node->SetAttribute(L"value",value);javascript.DispatchNodeEvent(node,L"input");javascript.DispatchNodeEvent(node,L"change");RefreshTextSelectionFromDom();layoutDirty=true;InvalidateView();return S_OK;},
+            [this](const auto& node)->HRESULT{const auto select=OwningSelect(node);if(select){const auto options=SelectOptions(select);const auto it=std::find(options.begin(),options.end(),node);if(it==options.end()||node->disabled)return UIA_E_ELEMENTNOTENABLED;SelectOption(select,static_cast<size_t>(std::distance(options.begin(),it)));return S_OK;}if(node&&ToLower(node->Attribute(L"role"))==L"option"){const auto parent=node->parent.lock();if(!parent)return UIA_E_NOTSUPPORTED;for(const auto& sibling:parent->children)if(ToLower(sibling->Attribute(L"role"))==L"option")sibling->SetAttribute(L"aria-selected",sibling==node?L"true":L"false");javascript.DispatchNodeEvent(node,L"click");javascript.DispatchNodeEvent(node,L"change");layoutDirty=true;InvalidateView();return S_OK;}return UIA_E_NOTSUPPORTED;},
+            [this](const auto& node)->HRESULT{if(!node)return UIA_E_ELEMENTNOTAVAILABLE;const auto role=ToLower(node->Attribute(L"role")),type=ToLower(node->Attribute(L"type"));const bool native=node->tag==L"input"&&(type==L"checkbox"||type==L"radio");if(!native&&role!=L"checkbox"&&role!=L"radio"&&role!=L"switch")return UIA_E_NOTSUPPORTED;const auto before=ToLower(node->Attribute(L"aria-checked"));if(layoutDirty)Rebuild();const auto* box=layout.BoxFor(node);Activate(node,box?box->rect.x:0,box?box->rect.y:0);if(!native&&ToLower(node->Attribute(L"aria-checked"))==before)node->SetAttribute(L"aria-checked",before==L"true"?L"false":L"true");layoutDirty=true;InvalidateView();return S_OK;},
             [this](const auto& node,bool expand)->HRESULT{
                 if(!node)return UIA_E_ELEMENTNOTAVAILABLE;
                 if(IsDatalistInput(node)){
@@ -1393,7 +1802,7 @@ struct View::Impl {
                     else if(openSelectPopup==node)CloseSelectPopup();
                     return S_OK;
                 }
-                if(!node->attributes.count(L"aria-expanded"))return UIA_E_NOTSUPPORTED;const auto before=node->Attribute(L"aria-expanded");if(layoutDirty)Rebuild();const auto* box=layout.BoxFor(node);Activate(node,box?box->rect.x:0,box?box->rect.y:0);if(ToLower(node->Attribute(L"aria-expanded"))==ToLower(before))node->SetAttribute(L"aria-expanded",expand?L"true":L"false");layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);return S_OK;
+                if(!node->attributes.count(L"aria-expanded"))return UIA_E_NOTSUPPORTED;const auto before=node->Attribute(L"aria-expanded");if(layoutDirty)Rebuild();const auto* box=layout.BoxFor(node);Activate(node,box?box->rect.x:0,box?box->rect.y:0);if(ToLower(node->Attribute(L"aria-expanded"))==ToLower(before))node->SetAttribute(L"aria-expanded",expand?L"true":L"false");layoutDirty=true;InvalidateView();return S_OK;
             });
     }
     static bool IsWithin(const std::shared_ptr<Node>& node,const std::shared_ptr<Node>& ancestor){
@@ -1402,7 +1811,7 @@ struct View::Impl {
     }
     bool IsConnectedToDocument(const std::shared_ptr<Node>& node)const{
         if(!node)return false;
-        auto current=node;while(auto parent=current->parent.lock())current=std::move(parent);
+        auto current=node;while(auto parent=current->ComposedParent())current=std::move(parent);
         return current==document.Root();
     }
     void RefreshLiveRegionIndex(const JavaScriptRuntime::Mutation& mutation,bool reset){
@@ -1459,7 +1868,7 @@ struct View::Impl {
     void DispatchChildFrameEvent(const std::shared_ptr<Node>& node,bool success){
         JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
         javascript.DispatchNodeEvent(node,success?L"load":L"error",event);
-        layoutDirty=true;viewportOnlyDirty=false;InvalidateRect(hwnd,nullptr,FALSE);
+        layoutDirty=true;viewportOnlyDirty=false;InvalidateView();
     }
     void StartChildFrame(const std::shared_ptr<Node>& node,
                          const std::unordered_map<std::wstring,std::wstring>* preparedText=nullptr,
@@ -1468,10 +1877,21 @@ struct View::Impl {
         const auto descriptor=ChildFrameSource(node);
         RECT bounds{0,0,1,1};auto child=View::Create(hwnd,bounds);
         if(!child){DispatchChildFrameEvent(node,false);return;}
+        // Keep the child HWND for focus, IME, accessibility and capture. Its
+        // pixels are composited by the common layout painter rather than by
+        // the Windows child-window order, which cannot express CSS z-index.
+        child->impl_->compositionParent=this;
+        child->impl_->javascript.SetSecureContextAncestors([frame=child->impl_.get(),creatorSecure=javascript.IsSecureContext()]{
+            return frame->compositionParent?frame->compositionParent->javascript.IsSecureContext():creatorSecure;
+        });
+        if(const auto region=CreateRectRgn(0,0,0,0))
+            if(!SetWindowRgn(child->Window(),region,FALSE))DeleteObject(region);
         child->SetResourceLoader(resourceLoader);
+        child->impl_->scriptHttp=scriptHttp;
         child->SetBinaryResourceLoader(binaryResourceLoader);
         child->SetParallelResourceLoading(parallelResourceLoading);
         child->SetPageScriptsEnabled(pageScriptsEnabled);
+        child->SetExecutionYieldHandler(javascriptExecutionYieldHandler);
         child->SetNavigationHandler(navigationHandler);
         child->SetMessageHandler([this](const std::wstring& message){
             if(messageHandler)messageHandler(message);
@@ -1482,13 +1902,17 @@ struct View::Impl {
         JavaScriptRuntime::ParentMessageSink deliverToParent=
             [this,node](const std::wstring& data,const std::wstring& origin){
             javascript.DispatchWindowMessageAsJson(data,node,origin);
-            layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);
+            layoutDirty=true;InvalidateView();
         };
         child->impl_->javascript.SetParentMessageSink(deliverToParent);
+        child->impl_->javascript.SetEmbeddingFrame(&javascript,node);
         if(topMessageRelay)child->impl_->javascript.SetTopMessageSink(topMessageRelay);
         child->impl_->topMessageRelay=topMessageRelay?topMessageRelay:deliverToParent;
         const auto request=++nextChildFrameRequest;
         childFrames.push_back({node,std::move(child),descriptor,request});
+        if(createdChildViews.size()%32==0)createdChildViews.erase(
+            std::remove_if(createdChildViews.begin(),createdChildViews.end(),[](const auto& frame){return frame.expired();}),createdChildViews.end());
+        createdChildViews.push_back(childFrames.back().view);
         if(parallelResourceLoading){
             const auto parentLifetime=asyncLifetime;const auto parentGeneration=resourceGeneration;
             childFrames.back().view->SetLoadHandler(
@@ -1576,6 +2000,10 @@ struct View::Impl {
     }
     void CommitChildFrameDocument(const std::shared_ptr<Node>& node,
                                   const std::wstring& html){
+        if(node&&node->ownerDocument&&node->ownerDocument!=&document){
+            if(const auto owner=FindDocumentView(node->ownerDocument))owner->impl_->CommitChildFrameDocument(node,html);
+            return;
+        }
         if(!node||node->tag!=L"iframe"||!IsConnectedToDocument(node))return;
         auto found=std::find_if(childFrames.begin(),childFrames.end(),
             [&](const ChildFrame& frame){return frame.node==node;});
@@ -1586,16 +2014,21 @@ struct View::Impl {
         }
         if(found==childFrames.end())return;
         constexpr auto location=L"about:blank";
-        if(parallelResourceLoading){
-            found->view->impl_->LoadHtmlAsync(html,basePath,location);
-            return;
-        }
-        const bool loaded=found->view->impl_->LoadHtml(html,basePath,location);
+        auto child=found->view;
+        // document.close() exposes its newly written DOM before returning.
+        // Preserve the browsing context's Window and runtime across the write.
+        child->impl_->CancelPendingLoads();
+        const bool loaded=child->impl_->LoadHtmlInternal(&html,nullptr,nullptr,{}, {},basePath,location,true);
         DispatchChildFrameEvent(node,loaded);
     }
     void SyncChildFrames(const std::unordered_map<std::wstring,std::wstring>* preparedText=nullptr,
                          const std::unordered_set<std::wstring>* failedText=nullptr){
-        const auto nodes=document.QuerySelectorAll(L"iframe");
+        std::vector<std::shared_ptr<Node>> nodes;
+        std::function<void(const std::shared_ptr<Node>&)> collect=[&](const auto& current){
+            if(current->tag==L"iframe")nodes.push_back(current);
+            for(const auto& child:current->RenderChildren())collect(child);
+        };
+        collect(document.Root());
         std::unordered_set<const Node*> live;
         for(const auto& node:nodes)live.insert(node.get());
         childFrames.erase(std::remove_if(childFrames.begin(),childFrames.end(),
@@ -1616,6 +2049,23 @@ struct View::Impl {
         if(!PostMessageW(hwnd,kSyncChildFramesMessage,0,0))childFrameSyncPending=false;
     }
     void HandleMutation(const JavaScriptRuntime::Mutation& mutation){
+        if(std::any_of(mutation.targets.begin(),mutation.targets.end(),[&](const auto& target){
+            return target&&target->ownerDocument&&target->ownerDocument!=&document;})){
+            JavaScriptRuntime::Mutation local=mutation;local.targets.clear();
+            for(const auto& target:mutation.targets){
+                if(!target||!target->ownerDocument||target->ownerDocument==&document){local.targets.push_back(target);continue;}
+                if(const auto child=FindDocumentView(target->ownerDocument)){
+                    auto forwarded=mutation;forwarded.targets={target};child->impl_->HandleMutation(forwarded);
+                }
+            }
+            if(local.targets.empty())return;
+            HandleMutation(local);return;
+        }
+        bool stylesMayHaveChanged=mutation.kind==JavaScriptRuntime::MutationKind::Tree;
+        for(const auto& target:mutation.targets)
+            for(auto node=target;node;node=node->parent.lock())
+                if(node->tag==L"style"||node->tag==L"link"){stylesMayHaveChanged=true;break;}
+        if(stylesMayHaveChanged){stylesheetSourcesDirty=true;layoutDirty=true;viewportOnlyDirty=false;}
         bool framesMayHaveChanged=mutation.kind==JavaScriptRuntime::MutationKind::Tree;
         if(!framesMayHaveChanged)for(const auto& target:mutation.targets)
             if(target&&target->tag==L"iframe"){framesMayHaveChanged=true;break;}
@@ -1688,7 +2138,7 @@ struct View::Impl {
             }
         accessibilityTreeDirty=true;if(accessibility)accessibility->Invalidate();
         if(canTarget&&!layoutDirty&&hasDirtyBounds)InvalidateDipBounds(dirtyBounds);
-        else InvalidateRect(hwnd,nullptr,FALSE);
+        else InvalidateView();
         if(hovered){
             if(IsConnectedToDocument(hovered))UpdateTooltipTarget(hovered);
             else UpdateTooltipTarget({});
@@ -1720,25 +2170,90 @@ struct View::Impl {
         };
         append({});return output+L"]";
     }
-    HRESULT RenderBackBuffer(const LayoutRect& dirty){
-        ID2D1RenderTarget* target=backBuffer.Get();
+    bool ScriptsExecuting()const{
+        if(javascript.IsExecuting())return true;
+        for(const auto& frame:childFrames)if(frame.view&&frame.view->impl_&&frame.view->impl_->ScriptsExecuting())return true;
+        return false;
+    }
+    bool RenderingScriptBusy()const{
+        if(executionUiServiceDepth)return true;
+        const auto* root=this;while(root->compositionParent)root=root->compositionParent;
+        // HWND teardown can send messages while a frame-vector entry is being
+        // erased. Treat that interval as busy instead of traversing the entry.
+        if(root->childFrameDestructionDepth||childFrameDestructionDepth)return true;
+        return root->ScriptsExecuting();
+    }
+    void PaintChildFrame(ID2D1RenderTarget* target,const LayoutBox& box){
+        const auto found=std::find_if(childFrames.begin(),childFrames.end(),
+            [&](const ChildFrame& frame){return frame.node==box.node;});
+        if(found==childFrames.end()||!found->view)return;
+        // Rebuilding a child can run resize callbacks. Hold its owner and a
+        // copy of the geometry across callbacks that may remove the iframe.
+        const auto childView=found->view;const auto bounds=box.content;
+        auto* child=childView->impl_.get();
+        if(child->layoutDirty&&!RenderingScriptBusy())child->Rebuild();
+        D2D1_MATRIX_3X2_F transform{};target->GetTransform(&transform);
+        const auto content=D2D1::RectF(bounds.x,bounds.y,bounds.x+bounds.width,bounds.y+bounds.height);
+        target->PushAxisAlignedClip(content,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        target->SetTransform(D2D1::Matrix3x2F::Translation(bounds.x,bounds.y)*transform);
+        ComPtr<ID2D1SolidColorBrush> background;
+        if(SUCCEEDED(target->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White),&background)))
+            target->FillRectangle(D2D1::RectF(0,0,bounds.width,bounds.height),background.Get());
+        const LayoutRect viewport{0,0,bounds.width,bounds.height};
+        child->layout.Paint(target,child->writeFactory.Get(),&viewport);
+        child->PaintTextEditing(target);child->PaintSelectPopup(target);
+        target->SetTransform(transform);target->PopAxisAlignedClip();
+        // Child redraws are satisfied by this shared composition pass.
+        ValidateRect(child->hwnd,nullptr);
+    }
+    HRESULT RenderSurface(ID2D1RenderTarget* target,const LayoutRect& dirty){
         if(!target)return E_INVALIDARG;target->BeginDraw();target->SetTransform(D2D1::IdentityMatrix());
         const auto dirtyRect=D2D1::RectF(dirty.x,dirty.y,dirty.x+dirty.width,dirty.y+dirty.height);
         target->PushAxisAlignedClip(dirtyRect,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
         ComPtr<ID2D1SolidColorBrush> background;
-        if(SUCCEEDED(target->CreateSolidColorBrush(D2D1::ColorF(0xf3f5f8),&background)))
+        // The initial HTML canvas is white; authored root/body backgrounds
+        // are propagated by LayoutEngine::Paint over this opaque base.
+        if(SUCCEEDED(target->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White),&background)))
             target->FillRectangle(dirtyRect,background.Get());
         layout.Paint(target,writeFactory.Get(),&dirty);PaintTextEditing(target);PaintSelectPopup(target);
+        if(scriptDialog&&scriptDialog->active)
+            scriptDialog->layout.Paint(target,writeFactory.Get(),&dirty);
         target->PopAxisAlignedClip();
         return target->EndDraw();
     }
+    void PrintClient(HDC dc){
+        if(!dc||!d2dFactory||!writeFactory||painting)return;
+        if(layoutDirty&&!RenderingScriptBusy())Rebuild();
+        RECT client{};GetClientRect(hwnd,&client);
+        const float scale=DpiScale();
+        ComPtr<ID2D1DCRenderTarget> target;
+        const auto properties=D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE));
+        if(FAILED(d2dFactory->CreateDCRenderTarget(&properties,&target))||
+           FAILED(target->BindDC(dc,&client)))return;
+        target->SetDpi(USER_DEFAULT_SCREEN_DPI*scale,USER_DEFAULT_SCREEN_DPI*scale);
+        DiscardCompositedResources();painting=true;
+        RenderSurface(target.Get(),{0,0,(client.right-client.left)/scale,(client.bottom-client.top)/scale});
+        painting=false;DiscardCompositedResources();
+    }
     void Paint(){
-        PAINTSTRUCT ps{};BeginPaint(hwnd,&ps);EnsureTarget();
+        if(compositionParent){
+            PAINTSTRUCT ps{};BeginPaint(hwnd,&ps);EndPaint(hwnd,&ps);
+            RECT dirty=ps.rcPaint;
+            if(IsRectEmpty(&dirty))GetClientRect(hwnd,&dirty);
+            MapWindowPoints(hwnd,compositionParent->hwnd,reinterpret_cast<POINT*>(&dirty),2);
+            compositionParent->InvalidateView(&dirty);return;
+        }
+        PAINTSTRUCT ps{};BeginPaint(hwnd,&ps);
+        // Moving/focusing nested HWNDs can synchronously request a parent
+        // paint. Direct2D drawing and traversal cannot be entered recursively.
+        if(painting||childFrameDestructionDepth){EndPaint(hwnd,&ps);return;}
+        painting=true;EnsureTarget();
         if(renderTarget){
             // Build and paint the complete frame off-screen first. The HWND
             // target is resized only when the finished bitmap is ready, so a
             // live resize never exposes partially painted document content.
-            if(layoutDirty)Rebuild();
+            if(layoutDirty&&!RenderingScriptBusy())Rebuild();
             RECT client{};GetClientRect(hwnd,&client);const auto pixelSize=D2D1::SizeU(
                 static_cast<UINT32>(std::max(1L,client.right-client.left)),
                 static_cast<UINT32>(std::max(1L,client.bottom-client.top)));
@@ -1753,7 +2268,7 @@ struct View::Impl {
                     const float right=std::ceil(ps.rcPaint.right/scale),bottom=std::ceil(ps.rcPaint.bottom/scale);
                     dirty={left,top,std::max(0.0f,right-left),std::max(0.0f,bottom-top)};
                 }
-                const HRESULT rendered=RenderBackBuffer(dirty);
+                const HRESULT rendered=RenderSurface(backBuffer.Get(),dirty);
                 if(SUCCEEDED(rendered)){
                     ComPtr<ID2D1Bitmap> bitmap;
                     if(SUCCEEDED(backBuffer->GetBitmap(&bitmap))){
@@ -1776,7 +2291,7 @@ struct View::Impl {
                 }else if(rendered==D2DERR_RECREATE_TARGET)ResetRenderTargets();
             }
         }
-        EndPaint(hwnd,&ps);
+        painting=false;EndPaint(hwnd,&ps);
     }
     std::shared_ptr<Node> FocusTarget(const std::shared_ptr<Node>& node)const{
         if(IsTextControl(node))return node;
@@ -2004,7 +2519,7 @@ struct View::Impl {
     void StopCaretBlink(){
         if(caretBlinkTimerActive){KillTimer(hwnd,kCaretBlinkTimer);caretBlinkTimerActive=false;}
         const bool changed=!caretVisible;caretVisible=true;
-        if(changed&&hwnd)InvalidateRect(hwnd,nullptr,FALSE);
+        if(changed&&hwnd)InvalidateView();
     }
     void ResetCaretBlink(){
         if(caretBlinkTimerActive){KillTimer(hwnd,kCaretBlinkTimer);caretBlinkTimerActive=false;}
@@ -2016,7 +2531,7 @@ struct View::Impl {
                 caretBlinkTimerActive=SetTimer(hwnd,kCaretBlinkTimer,
                     std::max(interval,static_cast<UINT>(USER_TIMER_MINIMUM)),nullptr)!=0;
         }
-        if(hwnd)InvalidateRect(hwnd,nullptr,FALSE);
+        if(hwnd)InvalidateView();
     }
     bool CaretDipRect(D2D1_RECT_F& result){
         if(!editingNode&&!editingBoundaryContainer)return false;LayoutRect caret{};
@@ -2032,8 +2547,8 @@ struct View::Impl {
     void InvalidateCaret(){
         if(!hwnd)return;
         RECT caret=CaretClientRect();
-        if(IsRectEmpty(&caret)){InvalidateRect(hwnd,nullptr,FALSE);return;}
-        InflateRect(&caret,2,2);InvalidateRect(hwnd,&caret,FALSE);
+        if(IsRectEmpty(&caret)){InvalidateView();return;}
+        InflateRect(&caret,2,2);InvalidateView(&caret);
     }
     void PaintTextEditing(ID2D1RenderTarget* target){
         if(!target||(!editingNode&&!editingBoundaryContainer)||GetFocus()!=hwnd)return;
@@ -2106,7 +2621,7 @@ struct View::Impl {
         StoreControlSelection();
         compositionText.clear();compositionAttributes.clear();
         javascript.DispatchNodeEvent(focused,L"compositionend");layoutDirty=true;
-        InvalidateRect(hwnd,nullptr,FALSE);
+        InvalidateView();
     }
     void CommitTextEdit(){if(IsTextControl(focused)&&textEditDirty){javascript.DispatchNodeEvent(focused,L"change");textEditDirty=false;}}
     bool SetHoveredNode(const std::shared_ptr<Node>& next,LayoutRect* dirtyBounds=nullptr,
@@ -2213,7 +2728,7 @@ struct View::Impl {
         if(openSelectPopup&&next!=openSelectPopup)CloseSelectPopup();
         if(next==focused){
             const bool desired=focused&&(focusVisible||IsTextControl(focused)||IsContentEditable(focused));
-            if(focused&&desired!=focused->focusVisible){focused->focusVisible=desired;RestyleDocument();if(accessibility)accessibility->Invalidate();InvalidateRect(hwnd,nullptr,FALSE);}
+            if(focused&&desired!=focused->focusVisible){focused->focusVisible=desired;RestyleDocument();if(accessibility)accessibility->Invalidate();InvalidateView();}
             if(focused&&openTextEditor&&!editingNode&&!editingBoundaryContainer&&
                (IsTextControl(focused)||IsContentEditable(focused)))
                 editingNode=EnsureEditableTextNode(focused);
@@ -2229,7 +2744,7 @@ struct View::Impl {
             if(IsTextControl(focused)){editingNode=focused;const auto length=EditingValue().size();const auto start=std::min(focused->selectionStart,length),end=std::min(focused->selectionEnd,length);if(focused->selectionDirection==L"backward"){selectionAnchor=end;caretPosition=start;}else{selectionAnchor=start;caretPosition=end;}}
             else if(IsContentEditable(focused)){editingNode=EnsureEditableTextNode(focused);selectionAnchor=caretPosition=EditingValue().size();}
             javascript.DispatchNodeEvent(focused,L"focus");javascript.DispatchNodeEvent(focused,L"focusin");}
-        RestyleDocument();if(accessibility)accessibility->Invalidate();InvalidateRect(hwnd,nullptr,FALSE);
+        RestyleDocument();if(accessibility)accessibility->Invalidate();InvalidateView();
         if(focused&&accessibility)accessibility->RaiseFocusChanged(focused);
         if(focused&&openTextEditor&&(IsTextControl(focused)||IsContentEditable(focused)))
             textInput.UpdateCandidateWindow(hwnd);
@@ -2374,7 +2889,7 @@ struct View::Impl {
         options[index]->SetAttribute(L"selected",L"");
         select->SetAttribute(L"value",OptionValue(options[index]));
         if(dispatchEvents){javascript.DispatchNodeEvent(select,L"input");javascript.DispatchNodeEvent(select,L"change");}
-        layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);return true;
+        layoutDirty=true;InvalidateView();return true;
     }
     bool ChoosePopupOption(const std::shared_ptr<Node>& control,size_t index){
         const auto options=PopupOptions(control);if(!control||index>=options.size()||options[index]->disabled)return false;
@@ -2387,7 +2902,7 @@ struct View::Impl {
         control->SetAttribute(L"value",value);selectionAnchor=caretPosition=value.size();
         if(focused==control)editingNode=control;StoreControlSelection();RefreshTextSelectionFromDom();textEditDirty=false;
         if(changed){javascript.DispatchNodeEvent(control,L"input");javascript.DispatchNodeEvent(control,L"change");}
-        layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);return changed;
+        layoutDirty=true;InvalidateView();return changed;
     }
     bool MoveSelectOption(const std::shared_ptr<Node>& select,int direction,bool toEdge=false){
         const auto options=SelectOptions(select);if(options.empty())return false;
@@ -2459,7 +2974,7 @@ struct View::Impl {
     void CloseSelectPopup(){
         if(!openSelectPopup)return;openSelectPopup.reset();selectPopupHotIndex=-1;selectPopupScrollOffset=0;
         selectPopupShowAll=false;selectPopupScrollDragging=false;selectPopupScrollDragOffset=0;
-        if(GetCapture()==hwnd)ReleaseCapture();InvalidateRect(hwnd,nullptr,FALSE);
+        if(GetCapture()==hwnd)ReleaseCapture();InvalidateView();
     }
     void EnsureSelectPopupHotVisible(){
         if(selectPopupHotIndex<0)return;SelectPopupGeometry geometry;
@@ -2479,7 +2994,7 @@ struct View::Impl {
             index+=direction<0?-1:1;
         }
         if(index<0||static_cast<size_t>(index)>=options.size())return false;
-        if(index!=selectPopupHotIndex){selectPopupHotIndex=index;EnsureSelectPopupHotVisible();InvalidateRect(hwnd,nullptr,FALSE);}return true;
+        if(index!=selectPopupHotIndex){selectPopupHotIndex=index;EnsureSelectPopupHotVisible();InvalidateView();}return true;
     }
     bool ScrollSelectPopup(float amount){
         SelectPopupGeometry geometry;if(!GetSelectPopupGeometry(openSelectPopup,geometry))return false;
@@ -2487,7 +3002,7 @@ struct View::Impl {
         const float previous=selectPopupScrollOffset;
         selectPopupScrollOffset=std::max(0.0f,std::min(maximum,previous+amount));
         if(std::abs(previous-selectPopupScrollOffset)<0.01f)return false;
-        InvalidateRect(hwnd,nullptr,FALSE);return true;
+        InvalidateView();return true;
     }
     void PaintSelectPopup(ID2D1RenderTarget* target){
         SelectPopupGeometry geometry;if(!target||!writeFactory||!GetSelectPopupGeometry(openSelectPopup,geometry)){openSelectPopup.reset();selectPopupHotIndex=-1;return;}
@@ -2591,7 +3106,7 @@ struct View::Impl {
         selectPopupHotIndex=control->tag==L"select"?PopupSelectedIndex(control,PopupOptions(control)):-1;
         if(layoutDirty)Rebuild();SelectPopupGeometry geometry;if(!GetSelectPopupGeometry(control,geometry)){CloseSelectPopup();return;}
         EnsureSelectPopupHotVisible();
-        InvalidateRect(hwnd,nullptr,FALSE);
+        InvalidateView();
     }
     void OpenFilePicker(const std::shared_ptr<Node>& input){
         if(!input||input->disabled||input->tag!=L"input"||
@@ -2619,7 +3134,7 @@ struct View::Impl {
         input->files={info};
         input->SetAttribute(L"value",L"C:\\fakepath\\"+info.name);
         javascript.DispatchNodeEvent(input,L"input");javascript.DispatchNodeEvent(input,L"change");
-        layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);
+        layoutDirty=true;InvalidateView();
     }
     std::shared_ptr<Node> NearestForm(const std::shared_ptr<Node>& node)const{
         for(auto current=node;current;current=current->parent.lock())if(current->tag==L"form")return current;return {};
@@ -2631,7 +3146,7 @@ struct View::Impl {
         if(method==L"dialog")if(const auto dialog=form->Closest(L"dialog");dialog&&dialog->attributes.count(L"open")){
             dialog->RemoveAttribute(L"open");dialog->modal=false;dialog->SetAttribute(L"returnvalue",control?control->Attribute(L"value"):L"");
             JavaScriptRuntime::EventInit close{};close.bubbles=false;close.cancelable=false;javascript.DispatchNodeEvent(dialog,L"close",close);
-            layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);
+            layoutDirty=true;InvalidateView();
         }
         if(navigationHandler&&method!=L"dialog"){
             if(!method.empty()&&method!=L"get"){
@@ -2687,13 +3202,38 @@ struct View::Impl {
         }
         return true;
     }
-    void Activate(const std::shared_ptr<Node>& node,float clickX,float clickY,bool keyboardFocusVisible=false){if(node&&(node->disabled||ToLower(node->Attribute(L"aria-disabled"))==L"true"))return;SetFocusedNode(node,keyboardFocusVisible,false);if(!node){layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);return;}const auto focusTarget=FocusTarget(node);auto type=ToLower(node->Attribute(L"type"));const auto role=ToLower(node->Attribute(L"role"));bool changed=false;
+    void PrepareActivation(const std::shared_ptr<Node>& node,float clickX,float clickY,bool keyboardFocusVisible=false){
+        if(node&&(node->disabled||ToLower(node->Attribute(L"aria-disabled"))==L"true"))return;
+        SetFocusedNode(node,keyboardFocusVisible,false);
+        const auto focusTarget=FocusTarget(node);
+        if(IsTextControl(focusTarget)||IsContentEditable(focusTarget)){
+            BeginEditingAt(node,clickX,clickY);
+            if(IsDatalistInput(focusTarget)){
+                const auto* box=layout.BoxFor(focusTarget);
+                const bool indicator=box&&clickX>=box->rect.x+box->rect.width-box->rect.height;
+                OpenSelectPopup(focusTarget,indicator,false);
+            }
+        }else if(node&&node->tag==L"select")OpenSelectPopup(node);
+    }
+    void Activate(const std::shared_ptr<Node>& node,float clickX,float clickY,bool keyboardFocusVisible=false,
+                  const JavaScriptRuntime::EventInit& click={},bool prepareInput=true){
+        if(node&&(node->disabled||ToLower(node->Attribute(L"aria-disabled"))==L"true"))return;
+        if(prepareInput)PrepareActivation(node,clickX,clickY,keyboardFocusVisible);
+        if(!node){layoutDirty=true;InvalidateView();return;}
+        const auto type=ToLower(node->Attribute(L"type"));const auto role=ToLower(node->Attribute(L"role"));bool changed=false;
+        const bool oldChecked=node->checked,oldIndeterminate=node->indeterminate;
+        const auto oldAriaChecked=node->Attribute(L"aria-checked");
+        std::vector<std::pair<std::shared_ptr<Node>,bool>> oldRadioStates;
         if(node->tag==L"input"&&type==L"checkbox"&&!node->disabled){node->indeterminate=false;node->checked=!node->checked;changed=true;}
-        else if(node->tag==L"input"&&type==L"radio"&&!node->disabled){auto name=node->Attribute(L"name");for(auto& other:document.GetElementsByName(name))other->checked=(other==node);changed=true;}
+        else if(node->tag==L"input"&&type==L"radio"&&!node->disabled){auto name=node->Attribute(L"name");for(auto& other:document.GetElementsByName(name)){oldRadioStates.emplace_back(other,other->checked);other->checked=(other==node);}changed=true;}
         else if(role==L"checkbox"||role==L"switch"){const auto value=ToLower(node->Attribute(L"aria-checked"));node->SetAttribute(L"aria-checked",value==L"true"?L"false":L"true");changed=true;}
         else if(role==L"radio"){node->SetAttribute(L"aria-checked",L"true");changed=true;}
-        const bool clickCanceled=javascript.DispatchNodeEvent(node,L"click");
-        if(changed)javascript.DispatchNodeEvent(node,L"change");
+        const bool clickCanceled=javascript.DispatchNodeEvent(node,L"click",click);
+        if(clickCanceled&&changed){
+            node->checked=oldChecked;node->indeterminate=oldIndeterminate;
+            for(const auto& state:oldRadioStates)state.first->checked=state.second;
+            if(role==L"checkbox"||role==L"switch"||role==L"radio")node->SetAttribute(L"aria-checked",oldAriaChecked);
+        }else if(changed){JavaScriptRuntime::EventInit change{};change.cancelable=false;javascript.DispatchNodeEvent(node,L"change",change);}
         if(!clickCanceled){
             const auto anchor=node->Closest(L"a[href]");
             if(anchor){const auto href=Trim(anchor->Attribute(L"href"));
@@ -2711,24 +3251,39 @@ struct View::Impl {
             }
         }
         layoutDirty=true;
-        if(IsTextControl(focusTarget)||IsContentEditable(focusTarget)){
-            BeginEditingAt(node,clickX,clickY);
-            if(IsDatalistInput(focusTarget)){
-                const auto* box=layout.BoxFor(focusTarget);
-                const bool indicator=box&&clickX>=box->rect.x+box->rect.width-box->rect.height;
-                OpenSelectPopup(focusTarget,indicator,false);
-            }
-        }
-        else if(node->tag==L"select")OpenSelectPopup(node);
-        else if(node->tag==L"input"&&ToLower(type)==L"file")OpenFilePicker(node);
-        else if(auto label=node->Closest(L"label")){
+        if(!clickCanceled&&node->tag==L"input"&&type==L"file")OpenFilePicker(node);
+        else if(!clickCanceled)if(auto label=node->Closest(L"label")){
             auto control=document.GetElementById(label->Attribute(L"for"));
             if(!control)control=document.QuerySelector(L"input",label);
             if(control&&control->tag==L"input"&&ToLower(control->Attribute(L"type"))==L"file"){
                 SetFocusedNode(control,false,false);OpenFilePicker(control);
             }
         }
-        InvalidateRect(hwnd,nullptr,FALSE);
+        InvalidateView();
+    }
+    void ReleasePrimaryPointer(WPARAM keyState,float x,float y){
+        if(layoutDirty)Rebuild();
+        const auto captured=javascript.CapturedPointerTarget();
+        const auto target=captured?captured:layout.HitTest(x,y);
+        const auto pressed=primaryPointerDownTarget.lock();primaryPointerDownTarget.reset();
+        const int detail=primaryClickDetail;primaryClickDetail=0;
+        auto pointer=PointerEventAt(keyState,x,y,0,detail);
+        javascript.DispatchNodeEvent(target,L"pointerup",pointer);
+        if(javascript.CapturedPointerTarget())javascript.ClearPointerCapture();
+        if(GetCapture()==hwnd)ReleaseCapture();
+        std::shared_ptr<Node> clickTarget;
+        if(pressed){
+            if(captured)clickTarget=target;
+            else for(auto candidate=target;candidate&&!clickTarget;candidate=candidate->parent.lock())
+                for(auto down=pressed;down;down=down->parent.lock())if(candidate==down){clickTarget=candidate;break;}
+        }
+        // A release does not activate a node removed by a pointerup listener.
+        bool connected=false;
+        for(auto current=clickTarget;current;current=current->parent.lock())if(current==document.Root()){connected=true;break;}
+        if(connected){
+            Activate(clickTarget,x,y,false,pointer,false);
+            if(detail==2)javascript.DispatchNodeEvent(clickTarget,L"dblclick",pointer);
+        }
     }
     void RecordUndo(){
         if(!editingNode)return;
@@ -2993,7 +3548,7 @@ struct View::Impl {
         if(!indexOk)document.Reindex();
         javascript.DispatchNodeEvent(focused,L"input",before);
         layoutDirty=true;verticalCaretXValid=false;if(accessibility)accessibility->Invalidate();
-        ResetCaretBlink();textInput.UpdateCandidateWindow(hwnd);InvalidateRect(hwnd,nullptr,FALSE);
+        ResetCaretBlink();textInput.UpdateCandidateWindow(hwnd);InvalidateView();
         return true;
     }
     bool Backspace(){
@@ -3058,8 +3613,11 @@ struct View::Impl {
         return moved;
     }
     HCURSOR CursorAtCurrentPosition(){
-        POINT point{};GetCursorPos(&point);ScreenToClient(hwnd,&point);if(layoutDirty)Rebuild();
+        POINT point{};GetCursorPos(&point);ScreenToClient(hwnd,&point);
+        if(layoutDirty&&!RenderingScriptBusy())Rebuild();
         const auto node=layout.HitTest(PixelToDip(static_cast<float>(point.x)),PixelToDip(static_cast<float>(point.y)));
+        for(const auto& frame:childFrames)if(frame.node==node&&frame.view)
+            return frame.view->impl_->CursorAtCurrentPosition();
         std::wstring cursor;if(node)if(const auto* box=layout.BoxFor(node))cursor=ToLower(box->style.Get(L"cursor",L"auto"));
         if(cursor==L"ns-resize"||cursor==L"n-resize"||cursor==L"s-resize"||cursor==L"row-resize")return LoadCursorW(nullptr,IDC_SIZENS);
         if(cursor==L"ew-resize"||cursor==L"e-resize"||cursor==L"w-resize"||cursor==L"col-resize")return LoadCursorW(nullptr,IDC_SIZEWE);
@@ -3087,8 +3645,294 @@ struct View::Impl {
         if(hit==HTTOPRIGHT||hit==HTBOTTOMLEFT)return LoadCursorW(nullptr,IDC_SIZENESW);
         return nullptr;
     }
+    HWND FrameAtPoint(float x,float y)const{
+        const auto hit=layout.HitTest(x,y);
+        for(const auto& frame:childFrames)
+            if(frame.node==hit&&frame.view)return frame.view->Window();
+        return nullptr;
+    }
+    void LeavePointerFrame(){
+        const HWND previous=pointerFrame;pointerFrame=nullptr;
+        if(previous&&IsWindow(previous))SendMessageW(previous,WM_MOUSELEAVE,0,0);
+    }
+    bool HasPointerTooltip()const{
+        if(tooltipOwner&&!tooltipText.empty())return true;
+        for(const auto& frame:childFrames)
+            if(frame.view&&frame.view->Window()==pointerFrame)return frame.view->impl_->HasPointerTooltip();
+        return false;
+    }
+    bool ForwardFramePointer(UINT message,WPARAM wParam,LPARAM lParam){
+        if(layoutDirty)Rebuild();
+        POINT point{GET_X_LPARAM(lParam),GET_Y_LPARAM(lParam)};
+        const bool screenCoordinates=message==WM_MOUSEWHEEL||message==WM_MOUSEHWHEEL||
+            message==WM_CONTEXTMENU;
+        if(screenCoordinates){if(lParam==static_cast<LPARAM>(-1))return false;ScreenToClient(hwnd,&point);}
+        const float x=PixelToDip(static_cast<float>(point.x)),y=PixelToDip(static_cast<float>(point.y));
+        const HWND child=FrameAtPoint(x,y);
+        if(message==WM_MOUSEMOVE&&pointerFrame!=child){LeavePointerFrame();pointerFrame=child;}
+        if(!child||!IsWindow(child))return false;
+        const auto found=std::find_if(childFrames.begin(),childFrames.end(),
+            [&](const ChildFrame& frame){return frame.view&&frame.view->Window()==child;});
+        if(found==childFrames.end())return false;
+        const auto childView=found->view;
+        if(message==WM_MOUSEHOVER&&!childView->impl_->HasPointerTooltip())return false;
+        if(!screenCoordinates){MapWindowPoints(hwnd,child,&point,1);lParam=MAKELPARAM(point.x,point.y);}
+        SendMessageW(child,message,wParam,lParam);
+        if(message==WM_MOUSEMOVE&&childView->impl_->HasPointerTooltip()){
+            // The physical pointer belongs to the outer compositing HWND.
+            // Track its hover timer there, then route the advisory title to
+            // the browsing context whose content is actually under it.
+            TRACKMOUSEEVENT hover{sizeof(hover),TME_HOVER,hwnd,HOVER_DEFAULT};TrackMouseEvent(&hover);
+        }
+        return true;
+    }
+    bool HandleWheel(UINT message,WPARAM wParam,LPARAM lParam,bool descendIntoFrames=true){
+        HideTooltip();if(layoutDirty)Rebuild();
+        POINT point{GET_X_LPARAM(lParam),GET_Y_LPARAM(lParam)};ScreenToClient(hwnd,&point);
+        const float x=PixelToDip(static_cast<float>(point.x)),y=PixelToDip(static_cast<float>(point.y));
+        const bool horizontal=message==WM_MOUSEHWHEEL;
+        const float delta=static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam));
+        if(openSelectPopup){
+            SelectPopupGeometry popup;
+            if(!horizontal&&GetSelectPopupGeometry(openSelectPopup,popup)&&popup.bounds.Contains(x,y)){
+                ScrollSelectPopup(-delta/WHEEL_DELTA*popup.rowHeight*3.0f);return true;
+            }
+            CloseSelectPopup();
+        }
+        if(descendIntoFrames){
+            const auto hit=layout.HitTest(x,y);
+            const auto found=std::find_if(childFrames.begin(),childFrames.end(),
+                [&](const ChildFrame& frame){return frame.node==hit;});
+            if(found!=childFrames.end()&&found->view){
+                const auto child=found->view;
+                if(child->impl_->HandleWheel(message,wParam,lParam))return true;
+            }
+        }
+        std::shared_ptr<Node> scrolled;bool chainStopped=false;
+        if(!layout.ScrollAt(x,y,horizontal?-delta:delta,&scrolled,horizontal,&chainStopped))
+            return chainStopped;
+        if(accessibility)accessibility->Invalidate();
+        textInput.UpdateCandidateWindow(hwnd);InvalidateScrollViewport(scrolled);
+        auto* surface=this;while(surface->compositionParent)surface=surface->compositionParent;
+        UpdateWindow(surface->hwnd);
+        javascript.DispatchNodeEvent(scrolled,L"scroll");return true;
+    }
+    void LayoutScriptDialog(){
+        if(!scriptDialog)return;
+        RECT client{};GetClientRect(hwnd,&client);
+        const float scale=DpiScale();
+        scriptDialog->Layout(std::max(1.0f,(client.right-client.left)/scale),
+            std::max(1.0f,(client.bottom-client.top)/scale),scale);
+    }
+    void CloseScriptDialog(bool accepted){
+        if(!scriptDialog||!scriptDialog->active)return;
+        scriptDialog->accepted=accepted;scriptDialog->active=false;
+        if(GetCapture()==hwnd)ReleaseCapture();
+        InvalidateView();
+    }
+    void DispatchViewportResize(){
+        auto* owner=this;
+        while(owner->compositionParent)owner=owner->compositionParent;
+        if(owner->scriptDialog&&owner->scriptDialog->active)
+            PostMessageW(hwnd,kViewportResizeMessage,0,0);
+        else javascript.DispatchWindowEvent(L"resize");
+    }
+    bool HandleScriptDialogMessage(UINT message,WPARAM wParam,LPARAM lParam){
+        auto* owner=this;
+        while(owner->compositionParent)owner=owner->compositionParent;
+        if(!owner->scriptDialog)return false;
+        if(message==WM_KILLFOCUS)return true;
+        if(message==WM_CAPTURECHANGED){
+            // Native capture can change synchronously while opening/closing
+            // the overlay; defer the page's pointercancel callback as well.
+            PostMessageW(hwnd,message,wParam,lParam);return true;
+        }
+        if(!owner->scriptDialog->active)return false;
+        auto& dialog=*owner->scriptDialog;
+        switch(message){
+        case WM_LBUTTONDOWN:case WM_LBUTTONDBLCLK:case WM_LBUTTONUP:case WM_MOUSEMOVE:{
+            POINT point{GET_X_LPARAM(lParam),GET_Y_LPARAM(lParam)};
+            if(owner!=this)MapWindowPoints(hwnd,owner->hwnd,&point,1);
+            const float x=owner->PixelToDip(static_cast<float>(point.x));
+            const float y=owner->PixelToDip(static_cast<float>(point.y));
+            const int button=dialog.ButtonAt(x,y);
+            if(message==WM_MOUSEMOVE){
+                if(dialog.hoveredButton!=button){
+                    dialog.Hover(button);owner->InvalidateView();
+                }
+            }else if(message==WM_LBUTTONDOWN||message==WM_LBUTTONDBLCLK){
+                dialog.pressedButton=button;
+                if(button>=0){
+                    dialog.Focus(button,false);
+                    owner->InvalidateView();
+                }
+            }else{
+                if(button>=0&&button==dialog.pressedButton)owner->CloseScriptDialog(button==0);
+                else dialog.pressedButton=-1;
+            }
+            return true;
+        }
+        case WM_KEYDOWN:case WM_SYSKEYDOWN:
+            if(message==WM_SYSKEYDOWN&&wParam==VK_F4){owner->CloseScriptDialog(false);return true;}
+            if(wParam==VK_ESCAPE){owner->CloseScriptDialog(false);return true;}
+            if(wParam==VK_RETURN||wParam==VK_SPACE){
+                owner->CloseScriptDialog(dialog.focusedButton==0);return true;
+            }
+            if(dialog.confirm&&(wParam==VK_TAB||wParam==VK_LEFT||wParam==VK_RIGHT)){
+                dialog.Focus(1-dialog.focusedButton,true);
+                owner->InvalidateView();
+            }
+            return true;
+        case WM_KEYUP:case WM_SYSKEYUP:case WM_CHAR:case WM_SYSCHAR:
+        case WM_IME_STARTCOMPOSITION:case WM_IME_COMPOSITION:case WM_IME_ENDCOMPOSITION:
+        case WM_IME_CHAR:
+        case WM_RBUTTONDOWN:case WM_RBUTTONUP:case WM_MBUTTONDOWN:case WM_MBUTTONUP:
+        case WM_CONTEXTMENU:
+        case WM_MOUSEHOVER:
+            return true;
+        case WM_MOUSELEAVE:
+            dialog.Hover(-1);owner->InvalidateView();return true;
+        case WM_DROPFILES:DragFinish(reinterpret_cast<HDROP>(wParam));return true;
+        case WM_MOUSEWHEEL:case WM_MOUSEHWHEEL:{
+            POINT point{GET_X_LPARAM(lParam),GET_Y_LPARAM(lParam)};
+            ScreenToClient(owner->hwnd,&point);
+            if(dialog.layout.ScrollAt(owner->PixelToDip(static_cast<float>(point.x)),
+                owner->PixelToDip(static_cast<float>(point.y)),
+                static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)),nullptr,message==WM_MOUSEHWHEEL))
+                owner->InvalidateView();
+            return true;
+        }
+        case WM_SETCURSOR:SetCursor(LoadCursorW(nullptr,IDC_ARROW));return true;
+        default:return false;
+        }
+    }
+    void ReleaseDialogInput(HWND owner){
+        for(auto queued=deferredExecutionMessages.begin();queued!=deferredExecutionMessages.end();){
+            const auto& message=queued->message;
+            const bool input=(message.message>=WM_KEYFIRST&&message.message<=WM_KEYLAST)||
+                (message.message>=WM_MOUSEFIRST&&message.message<=WM_MOUSELAST);
+            if(input&&(message.hwnd==owner||IsChild(owner,message.hwnd))){
+                PostMessageW(message.hwnd,message.message,message.wParam,message.lParam);
+                queued=deferredExecutionMessages.erase(queued);
+            }else ++queued;
+        }
+        for(const auto& frame:childFrames)if(frame.view&&frame.view->impl_)
+            frame.view->impl_->ReleaseDialogInput(owner);
+    }
+    bool RunScriptDialog(const std::wstring& message,bool confirm,const std::wstring& site={}){
+        auto* owner=this;
+        while(owner->compositionParent)owner=owner->compositionParent;
+        const auto senderSite=site.empty()?ScriptDialog::SiteName(currentLocation):site;
+        if(owner!=this)return owner->RunScriptDialog(message,confirm,senderSite);
+        if(scriptDialog||!hwnd||!IsWindow(hwnd))return false;
+        auto dialog=std::make_unique<ScriptDialog>();
+        const bool korean=PRIMARYLANGID(GetUserDefaultUILanguage())==LANG_KOREAN;
+        if(!dialog->Initialize(senderSite,message,confirm,korean))return false;
+        const HWND previousFocus=GetFocus();
+        scriptDialog=std::move(dialog);
+        LayoutScriptDialog();
+        HideTooltip();CloseSelectPopup();
+        InvalidateView();UpdateWindow(hwnd);
+        SetFocus(hwnd);
+        SetCapture(hwnd);
+        // A synchronous browser dialog explicitly pauses the current job.
+        // Input collected at an earlier safepoint belongs to this same modal
+        // loop; withholding its dismissal keys would prevent the job ending.
+        ReleaseDialogInput(hwnd);
+        MSG pending{};
+        std::vector<MSG> deferred;
+        while(scriptDialog&&scriptDialog->active&&IsWindow(hwnd)){
+            const BOOL received=GetMessageW(&pending,nullptr,0,0);
+            if(received<=0){
+                if(received==0)PostQuitMessage(static_cast<int>(pending.wParam));
+                break;
+            }
+            if(pending.hwnd==GetAncestor(hwnd,GA_ROOT)&&
+               (pending.message==WM_CLOSE||(pending.message==WM_SYSCOMMAND&&
+                (pending.wParam&0xfff0)==SC_CLOSE))){
+                CloseScriptDialog(false);deferred.push_back(pending);continue;
+            }
+            // A synchronous simple dialog pauses document jobs. Keep loading
+            // completions and JavaScript timers queued until the caller resumes;
+            // rendering, resizing and the dialog's own input remain responsive.
+            if(pending.hwnd&&(pending.hwnd==hwnd||IsChild(hwnd,pending.hwnd))){
+                const bool scriptTimer=pending.message==WM_TIMER&&
+                    (pending.wParam==kAnimationFrameTimer||pending.wParam==kJavaScriptTimer);
+                const bool scriptJob=pending.message==kAnimationFrameFallbackMessage||
+                    pending.message==kNavigationMessage||pending.message==kAsyncImageReadyMessage||
+                    pending.message==kAsyncDocumentReadyMessage||pending.message==kAsyncTextReadyMessage||
+                    pending.message==kAsyncFrameReadyMessage||pending.message==kAsyncFrameSourceReadyMessage||
+                    pending.message==kSyncChildFramesMessage||pending.message==kViewportResizeMessage||
+                    pending.message==WM_CAPTURECHANGED;
+                if(scriptTimer||scriptJob){
+                    if(scriptTimer)KillTimer(pending.hwnd,pending.wParam);
+                    deferred.push_back(pending);continue;
+                }
+            }
+            const bool dialogKey=(pending.message==WM_KEYDOWN||pending.message==WM_SYSKEYDOWN)&&
+                (pending.hwnd==hwnd||IsChild(hwnd,pending.hwnd));
+            if(!dialogKey)TranslateMessage(&pending);
+            DispatchMessageW(&pending);
+        }
+        const bool accepted=scriptDialog&&scriptDialog->accepted;
+        if(GetCapture()==hwnd)ReleaseCapture();
+        if(previousFocus&&IsWindow(previousFocus))SetFocus(previousFocus);
+        scriptDialog.reset();InvalidateView();
+        for(const auto& job:deferred)if(IsWindow(job.hwnd))
+            PostMessageW(job.hwnd,job.message,job.wParam,job.lParam);
+        return accepted;
+    }
     LRESULT HandleMessage(UINT message,WPARAM wParam,LPARAM lParam){
+        if(message==kDeferredExecutionMessage){
+            deferredExecutionMessagePosted=false;
+            if(!RenderingScriptBusy())ReleaseDeferredExecutionMessages();
+            else if(std::find(executionReplayWindows.begin(),executionReplayWindows.end(),hwnd)==executionReplayWindows.end())
+                executionReplayWindows.push_back(hwnd);
+            return 0;
+        }
+        if(HandleScriptDialogMessage(message,wParam,lParam))return 0;
+        // A native move/resize loop may dispatch page messages without going
+        // through the host's main loop. Preserve JavaScript run-to-completion
+        // across the entire frame tree, including asynchronous load callbacks.
+        if(RenderingScriptBusy()){
+            // UI Automation dispatch borrows a function on the caller's stack.
+            // It cannot be queued. Keep its default unavailable result while
+            // a script owns the DOM, rather than reentering an action callback.
+            if(message==kAccessibilityDispatchMessage)return 0;
+            const bool scriptTimer=message==WM_TIMER&&
+                (wParam==kAnimationFrameTimer||wParam==kJavaScriptTimer);
+            const bool scriptJob=message==kAnimationFrameFallbackMessage||
+                message==kNavigationMessage||message==kHistoryTraversalMessage||
+                message==kAsyncImageReadyMessage||message==kAsyncDocumentReadyMessage||
+                message==kAsyncTextReadyMessage||message==kAsyncFrameReadyMessage||
+                message==kAsyncFrameSourceReadyMessage||message==kSyncChildFramesMessage||
+                message==kViewportResizeMessage;
+            const bool input=(message>=WM_KEYFIRST&&message<=WM_KEYLAST)||
+                (message>=WM_MOUSEFIRST&&message<=WM_MOUSELAST)||
+                message==WM_MOUSELEAVE||message==WM_CONTEXTMENU||message==WM_CAPTURECHANGED||
+                message==WM_SETFOCUS||message==WM_KILLFOCUS||message==WM_DROPFILES||
+                message==WM_COPY||message==WM_CUT||message==WM_PASTE||message==WM_UNDO||
+                message==WM_UNICHAR||message==WM_IME_STARTCOMPOSITION||
+                message==WM_IME_COMPOSITION||message==WM_IME_ENDCOMPOSITION;
+            if(scriptTimer||scriptJob||input||message==WM_SIZE||message==WM_DPICHANGED){
+                if(scriptTimer)KillTimer(hwnd,wParam);
+                DeferExecutionMessage(hwnd,message,wParam,lParam);return 0;
+            }
+        }
         LRESULT textResult=0;if(textInput.HandleMessage(hwnd,message,wParam,lParam,textResult))return textResult;
+        // The document hit test, including higher stacking contexts, owns
+        // pointer routing. A transparent iframe HWND must never steal an
+        // overlaid menu's input; unobscured frames still receive native input.
+        if(!openSelectPopup&&!textSelectionDragging&&!scrollbarDragNode&&
+           !selectPopupScrollDragging&&!javascript.CapturedPointerTarget()){
+            switch(message){
+            case WM_LBUTTONDOWN:case WM_LBUTTONUP:case WM_LBUTTONDBLCLK:
+            case WM_RBUTTONDOWN:case WM_RBUTTONUP:case WM_MBUTTONDOWN:case WM_MBUTTONUP:
+            case WM_CONTEXTMENU:
+                if(ForwardFramePointer(message,wParam,lParam))return 0;
+                break;
+            }
+        }
         switch(message){
         case kAccessibilityDispatchMessage:return accessibility?accessibility->HandleDispatch(lParam):0;
         case kAsyncImageReadyMessage:
@@ -3104,6 +3948,8 @@ struct View::Impl {
                 reinterpret_cast<AsyncTextResult*>(lParam));
             if(result&&result->generation==resourceGeneration&&result->completion)
                 result->completion(result->loaded,std::move(result->content));
+            if(result&&result->generation==resourceGeneration&&result->requestCompletion)
+                result->requestCompletion(std::move(result->response));
             return 0;
         }
         case kAsyncFrameReadyMessage:{
@@ -3117,7 +3963,7 @@ struct View::Impl {
                 if(!result->success)childFrames.erase(found);
                 JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
                 javascript.DispatchNodeEvent(result->node,result->success?L"load":L"error",event);
-                layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);
+                layoutDirty=true;InvalidateView();
             }
             return 0;
         }
@@ -3135,12 +3981,16 @@ struct View::Impl {
                 childFrames.erase(found);
                 JavaScriptRuntime::EventInit event;event.bubbles=false;event.cancelable=false;
                 javascript.DispatchNodeEvent(result->node,L"error",event);
-                layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);
+                layoutDirty=true;InvalidateView();
             }
             return 0;
         }
         case kSyncChildFramesMessage:
             childFrameSyncPending=false;SyncChildFrames();return 0;
+        case kViewportResizeMessage:DispatchViewportResize();return 0;
+        case kHistoryTraversalMessage:
+            if(historyTraversalHandler)historyTraversalHandler(static_cast<int>(static_cast<INT_PTR>(wParam)));
+            return 0;
         case kNavigationMessage:{
             auto target=std::move(pendingNavigation);pendingNavigation.clear();
             if(target.empty())return 0;
@@ -3167,12 +4017,28 @@ struct View::Impl {
             if(wParam>=HTLEFT&&wParam<=HTBOTTOMRIGHT){const HWND parent=GetParent(hwnd);if(parent){ReleaseCapture();return SendMessageW(parent,message,wParam,lParam);}}
             break;
         case WM_PAINT:Paint();return 0;case WM_ERASEBKGND:return 1;
+        case WM_PRINTCLIENT:PrintClient(reinterpret_cast<HDC>(wParam));return 0;
         case WM_IME_SETCONTEXT:return DefWindowProcW(hwnd,message,wParam,lParam&~ISC_SHOWUICOMPOSITIONWINDOW);
         case WM_SETFOCUS:textInput.UpdateCandidateWindow(hwnd);ResetCaretBlink();return 0;
-        case WM_TIMER:if(wParam==kAnimationFrameTimer){KillTimer(hwnd,kAnimationFrameTimer);javascript.RunAnimationFrame();return 0;}if(wParam==kJavaScriptTimer){KillTimer(hwnd,kJavaScriptTimer);javascript.RunTimers();return 0;}if(wParam==kCssTransitionTimer){const auto now=std::chrono::steady_clock::now();const float elapsed=std::max(1.0f,std::chrono::duration<float,std::milli>(now-cssTransitionTick).count());cssTransitionTick=now;if(layoutDirty)Rebuild();const bool remains=layout.AdvanceTransitions(elapsed);UpdateFrameBounds();InvalidateRect(hwnd,nullptr,FALSE);if(!remains){KillTimer(hwnd,kCssTransitionTimer);cssTransitionTimerActive=false;}return 0;}if(wParam==kCaretBlinkTimer){if(CanBlinkCaret()){caretVisible=!caretVisible;InvalidateCaret();}else StopCaretBlink();return 0;}if(wParam==kImageAnimationTimer){AdvanceImageAnimations();return 0;}break;
+        case WM_TIMER:
+            if(wParam==kAnimationFrameTimer){KillTimer(hwnd,kAnimationFrameTimer);javascript.RunAnimationFrame();return 0;}
+            if(wParam==kJavaScriptTimer){KillTimer(hwnd,kJavaScriptTimer);javascript.RunTimers();return 0;}
+            if(wParam==kCssTransitionTimer){
+                const auto now=std::chrono::steady_clock::now();
+                const float elapsed=std::max(1.0f,std::chrono::duration<float,std::milli>(now-cssTransitionTick).count());
+                cssTransitionTick=now;const bool scriptBusy=RenderingScriptBusy();
+                if(layoutDirty&&!scriptBusy)Rebuild();
+                const bool remains=layout.AdvanceTransitions(elapsed);
+                if(!scriptBusy)UpdateFrameBounds();
+                InvalidateView();
+                if(!remains){KillTimer(hwnd,kCssTransitionTimer);cssTransitionTimerActive=false;}
+                return 0;
+            }
+            if(wParam==kCaretBlinkTimer){if(CanBlinkCaret()){caretVisible=!caretVisible;InvalidateCaret();}else StopCaretBlink();return 0;}
+            if(wParam==kImageAnimationTimer){AdvanceImageAnimations();return 0;}break;
         case kAnimationFrameFallbackMessage:javascript.RunAnimationFrame();return 0;
-        case WM_SIZE:{HideTooltip();const bool viewportOnly=!layoutDirty||viewportOnlyDirty;layoutDirty=true;viewportOnlyDirty=viewportOnly;UpdateJavaScriptViewport();javascript.DispatchWindowEvent(L"resize");InvalidateRect(hwnd,nullptr,FALSE);return 0;}
-        case WM_DPICHANGED:{HideTooltip();UpdateTooltipMetrics();const bool viewportOnly=!layoutDirty||viewportOnlyDirty;layoutDirty=true;viewportOnlyDirty=viewportOnly;UpdateJavaScriptViewport();javascript.DispatchWindowEvent(L"resize");InvalidateRect(hwnd,nullptr,FALSE);return 0;}
+        case WM_SIZE:{HideTooltip();const bool viewportOnly=!layoutDirty||viewportOnlyDirty;layoutDirty=true;viewportOnlyDirty=viewportOnly;UpdateJavaScriptViewport();LayoutScriptDialog();DispatchViewportResize();InvalidateView();return 0;}
+        case WM_DPICHANGED:{HideTooltip();UpdateTooltipMetrics();const bool viewportOnly=!layoutDirty||viewportOnlyDirty;layoutDirty=true;viewportOnlyDirty=viewportOnly;UpdateJavaScriptViewport();LayoutScriptDialog();DispatchViewportResize();InvalidateView();return 0;}
         case WM_DROPFILES:{
             const auto drop=reinterpret_cast<HDROP>(wParam);
             POINT point{};DragQueryPoint(drop,&point);
@@ -3189,12 +4055,13 @@ struct View::Impl {
                 if(layoutDirty)Rebuild();
                 javascript.DispatchFileDrop(layout.HitTest(PixelToDip(static_cast<float>(point.x)),
                                                        PixelToDip(static_cast<float>(point.y))),files);
-                layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);
+                layoutDirty=true;InvalidateView();
             }
             return 0;
         }
         case WM_LBUTTONDOWN:{
             HideTooltip();
+            primaryPointerDownTarget.reset();primaryClickDetail=0;
             focusVisibleFromKeyboard=false;
             POINT screenPoint{GET_X_LPARAM(lParam),GET_Y_LPARAM(lParam)};ClientToScreen(hwnd,&screenPoint);
             const LRESULT resizeHit=ParentResizeHit(screenPoint);if(resizeHit>=HTLEFT&&resizeHit<=HTBOTTOMRIGHT){ReleaseCapture();PostMessageW(GetParent(hwnd),WM_NCLBUTTONDOWN,static_cast<WPARAM>(resizeHit),MAKELPARAM(static_cast<WORD>(screenPoint.x),static_cast<WORD>(screenPoint.y)));return 0;}
@@ -3223,65 +4090,41 @@ struct View::Impl {
                 }
                 CloseSelectPopup();
             }
-            if(layout.BeginScrollbarInteraction(x,y,scrollbarDragNode,scrollbarDragOffset,scrollbarDragHorizontal)){if(scrollbarDragNode)SetCapture(hwnd);else javascript.DispatchNodeEvent(layout.HitTest(x,y),L"scroll");if(accessibility)accessibility->Invalidate();UpdateFrameBounds();InvalidateRect(hwnd,nullptr,FALSE);return 0;}
-            SetFocus(hwnd);auto target=layout.HitTest(x,y);auto pointer=PointerEventAt(wParam,x,y,0,1);if(javascript.DispatchNodeEvent(target,L"pointerdown",pointer))return 0;Activate(target,x,y);
+            if(layout.BeginScrollbarInteraction(x,y,scrollbarDragNode,scrollbarDragOffset,scrollbarDragHorizontal)){if(scrollbarDragNode)SetCapture(hwnd);else javascript.DispatchNodeEvent(layout.HitTest(x,y),L"scroll");if(accessibility)accessibility->Invalidate();UpdateFrameBounds();InvalidateView();return 0;}
+            SetFocus(hwnd);auto target=layout.HitTest(x,y);auto pointer=PointerEventAt(wParam,x,y,0,1);
+            primaryPointerDownTarget=target;primaryClickDetail=1;
+            if(javascript.DispatchNodeEvent(target,L"pointerdown",pointer))return 0;
+            PrepareActivation(target,x,y);layoutDirty=true;InvalidateView();
             if(editingNode&&focused&&FocusTarget(target)==focused&&
                (IsTextControl(focused)||IsContentEditable(focused))){
                 textSelectionDragging=true;SetCapture(hwnd);
             }
             return 0;
         }
-        case WM_LBUTTONDBLCLK:{focusVisibleFromKeyboard=false;const float x=PixelToDip(static_cast<float>(GET_X_LPARAM(lParam))),y=PixelToDip(static_cast<float>(GET_Y_LPARAM(lParam)));if(layoutDirty)Rebuild();auto target=layout.HitTest(x,y);auto pointer=PointerEventAt(wParam,x,y,0,2);javascript.DispatchNodeEvent(target,L"pointerdown",pointer);javascript.DispatchNodeEvent(target,L"dblclick",pointer);return 0;}
-        case WM_CONTEXTMENU:{float x=0,y=0;std::shared_ptr<Node> target;if(lParam==static_cast<LPARAM>(-1)){target=focused;if(layoutDirty)Rebuild();if(const auto* box=layout.BoxFor(target)){x=box->content.x+box->content.width/2.0f;y=box->content.y+box->content.height/2.0f;}}else{POINT point{GET_X_LPARAM(lParam),GET_Y_LPARAM(lParam)};ScreenToClient(hwnd,&point);x=PixelToDip(static_cast<float>(point.x));y=PixelToDip(static_cast<float>(point.y));if(layoutDirty)Rebuild();target=layout.HitTest(x,y);}auto context=PointerEventAt(0,x,y,2,1);javascript.DispatchNodeEvent(target,L"contextmenu",context);return 0;}
+        case WM_LBUTTONDBLCLK:{focusVisibleFromKeyboard=false;const float x=PixelToDip(static_cast<float>(GET_X_LPARAM(lParam))),y=PixelToDip(static_cast<float>(GET_Y_LPARAM(lParam)));if(layoutDirty)Rebuild();auto target=layout.HitTest(x,y);auto pointer=PointerEventAt(wParam,x,y,0,2);primaryPointerDownTarget=target;primaryClickDetail=2;if(!javascript.DispatchNodeEvent(target,L"pointerdown",pointer))PrepareActivation(target,x,y);return 0;}
+        case WM_CONTEXTMENU:{float x=0,y=0;std::shared_ptr<Node> target;const bool keyboard=lParam==static_cast<LPARAM>(-1);if(keyboard){target=focused;if(layoutDirty)Rebuild();if(const auto* box=layout.BoxFor(target)){x=box->content.x+box->content.width/2.0f;y=box->content.y+box->content.height/2.0f;}}else{POINT point{GET_X_LPARAM(lParam),GET_Y_LPARAM(lParam)};ScreenToClient(hwnd,&point);x=PixelToDip(static_cast<float>(point.x));y=PixelToDip(static_cast<float>(point.y));if(layoutDirty)Rebuild();target=layout.HitTest(x,y);}auto context=PointerEventAt(0,x,y,2,keyboard?0:1);javascript.DispatchNodeEvent(target,L"contextmenu",context);return 0;}
         case WM_LBUTTONUP:
             if(selectPopupScrollDragging){selectPopupScrollDragging=false;selectPopupScrollDragOffset=0;if(GetCapture()==hwnd)ReleaseCapture();return 0;}
-            if(scrollbarDragNode){InvalidateRect(hwnd,nullptr,FALSE);scrollbarDragNode.reset();scrollbarDragOffset=0;scrollbarDragHorizontal=false;if(GetCapture()==hwnd)ReleaseCapture();return 0;}
+            if(scrollbarDragNode){InvalidateView();scrollbarDragNode.reset();scrollbarDragOffset=0;scrollbarDragHorizontal=false;if(GetCapture()==hwnd)ReleaseCapture();return 0;}
             if(textSelectionDragging){
                 const float x=PixelToDip(static_cast<float>(GET_X_LPARAM(lParam)));
                 const float y=PixelToDip(static_cast<float>(GET_Y_LPARAM(lParam)));
-                UpdateTextSelectionAt(x,y);if(layoutDirty)Rebuild();auto target=javascript.CapturedPointerTarget();if(!target)target=layout.HitTest(x,y);
-                auto pointer=PointerEventAt(wParam,x,y,0,1);javascript.DispatchNodeEvent(target,L"pointerup",pointer);textSelectionDragging=false;
-                if(javascript.CapturedPointerTarget())javascript.ClearPointerCapture();
-                if(GetCapture()==hwnd)ReleaseCapture();return 0;
+                UpdateTextSelectionAt(x,y);textSelectionDragging=false;
+                ReleasePrimaryPointer(wParam,x,y);return 0;
             }
             {
                 const float x=PixelToDip(static_cast<float>(GET_X_LPARAM(lParam))),y=PixelToDip(static_cast<float>(GET_Y_LPARAM(lParam)));
-                if(layoutDirty)Rebuild();auto target=javascript.CapturedPointerTarget();if(!target)target=layout.HitTest(x,y);
-                auto pointer=PointerEventAt(wParam,x,y,0,1);javascript.DispatchNodeEvent(target,L"pointerup",pointer);
-                if(javascript.CapturedPointerTarget())javascript.ClearPointerCapture();return 0;
+                ReleasePrimaryPointer(wParam,x,y);return 0;
             }
             break;
-        case WM_CAPTURECHANGED:{HideTooltip();textSelectionDragging=false;selectPopupScrollDragging=false;selectPopupScrollDragOffset=0;scrollbarDragNode.reset();scrollbarDragOffset=0;scrollbarDragHorizontal=false;if(auto captured=javascript.CapturedPointerTarget()){auto pointer=PointerEventAt(0,pointerX,pointerY);javascript.DispatchNodeEvent(captured,L"pointercancel",pointer);if(javascript.CapturedPointerTarget())javascript.ClearPointerCapture();}return 0;}
-        case WM_MOUSEWHEEL:{
-            HideTooltip();
-            if(layoutDirty)Rebuild();POINT point{GET_X_LPARAM(lParam),GET_Y_LPARAM(lParam)};ScreenToClient(hwnd,&point);
-            const float x=PixelToDip(static_cast<float>(point.x)),y=PixelToDip(static_cast<float>(point.y));
-            if(openSelectPopup){SelectPopupGeometry popup;if(GetSelectPopupGeometry(openSelectPopup,popup)&&popup.bounds.Contains(x,y)){ScrollSelectPopup(-static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam))/WHEEL_DELTA*popup.rowHeight*3.0f);return 0;}CloseSelectPopup();}
-            std::shared_ptr<Node> scrolled;
-            if(layout.ScrollAt(x,y,static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)),&scrolled)){
-                if(accessibility)accessibility->Invalidate();
-                textInput.UpdateCandidateWindow(hwnd);InvalidateScrollViewport(scrolled);
-                // Present the native scroll offset before running author scroll
-                // callbacks. A long callback may delay its own style changes,
-                // but it must not hold the already-scrolled document frame.
-                UpdateWindow(hwnd);
-                javascript.DispatchNodeEvent(scrolled,L"scroll");
-            }
+        case WM_CAPTURECHANGED:{HideTooltip();primaryPointerDownTarget.reset();primaryClickDetail=0;textSelectionDragging=false;selectPopupScrollDragging=false;selectPopupScrollDragOffset=0;scrollbarDragNode.reset();scrollbarDragOffset=0;scrollbarDragHorizontal=false;if(auto captured=javascript.CapturedPointerTarget()){auto pointer=PointerEventAt(0,pointerX,pointerY);javascript.DispatchNodeEvent(captured,L"pointercancel",pointer);if(javascript.CapturedPointerTarget())javascript.ClearPointerCapture();}return 0;}
+        case WM_MOUSEWHEEL:case WM_MOUSEHWHEEL:
+            // An exhausted or non-scrolling browsing context continues the
+            // wheel's scroll chain in its containing document. Screen-space
+            // coordinates remain valid across nested frames and monitor DPI.
+            for(auto* receiver=this;receiver;receiver=receiver->compositionParent)
+                if(receiver->HandleWheel(message,wParam,lParam,receiver==this))break;
             return 0;
-        }
-        case WM_MOUSEHWHEEL:{
-            HideTooltip();
-            if(layoutDirty)Rebuild();POINT point{GET_X_LPARAM(lParam),GET_Y_LPARAM(lParam)};ScreenToClient(hwnd,&point);
-            const float x=PixelToDip(static_cast<float>(point.x)),y=PixelToDip(static_cast<float>(point.y));
-            std::shared_ptr<Node> scrolled;
-            if(layout.ScrollAt(x,y,-static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)),&scrolled,true)){
-                if(accessibility)accessibility->Invalidate();
-                textInput.UpdateCandidateWindow(hwnd);InvalidateScrollViewport(scrolled);
-                UpdateWindow(hwnd);
-                javascript.DispatchNodeEvent(scrolled,L"scroll");
-            }
-            return 0;
-        }
         case WM_MOUSEMOVE:{
             if(!trackingMouseLeave){TRACKMOUSEEVENT tracking{sizeof(TRACKMOUSEEVENT),TME_LEAVE,hwnd,0};trackingMouseLeave=TrackMouseEvent(&tracking)!=FALSE;}
             const float x=PixelToDip(static_cast<float>(GET_X_LPARAM(lParam))),y=PixelToDip(static_cast<float>(GET_Y_LPARAM(lParam)));
@@ -3290,11 +4133,11 @@ struct View::Impl {
                 const float travel=std::max(0.0f,popup.viewportHeight-thumbHeight),maximum=std::max(0.0f,popup.contentHeight-popup.viewportHeight);
                 const float thumbTop=std::max(0.0f,std::min(travel,y-(popup.bounds.y+popup.borderWidth)-selectPopupScrollDragOffset));
                 const float previous=selectPopupScrollOffset;selectPopupScrollOffset=travel>0?thumbTop/travel*maximum:0;
-                if(std::abs(previous-selectPopupScrollOffset)>0.01f)InvalidateRect(hwnd,nullptr,FALSE);
+                if(std::abs(previous-selectPopupScrollOffset)>0.01f)InvalidateView();
             }return 0;}
             if(scrollbarDragNode){HideTooltip();if(layout.DragScrollbar(scrollbarDragNode,x,y,scrollbarDragOffset,scrollbarDragHorizontal)){javascript.DispatchNodeEvent(scrollbarDragNode,L"scroll");if(accessibility)accessibility->Invalidate();textInput.UpdateCandidateWindow(hwnd);InvalidateScrollViewport(scrollbarDragNode);}return 0;}
             if(textSelectionDragging){HideTooltip();UpdateTextSelectionAt(x,y);return 0;}
-            if(layoutDirty)Rebuild();if(openSelectPopup){int hot=SelectPopupIndexAt(x,y);const auto options=PopupOptions(openSelectPopup);if(hot>=0&&(static_cast<size_t>(hot)>=options.size()||options[hot]->disabled))hot=-1;if(hot!=selectPopupHotIndex){selectPopupHotIndex=hot;InvalidateRect(hwnd,nullptr,FALSE);}SelectPopupGeometry popup;if(GetSelectPopupGeometry(openSelectPopup,popup)&&popup.bounds.Contains(x,y)){HideTooltip();return 0;}}
+            if(layoutDirty)Rebuild();if(openSelectPopup){int hot=SelectPopupIndexAt(x,y);const auto options=PopupOptions(openSelectPopup);if(hot>=0&&(static_cast<size_t>(hot)>=options.size()||options[hot]->disabled))hot=-1;if(hot!=selectPopupHotIndex){selectPopupHotIndex=hot;InvalidateView();}SelectPopupGeometry popup;if(GetSelectPopupGeometry(openSelectPopup,popup)&&popup.bounds.Contains(x,y)){HideTooltip();return 0;}}
             auto n=layout.HitTest(x,y);UpdateTooltipTarget(n);
             auto pointer=PointerEventAt(wParam,x,y);if(hasPointerPosition){pointer.movementX=x-pointerX;pointer.movementY=y-pointerY;}
             const auto previous=hovered;LayoutRect dirty{};bool targeted=false;
@@ -3302,21 +4145,22 @@ struct View::Impl {
             if(auto target=javascript.CapturedPointerTarget())javascript.DispatchNodeEvent(target,L"pointermove",pointer);
             else if(n)javascript.DispatchNodeEvent(n,L"pointermove",pointer);
             pointerX=x;pointerY=y;hasPointerPosition=true;
-            if(n!=previous){if(!layoutDirty&&targeted)InvalidateDipBounds(dirty);else InvalidateRect(hwnd,nullptr,FALSE);}return 0;
+            if(n!=previous){if(!layoutDirty&&targeted)InvalidateDipBounds(dirty);else InvalidateView();}
+            ForwardFramePointer(message,wParam,lParam);return 0;
         }
-        case WM_MOUSEHOVER:ShowTooltipAt(lParam);return 0;
-        case WM_MOUSELEAVE:{trackingMouseLeave=false;HideTooltip();const auto previous=hovered;if(previous){
+        case WM_MOUSEHOVER:if(!ForwardFramePointer(message,wParam,lParam))ShowTooltipAt(lParam);return 0;
+        case WM_MOUSELEAVE:{LeavePointerFrame();trackingMouseLeave=false;HideTooltip();const auto previous=hovered;if(previous){
             auto pointer=PointerEventAt(0,pointerX,pointerY);LayoutRect dirty{};bool targeted=false;
             const bool hoverLayoutChanged=SetHoveredNode({},&dirty,&targeted);layoutDirty=layoutDirty||hoverLayoutChanged;
             DispatchPointerTransition(previous,{},pointer);
-            if(!layoutDirty&&targeted)InvalidateDipBounds(dirty);else InvalidateRect(hwnd,nullptr,FALSE);
+            if(!layoutDirty&&targeted)InvalidateDipBounds(dirty);else InvalidateView();
         }hasPointerPosition=false;return 0;}
         case WM_GETDLGCODE:return DLGC_WANTTAB|DLGC_WANTARROWS|
             ((CanEditText()||focused&&focused->tag==L"select")?DLGC_WANTCHARS:0);
         case WM_KEYUP:{JavaScriptRuntime::EventInit key{};key.key=KeyValue(wParam);key.ctrlKey=(GetKeyState(VK_CONTROL)&0x8000)!=0;key.shiftKey=(GetKeyState(VK_SHIFT)&0x8000)!=0;key.altKey=(GetKeyState(VK_MENU)&0x8000)!=0;key.metaKey=(GetKeyState(VK_LWIN)&0x8000)!=0||(GetKeyState(VK_RWIN)&0x8000)!=0;javascript.DispatchNodeEvent(focused,L"keyup",key);return 0;}
         case WM_KEYDOWN:{HideTooltip();JavaScriptRuntime::EventInit key{};key.key=KeyValue(wParam);key.ctrlKey=(GetKeyState(VK_CONTROL)&0x8000)!=0;key.shiftKey=(GetKeyState(VK_SHIFT)&0x8000)!=0;key.altKey=(GetKeyState(VK_MENU)&0x8000)!=0;key.metaKey=(GetKeyState(VK_LWIN)&0x8000)!=0||(GetKeyState(VK_RWIN)&0x8000)!=0;if(!key.ctrlKey&&!key.altKey&&!key.metaKey)focusVisibleFromKeyboard=true;if(javascript.DispatchNodeEvent(focused,L"keydown",key))return 0;}
         if(textInput.IsComposing())break;
-        if(wParam==VK_ESCAPE)if(const auto dialog=document.QuerySelector(L"dialog[open]")){JavaScriptRuntime::EventInit cancel{};cancel.bubbles=false;cancel.cancelable=true;if(!javascript.DispatchNodeEvent(dialog,L"cancel",cancel)&&dialog->attributes.count(L"open")){dialog->RemoveAttribute(L"open");dialog->modal=false;JavaScriptRuntime::EventInit close{};close.bubbles=false;close.cancelable=false;javascript.DispatchNodeEvent(dialog,L"close",close);layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);}return 0;}
+        if(wParam==VK_ESCAPE)if(const auto dialog=document.QuerySelector(L"dialog[open]")){JavaScriptRuntime::EventInit cancel{};cancel.bubbles=false;cancel.cancelable=true;if(!javascript.DispatchNodeEvent(dialog,L"cancel",cancel)&&dialog->attributes.count(L"open")){dialog->RemoveAttribute(L"open");dialog->modal=false;JavaScriptRuntime::EventInit close{};close.bubbles=false;close.cancelable=false;javascript.DispatchNodeEvent(dialog,L"close",close);layoutDirty=true;InvalidateView();}return 0;}
         if(openSelectPopup){
             if(wParam==VK_ESCAPE||wParam==VK_F4){CloseSelectPopup();return 0;}
             if(wParam==VK_UP){MoveSelectPopupHot(-1);return 0;}
@@ -3365,11 +4209,14 @@ struct View::Impl {
             else InsertEditingParagraph();
         }else if(wParam>=32&&wParam!=127)ReplaceSelection(std::wstring(1,static_cast<wchar_t>(wParam)));return 0;}break;
         case WM_UNICHAR:if(wParam==UNICODE_NOCHAR)return TRUE;else if(CanEditText()&&wParam>=32&&wParam<=0x10ffff){std::wstring text;if(wParam<=0xffff)text.push_back(static_cast<wchar_t>(wParam));else{const auto value=static_cast<unsigned>(wParam)-0x10000;text.push_back(static_cast<wchar_t>(0xd800+(value>>10)));text.push_back(static_cast<wchar_t>(0xdc00+(value&0x3ff)));}ReplaceSelection(text);return 0;}break;
-        case WM_KILLFOCUS:HideTooltip();textSelectionDragging=false;if(GetCapture()==hwnd)ReleaseCapture();CloseSelectPopup();textInput.Cancel(hwnd);SetFocusedNode({});StopCaretBlink();InvalidateRect(hwnd,nullptr,FALSE);return 0;
+        case WM_KILLFOCUS:HideTooltip();primaryPointerDownTarget.reset();primaryClickDetail=0;textSelectionDragging=false;if(GetCapture()==hwnd)ReleaseCapture();CloseSelectPopup();textInput.Cancel(hwnd);SetFocusedNode({});StopCaretBlink();InvalidateView();return 0;
         case WM_SETCURSOR:{POINT screenPoint{};GetCursorPos(&screenPoint);const LRESULT parentHit=ParentResizeHit(screenPoint);if(const HCURSOR resize=ResizeCursor(parentHit)){SetCursor(resize);return TRUE;}const UINT hit=LOWORD(lParam);
             if(const HCURSOR resize=ResizeCursor(hit)){SetCursor(resize);return TRUE;}
             if(hit==HTCLIENT){SetCursor(CursorAtCurrentPosition());return TRUE;}break;}
         case WM_DESTROY:{
+            javascript.SetExecutionYieldHandler({});javascript.SetExecutionCompletionHandler({});
+            ReleaseDeferredExecutionMessages(false);
+            if(scriptDialog)scriptDialog->active=false;
             {std::lock_guard<std::mutex> lock(asyncLifetime->mutex);
                 asyncLifetime->alive=false;asyncLifetime->hwnd=nullptr;}
             MSG pending{};
@@ -3410,7 +4257,7 @@ struct View::Impl {
         initialLoadDispatched=true;
         javascript.SetDocumentReadyState(L"complete");
         javascript.DispatchWindowEvent(L"load");
-        layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);
+        layoutDirty=true;InvalidateView();
         if(loadHandler)loadHandler(true,L"");
     }
     bool ExecuteInitialDocumentScript(const std::shared_ptr<InitialDocumentScript>& script,
@@ -3546,6 +4393,7 @@ struct View::Impl {
                           const std::wstring& base,const std::wstring& location,
                           bool preserveJavaScriptWindow=false,
                           bool deferInitialScripts=false){
+        primaryPointerDownTarget.reset();primaryClickDetail=0;
         HideTooltip();lastError.clear();childFrames.clear();childFrameSyncPending=false;basePath=base;currentLocation=location;++resourceGeneration;ResetInitialDocumentLoad();PublishAsyncGenerations();rasterImageCache.clear();pendingRasterImages.clear();ClearPendingImageLoads();textInput.Cancel(nullptr);focused.reset();editingNode.reset();ClearEditingBoundary();textSelectionDragging=false;if(GetCapture()==hwnd)ReleaseCapture();StopCaretBlink();hovered.reset();hoverPath.clear();hasPointerPosition=false;pointerX=pointerY=0;scrollbarDragNode.reset();scrollbarDragOffset=0;scrollbarDragHorizontal=false;openSelectPopup.reset();selectPopupHotIndex=-1;selectPopupScrollOffset=0;selectPopupShowAll=false;selectPopupScrollDragging=false;selectPopupScrollDragOffset=0;selectionAnchor=caretPosition=0;textEditDirty=false;liveRegions.clear();liveRegionText.clear();KillTimer(hwnd,kCssTransitionTimer);KillTimer(hwnd,kImageAnimationTimer);cssTransitionTimerActive=false;imageAnimationTimerActive=false;layout.ClearTransitions();if(!preserveJavaScriptWindow)javascript.Clear();javascript.SetDocumentReadyState(L"loading");UpdateJavaScriptViewport();if(parsed)document.AdoptParsed(*parsed);else if(!html||!document.Parse(*html,&lastError)){if(loadHandler)loadHandler(false,lastError);return false;}
         const bool externalPage=base.find(L"://")!=std::wstring::npos;
         const auto loadText=[&](const std::wstring& reference,std::wstring& content){
@@ -3555,17 +4403,20 @@ struct View::Impl {
             if(failedText.count(key)>0)return false;
             return LoadTextResource(reference,content);
         };
-        if(parsedStyles)styles=std::move(*parsedStyles);
+        if(parsedStyles){styles=std::move(*parsedStyles);UpdateJavaScriptViewport();}
         else{
-            std::wstring css=document.StyleText();
-            for(const auto& link:document.QuerySelectorAll(L"link[rel='stylesheet']")){
-                std::wstring external;if(loadText(link->Attribute(L"href"),external))css+=external+L"\n";
-                else if(!externalPage){lastError=L"Cannot load stylesheet: "+link->Attribute(L"href");if(loadHandler)loadHandler(false,lastError);return false;}
-            }
+            const auto css=CollectDocumentStyles(document,basePath,loadText,!externalPage,lastError);
+            if(!lastError.empty()){if(loadHandler)loadHandler(false,lastError);return false;}
             if(!styles.Parse(css,&lastError)){
                 if(!externalPage){if(loadHandler)loadHandler(false,lastError);return false;}
                 styles.Parse(L"",nullptr);lastError.clear();
             }
+        }
+        installedStylesheetText.clear();stylesheetResources.clear();stylesheetSourcesDirty=true;
+        for(const auto& link:document.QuerySelectorAll(L"link[rel='stylesheet']")){
+            const auto key=ResolveResourceReference(link->Attribute(L"href"));
+            const auto prepared=preparedText.find(key);
+            if(prepared!=preparedText.end())stylesheetResources.emplace(key,prepared->second);
         }
         // Page scripts can synchronously query layout while the document is
         // still loading.  The previous navigation's layout boxes are no
@@ -3579,7 +4430,7 @@ struct View::Impl {
         javascript.SetLocation(location);
         if(deferInitialScripts){
             initialImageEvents=std::move(initialImages);
-            layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);
+            layoutDirty=true;InvalidateView();
             JavaScriptRuntime::Mutation initialMutation;
             initialMutation.kind=JavaScriptRuntime::MutationKind::Tree;
             initialMutation.targets.push_back(document.Root());
@@ -3630,7 +4481,7 @@ struct View::Impl {
         SyncChildFrames(&preparedText,&failedText);
         javascript.SetDocumentReadyState(L"complete");
         javascript.DispatchWindowEvent(L"load");
-        layoutDirty=true;InvalidateRect(hwnd,nullptr,FALSE);JavaScriptRuntime::Mutation initialMutation;
+        layoutDirty=true;InvalidateView();JavaScriptRuntime::Mutation initialMutation;
         initialMutation.kind=JavaScriptRuntime::MutationKind::Tree;initialMutation.targets.push_back(document.Root());
         NotifyAccessibilityMutation(initialMutation,true);
         if(loadHandler)loadHandler(true,L"");return true;
@@ -3650,10 +4501,11 @@ struct View::Impl {
         const auto lifetime=asyncLifetime;
         const auto loader=resourceLoader;
         const bool loadStylesInWorker=parallelResourceLoading;
+        const bool scriptingEnabled=pageScriptsEnabled;
         const bool externalPage=base.find(L"://")!=std::wstring::npos;
         ImageWorkers().Submit(BackgroundWorkQueue::Priority::Critical,
             [html,base,location,generation,lifetime,loader,
-             loadStylesInWorker,externalPage]{
+             loadStylesInWorker,externalPage,scriptingEnabled]{
             {
                 std::lock_guard<std::mutex> lock(lifetime->mutex);
                 if(!lifetime->alive||!lifetime->hwnd||
@@ -3662,6 +4514,7 @@ struct View::Impl {
             auto result=std::make_unique<AsyncDocumentResult>();
             result->generation=generation;result->base=base;result->location=location;
             result->document=std::make_unique<Document>();
+            result->document->SetScriptingEnabled(scriptingEnabled);
             if(!result->document->Parse(html,&result->error))result->document.reset();
             if(result->document&&loadStylesInWorker){
                 const auto loadPrepared=[&](const std::wstring& reference,std::wstring& content){
@@ -3674,16 +4527,8 @@ struct View::Impl {
                     else result->failedTextResources.insert(key);
                     return loaded;
                 };
-                std::wstring css=result->document->StyleText();
-                for(const auto& link:result->document->QuerySelectorAll(L"link[rel='stylesheet']")){
-                    std::wstring external;
-                    if(loadPrepared(link->Attribute(L"href"),external))
-                        css+=external+L"\n";
-                    else if(!externalPage){
-                        result->error=L"Cannot load stylesheet: "+link->Attribute(L"href");
-                        result->document.reset();break;
-                    }
-                }
+                const auto css=CollectDocumentStyles(*result->document,base,loadPrepared,!externalPage,result->error);
+                if(!result->error.empty())result->document.reset();
                 if(result->document){
                     result->styles=std::make_unique<StyleSheet>();
                     if(!result->styles->Parse(css,&result->error)){
@@ -3721,6 +4566,11 @@ struct View::Impl {
 
 View::View(std::unique_ptr<Impl> impl):impl_(std::move(impl)){}
 View::~View(){
+    auto* compositionOwner=impl_?impl_->compositionParent:nullptr;
+    if(compositionOwner)++compositionOwner->childFrameDestructionDepth;
+    if(impl_)++impl_->childFrameDestructionDepth;
+    if(impl_){impl_->javascript.SetExecutionYieldHandler({});impl_->javascript.SetExecutionCompletionHandler({});}
+    if(impl_)impl_->ReleaseDeferredExecutionMessages(false);
     if(impl_&&impl_->asyncLifetime){
         {std::lock_guard<std::mutex> lock(impl_->asyncLifetime->mutex);
             impl_->asyncLifetime->alive=false;impl_->asyncLifetime->hwnd=nullptr;}
@@ -3745,6 +4595,18 @@ View::~View(){
     // call while handling a SendMessage-delivered WM_DESTROY.
     if(impl_&&impl_->accessibility)impl_->accessibility->Disconnect();
     if(impl_&&impl_->hwnd&&IsWindow(impl_->hwnd))DestroyWindow(impl_->hwnd);
+    if(impl_)for(const auto& weak:impl_->createdChildViews)if(const auto child=weak.lock()){
+        child->impl_->compositionParent=nullptr;child->impl_->topMessageRelay={};
+        child->impl_->javascript.SetParentMessageSink({});child->impl_->javascript.SetTopMessageSink({});
+        child->impl_->javascript.SetEmbeddingFrame(nullptr,{});
+        child->SetMessageHandler({});child->SetNavigationHandler({});
+        child->SetResourceLoader({});child->SetBinaryResourceLoader({});child->SetLoadHandler({});
+    }
+    // DestroyWindow/accessibility teardown can synchronously paint the parent
+    // while its frame vector is erasing this entry. Release the implementation
+    // before allowing the parent to traverse the stable frame list again.
+    impl_.reset();
+    if(compositionOwner){--compositionOwner->childFrameDestructionDepth;compositionOwner->InvalidateView();}
 }
 std::unique_ptr<View> View::Create(HWND parent,const RECT& bounds){auto impl=std::make_unique<Impl>();if(!impl->Initialize(parent,bounds))return {};return std::unique_ptr<View>(new View(std::move(impl)));}
 HWND View::Window()const noexcept{return impl_->hwnd;}
@@ -3755,23 +4617,82 @@ void View::SetLoadHandler(LoadHandler handler){impl_->loadHandler=std::move(hand
 void View::SetResourceLoader(ResourceLoader loader){impl_->resourceLoader=std::move(loader);}
 void View::SetBinaryResourceLoader(BinaryResourceLoader loader){impl_->binaryResourceLoader=std::move(loader);}
 void View::SetNavigationHandler(NavigationHandler handler){impl_->navigationHandler=std::move(handler);}
+void View::SetHistoryChangedHandler(HistoryChangedHandler handler){impl_->historyChangedHandler=std::move(handler);}
+void View::SetHistoryTraversalHandler(HistoryTraversalHandler handler){impl_->historyTraversalHandler=std::move(handler);}
+bool View::CanTraverseHistory(int delta)const{return impl_->javascript.CanTraverseHistory(delta);}
+bool View::TraverseHistory(int delta){return impl_->javascript.TraverseHistory(delta);}
 void View::SetParallelResourceLoading(bool enabled){impl_->parallelResourceLoading=enabled;}
 void View::SetPageScriptsEnabled(bool enabled){
     impl_->pageScriptsEnabled=enabled;
+    impl_->document.SetScriptingEnabled(enabled);
     impl_->javascript.SetInlineEventHandlersEnabled(enabled);
+    impl_->layoutDirty=true;impl_->viewportOnlyDirty=false;impl_->InvalidateView();
 }
 bool View::Navigate(const std::wstring& filePath){auto path=filePath;const auto suffix=path.find_first_of(L"?#");if(suffix!=std::wstring::npos)path.resize(suffix);std::ifstream input(path,std::ios::binary);if(!input){impl_->lastError=L"Cannot open HTML file: "+path;if(impl_->loadHandler)impl_->loadHandler(false,impl_->lastError);return false;}std::ostringstream bytes;bytes<<input.rdbuf();auto slash=path.find_last_of(L"\\/");return impl_->LoadHtml(Utf8ToWide(bytes.str()),slash==std::wstring::npos?L"":path.substr(0,slash),filePath);}
 bool View::NavigateToString(const std::wstring& html,const std::wstring& basePath){return impl_->LoadHtml(html,basePath,basePath);}
 bool View::NavigateToStringAsync(const std::wstring& html,const std::wstring& basePath){return impl_->LoadHtmlAsync(html,basePath,basePath);}
 void View::CancelPendingLoads(){impl_->CancelPendingLoads();}
+void View::SetExecutionYieldHandler(ExecutionYieldHandler handler){
+    impl_->javascriptExecutionYieldHandler=std::move(handler);
+    for(auto& frame:impl_->childFrames)frame.view->SetExecutionYieldHandler(impl_->javascriptExecutionYieldHandler);
+}
+bool View::ServiceRenderingMessage(const MSG& message){
+    if(message.hwnd==impl_->hwnd){
+        if(message.message!=WM_PAINT&&(message.message!=WM_TIMER||message.wParam!=kCssTransitionTimer))return false;
+        DispatchMessageW(&message);return true;
+    }
+    for(const auto& frame:impl_->childFrames)
+        if(frame.view&&frame.view->ServiceRenderingMessage(message))return true;
+    return false;
+}
 bool View::ExecuteScript(const std::wstring& source,std::wstring* result,std::wstring* error){const bool ok=impl_->javascript.Execute(source,result,error);if(!ok)impl_->lastError=error?*error:L"JavaScript execution failed";impl_->RefreshTextSelectionFromDom();return ok;}
 bool View::PostWebMessageAsJson(const std::wstring& json,std::wstring* error){const bool ok=impl_->javascript.DispatchWebMessageAsJson(json,error);if(!ok)impl_->lastError=error?*error:L"Invalid JSON web message";impl_->RefreshTextSelectionFromDom();return ok;}
 void View::PostWebMessageAsString(const std::wstring& message){impl_->javascript.DispatchWebMessageAsString(message);impl_->RefreshTextSelectionFromDom();}
 std::wstring View::DumpLayoutJson()const{if(impl_->layoutDirty)const_cast<Impl*>(impl_.get())->Rebuild();return impl_->layout.DumpJson();}
+std::wstring View::DumpLayoutJson(bool includeChildFrames)const{
+    if(!includeChildFrames)return DumpLayoutJson();
+    const auto quote=[](const std::wstring& text){
+        std::wstring result=L"\"";
+        for(const auto ch:text){if(ch==L'\"'||ch==L'\\'){result+=L'\\';result+=ch;}
+            else if(ch==L'\n')result+=L"\\n";else if(ch==L'\r')result+=L"\\r";
+            else if(ch==L'\t')result+=L"\\t";else if(ch>=32)result+=ch;}
+        return result+L'\"';
+    };
+    const auto body=impl_->document.Body();
+    std::wstring shadowText,shadowStyles;
+    const std::function<void(const std::shared_ptr<Node>&)> collectShadowText=[&](const std::shared_ptr<Node>& node){
+        if(!node||node->tag==L"style"||node->tag==L"script")return;
+        if(node->type==NodeType::Text)shadowText+=node->text;
+        for(const auto& child:node->RenderChildren())collectShadowText(child);
+    };
+    if(body&&body->shadowRoot)collectShadowText(body->shadowRoot);
+    const std::function<void(const std::shared_ptr<Node>&)> collectShadowStyles=[&](const std::shared_ptr<Node>& node){
+        if(!node)return;
+        if(node->tag==L"style")shadowStyles+=node->InnerText()+L'\n';
+        for(const auto& child:node->RenderChildren())collectShadowStyles(child);
+    };
+    if(body&&body->shadowRoot)collectShadowStyles(body->shadowRoot);
+    std::wstring output=L"{\"document\":"+DumpLayoutJson()+
+        L",\"bodyChildCount\":"+std::to_wstring(body?body->children.size():0)+
+        L",\"bodyShadowChildCount\":"+std::to_wstring(body&&body->shadowRoot?body->shadowRoot->children.size():0)+
+        L",\"bodyShadowText\":"+quote(shadowText)+
+        L",\"bodyShadowStyles\":"+quote(shadowStyles)+
+        L",\"createdErrors\":"+quote(impl_->javascript.CreatedErrorTrace())+
+        L",\"runtime\":"+impl_->javascript.DiagnosticsJson()+L",\"frames\":[";bool first=true;
+    for(const auto& frame:impl_->childFrames)if(frame.view){
+        if(!first)output+=L',';first=false;output+=frame.view->DumpLayoutJson(true);
+    }
+    return output+L"]}";
+}
 std::wstring View::DumpAccessibilityJson()const{return const_cast<Impl*>(impl_.get())->DumpAccessibilityJson();}
 std::wstring View::LastError()const{
     if(!impl_->lastError.empty())return impl_->lastError;
-    return impl_->javascript.LastError();
+    const auto error=impl_->javascript.LastError();if(!error.empty())return error;
+    for(const auto& frame:impl_->childFrames){
+        const auto childError=frame.view->LastError();
+        if(!childError.empty())return L"Iframe: "+childError;
+    }
+    return {};
 }
 std::wstring View::DocumentTitle()const{const auto title=impl_->document.QuerySelector(L"title");return title?title->InnerText():L"";}
 

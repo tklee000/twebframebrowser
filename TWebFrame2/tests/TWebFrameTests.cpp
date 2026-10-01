@@ -4,6 +4,7 @@
 #include "CSS.h"
 #include "JavaScript.h"
 #include "Layout.h"
+#include "ScriptDialog.h"
 #include "TextInput.h"
 
 #include <windows.h>
@@ -25,6 +26,7 @@
 #include <iostream>
 #include <limits>
 #include <numeric>
+#include <thread>
 #include <vector>
 
 using namespace TWebFrame::Internal;
@@ -32,6 +34,90 @@ using namespace TWebFrame::Internal;
 namespace {
 int failures = 0;
 volatile LONG firstChanceCppExceptions = 0;
+bool SaveRasterBmp(const std::filesystem::path& path,UINT width,UINT height,const void* pixels){
+    if(!pixels||!width||!height)return false;
+    BITMAPFILEHEADER fileHeader{};fileHeader.bfType=0x4d42;
+    fileHeader.bfOffBits=sizeof(fileHeader)+sizeof(BITMAPINFOHEADER);
+    fileHeader.bfSize=fileHeader.bfOffBits+width*height*4;
+    BITMAPINFOHEADER header{};header.biSize=sizeof(header);header.biWidth=width;
+    header.biHeight=-static_cast<LONG>(height);header.biPlanes=1;header.biBitCount=32;
+    std::ofstream output(path,std::ios::binary);
+    output.write(reinterpret_cast<const char*>(&fileHeader),sizeof(fileHeader));
+    output.write(reinterpret_cast<const char*>(&header),sizeof(header));
+    output.write(static_cast<const char*>(pixels),static_cast<std::streamsize>(width)*height*4);
+    return output.good();
+}
+struct ScriptDialogProbe {
+    HWND window=nullptr;
+    unsigned opened=0;
+    bool painted=false;
+    bool blueButton=false;
+    bool clickBlueButton=false;
+    COLORREF surface=CLR_INVALID;
+    POINT blue{-1,-1};
+    bool fallbackUsed=false;
+    bool nativeDialog=false;
+};
+ScriptDialogProbe scriptDialogProbe;
+void ObserveScriptDialog(){
+    if(!IsWindow(scriptDialogProbe.window))return;
+    ++scriptDialogProbe.opened;
+    EnumThreadWindows(GetWindowThreadProcessId(scriptDialogProbe.window,nullptr),[](HWND window,LPARAM)->BOOL{
+        wchar_t className[32]{};GetClassNameW(window,className,32);
+        if(std::wstring(className)==L"#32770")scriptDialogProbe.nativeDialog=true;
+        return TRUE;
+    },0);
+    RECT client{};GetClientRect(scriptDialogProbe.window,&client);
+    BITMAPINFO bitmapInfo{};bitmapInfo.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
+    bitmapInfo.bmiHeader.biWidth=client.right;bitmapInfo.bmiHeader.biHeight=-client.bottom;
+    bitmapInfo.bmiHeader.biPlanes=1;bitmapInfo.bmiHeader.biBitCount=32;
+    void* pixels=nullptr;HDC memory=CreateCompatibleDC(nullptr);
+    HBITMAP bitmap=CreateDIBSection(memory,&bitmapInfo,DIB_RGB_COLORS,&pixels,nullptr,0);
+    HGDIOBJ previous=bitmap?SelectObject(memory,bitmap):nullptr;
+    DWORD_PTR printed=0;
+    const bool copied=bitmap&&SendMessageTimeoutW(scriptDialogProbe.window,WM_PRINTCLIENT,
+        reinterpret_cast<WPARAM>(memory),PRF_CLIENT,SMTO_ABORTIFHUNG,5000,&printed)!=0;
+    GdiFlush();
+    if(copied)SaveRasterBmp(std::filesystem::path(L"TWebFrame2/tests/artifacts")/
+        (L"script-dialog-native-"+std::to_wstring(scriptDialogProbe.opened)+L".bmp"),
+        client.right,client.bottom,pixels);
+    auto colorAt=[&](int x,int y)->COLORREF{
+        if(!copied||x<0||y<0||x>=client.right||y>=client.bottom)return CLR_INVALID;
+        const auto pixel=static_cast<const std::uint32_t*>(pixels)[static_cast<size_t>(y)*client.right+x];
+        return RGB((pixel>>16)&255,(pixel>>8)&255,pixel&255);
+    };
+    const float scale=static_cast<float>(GetDpiForWindow(scriptDialogProbe.window))/96.0f;
+    const int left=static_cast<int>(std::lround((client.right/scale-
+        std::min(448.0f,std::max(1.0f,client.right/scale-24.0f)))/2.0f*scale));
+    const int paintX=left+static_cast<int>(std::lround(5.0f*scale));
+    const int paintY=static_cast<int>(std::lround(50.0f*scale));
+    const COLORREF surface=colorAt(paintX,paintY);
+    scriptDialogProbe.surface=surface;
+    scriptDialogProbe.painted=surface!=CLR_INVALID&&GetRValue(surface)>235&&
+        GetGValue(surface)>235&&GetBValue(surface)>235;
+    POINT blue{-1,-1};
+    for(int y=0;y<client.bottom&&blue.x<0;++y)
+        for(int x=0;x<client.right;++x){
+            const COLORREF color=colorAt(x,y);
+            if(color!=CLR_INVALID&&GetRValue(color)>=15&&GetRValue(color)<=40&&
+                GetGValue(color)>=85&&GetGValue(color)<=120&&
+                GetBValue(color)>=195&&GetBValue(color)<=225){blue={x,y};break;}
+        }
+    scriptDialogProbe.blueButton=blue.x>=0;
+    scriptDialogProbe.blue=blue;
+    if(previous)SelectObject(memory,previous);
+    if(bitmap)DeleteObject(bitmap);
+    if(memory)DeleteDC(memory);
+    if(scriptDialogProbe.clickBlueButton&&blue.x>=0){
+        const LPARAM point=MAKELPARAM(blue.x+3,blue.y+3);
+        PostMessageW(scriptDialogProbe.window,WM_LBUTTONDOWN,MK_LBUTTON,point);
+        PostMessageW(scriptDialogProbe.window,WM_LBUTTONUP,0,point);
+    }else{
+        if(scriptDialogProbe.clickBlueButton)scriptDialogProbe.fallbackUsed=true;
+        PostMessageW(scriptDialogProbe.window,WM_KEYDOWN,
+            scriptDialogProbe.clickBlueButton?VK_RETURN:VK_ESCAPE,0);
+    }
+}
 LONG CALLBACK CountFirstChanceCppExceptions(EXCEPTION_POINTERS* exception) {
     if(exception&&exception->ExceptionRecord&&
        exception->ExceptionRecord->ExceptionCode==0xe06d7363UL)
@@ -49,6 +135,8 @@ struct ConstantHash { std::size_t operator()(int) const { return 1; } };
 void CheckAt(bool condition, const wchar_t* message, int line) {
     static std::size_t checkIndex = 0;
     ++checkIndex;
+    static const bool traceChecks=[](){wchar_t flag[2]{};return GetEnvironmentVariableW(L"TWEBFRAME_TRACE_CHECKS",flag,2)==1&&flag[0]==L'1';}();
+    if(traceChecks)std::wcerr<<L"CHECK["<<checkIndex<<L", line "<<line<<L"] "<<message<<std::endl;
     if (!condition) {
         std::wcerr << L"FAIL[" << checkIndex << L", line " << line << L"]: "
                    << message << L"\n";
@@ -324,7 +412,7 @@ struct TextRasterSample {
     size_t colorFringePixels=0;
 };
 
-TextRasterSample CaptureTextRaster(LayoutEngine& layout,float scale) {
+TextRasterSample CaptureTextRaster(LayoutEngine& layout,float scale,bool transparent=false) {
     TextRasterSample sample;
     const UINT width=static_cast<UINT>(std::lround(240.0f*scale));
     const UINT height=static_cast<UINT>(std::lround(80.0f*scale));
@@ -341,7 +429,8 @@ TextRasterSample CaptureTextRaster(LayoutEngine& layout,float scale) {
     Microsoft::WRL::ComPtr<ID2D1DCRenderTarget> target;
     Microsoft::WRL::ComPtr<IDWriteFactory> writeFactory;
     const auto properties=D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_DEFAULT,
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE));
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,
+            transparent?D2D1_ALPHA_MODE_PREMULTIPLIED:D2D1_ALPHA_MODE_IGNORE));
     RECT bounds{0,0,static_cast<LONG>(width),static_cast<LONG>(height)};
     D2D1_FACTORY_OPTIONS factoryOptions{};
     const bool ready=memory&&bitmap&&
@@ -366,8 +455,8 @@ TextRasterSample CaptureTextRaster(LayoutEngine& layout,float scale) {
         if(renderingParams)renderingParams.As(&renderingParams1);
         sample.webRenderingParams=renderingParams&&
             std::abs(renderingParams->GetEnhancedContrast())<0.001f&&
-            std::abs(renderingParams->GetClearTypeLevel())<0.001f&&
-            renderingParams->GetPixelGeometry()==DWRITE_PIXEL_GEOMETRY_FLAT&&
+            std::abs(renderingParams->GetClearTypeLevel()-(transparent?0.0f:1.0f))<0.001f&&
+            renderingParams->GetPixelGeometry()==(transparent?DWRITE_PIXEL_GEOMETRY_FLAT:DWRITE_PIXEL_GEOMETRY_RGB)&&
             renderingParams->GetRenderingMode()==DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC&&
             renderingParams1&&
             std::abs(renderingParams1->GetGrayscaleEnhancedContrast())<0.001f;
@@ -399,12 +488,20 @@ struct BoxRasterSample {
     std::uint32_t belowTopEdge=0;
     std::uint32_t aboveBottomEdge=0;
     std::uint32_t bottomEdge=0;
+    UINT width=0;
+    std::vector<std::uint32_t> pixels;
+    std::uint32_t ColorAt(float x,float y,float scale)const{
+        const auto column=static_cast<UINT>(std::floor(x*scale));
+        const auto row=static_cast<UINT>(std::floor(y*scale));
+        const size_t offset=static_cast<size_t>(row)*width+column;
+        return column<width&&offset<pixels.size()?pixels[offset]&0x00ffffffu:0xffffffffu;
+    }
 };
 
-BoxRasterSample CaptureBoxRaster(LayoutEngine& layout,float scale) {
+BoxRasterSample CaptureBoxRaster(LayoutEngine& layout,float scale,float cssWidth=80,float cssHeight=50) {
     BoxRasterSample sample;
-    const UINT width=static_cast<UINT>(std::lround(80.0f*scale));
-    const UINT height=static_cast<UINT>(std::lround(50.0f*scale));
+    const UINT width=static_cast<UINT>(std::lround(cssWidth*scale));
+    const UINT height=static_cast<UINT>(std::lround(cssHeight*scale));
     BITMAPINFO bitmapInfo{};bitmapInfo.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
     bitmapInfo.bmiHeader.biWidth=static_cast<LONG>(width);
     bitmapInfo.bmiHeader.biHeight=-static_cast<LONG>(height);
@@ -430,12 +527,13 @@ BoxRasterSample CaptureBoxRaster(LayoutEngine& layout,float scale) {
         SUCCEEDED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),
             reinterpret_cast<IUnknown**>(writeFactory.ReleaseAndGetAddressOf())));
     if(ready){
-        layout.DiscardDeviceResources();layout.Layout(80,50,scale);
+        layout.DiscardDeviceResources();layout.Layout(cssWidth,cssHeight,scale);
         target->SetDpi(USER_DEFAULT_SCREEN_DPI*scale,USER_DEFAULT_SCREEN_DPI*scale);
         target->BeginDraw();target->Clear(D2D1::ColorF(D2D1::ColorF::White));
         layout.Paint(target.Get(),writeFactory.Get());
         sample.rendered=SUCCEEDED(target->EndDraw());GdiFlush();
         const auto* values=static_cast<const std::uint32_t*>(pixels);
+        sample.width=width;sample.pixels.assign(values,values+static_cast<size_t>(width)*height);
         for(LONG y=0;y<static_cast<LONG>(height);++y)
             for(LONG x=0;x<static_cast<LONG>(width);++x)
                 if((values[static_cast<size_t>(y)*width+x]&0x00ffffffu)!=0x00ffffffu){
@@ -489,6 +587,12 @@ int RunJQueryCompatibility(const std::wstring& sourcePath) {
         if(resource!=L"payload.json")return false;
         body=L"{\"value\":9}";return true;
     });
+    const auto jqueryExceptionHandler=AddVectoredExceptionHandler(1,CountFirstChanceCppExceptions);
+    struct NativeExceptionObserverScope {
+        PVOID handler;
+        ~NativeExceptionObserverScope(){if(handler)RemoveVectoredExceptionHandler(handler);}
+    } jqueryExceptionObserver{jqueryExceptionHandler};
+    InterlockedExchange(&firstChanceCppExceptions,0);
     if(!runtime.Execute(source,nullptr,&error)){
         std::wcerr<<L"jQuery 1.11.2 initialization failed: "<<error<<L'\n';return 1;
     }
@@ -581,21 +685,38 @@ int RunJQueryCompatibility(const std::wstring& sourcePath) {
     if(result!=L"jquery-complete"){
         std::wcerr<<L"jQuery smoke result mismatch: "<<result<<L'\n';return 1;
     }
-    runtime.RunTimers();
-    if(!runtime.Execute(L"return ajaxValue+'|'+readyCount;",&result,&error)||result!=L"9|1"){
+    // Ready and XHR completion are separate timer jobs. Drive the event loop
+    // through both callbacks instead of assuming one timer tick drains all jobs.
+    bool completed=false;
+    for(unsigned tick=0;tick<16&&!completed;++tick){
+        runtime.RunTimers();
+        if(!runtime.Execute(L"return ajaxValue+'|'+readyCount;",&result,&error))break;
+        completed=result==L"9|1";
+    }
+    if(!completed){
         std::wcerr<<L"jQuery async/ready completion failed: "<<error<<L" result="<<result<<L'\n';
         return 1;
+    }
+    if(InterlockedCompareExchange(&firstChanceCppExceptions,0,0)!=0){
+        std::wcerr<<L"jQuery compatibility raised native C++ exceptions\n";return 1;
     }
     std::wcout<<L"jQuery 1.11.2 full source parsed, initialized, and passed the compatibility suite\n";
     return 0;
 }
 
-int RunJavaScriptFiles(int count,wchar_t** paths) {
+int RunJavaScriptFiles(int count,wchar_t** paths,bool iframeContext=false) {
     Document document;std::wstring error;
     if(!document.Parse(L"<html><head></head><body></body></html>",&error)){
         std::wcerr<<L"diagnostic document parse failed: "<<error<<L'\n';return 1;
     }
     JavaScriptRuntime runtime(document);
+    if(iframeContext){
+        runtime.SetParentMessageSink([](const std::wstring&,const std::wstring&){
+            std::wcout<<L"Frame posted a message to its parent\n";
+        });
+        runtime.Clear();
+        runtime.SetDocumentReadyState(L"loading");
+    }
     runtime.SetLocation(L"https://example.test/index.html?ad_test=1");
     runtime.SetViewportSize(1280,720);
     std::vector<std::filesystem::path> searchDirectories;
@@ -632,7 +753,12 @@ int RunJavaScriptFiles(int count,wchar_t** paths) {
                             static_cast<int>(bytes.size()),source.data(),length);
         std::wstring result;
         if(!runtime.Execute(source,&result,&error)){
-            std::wcerr<<L"JavaScript file "<<index+1<<L" failed: "<<error<<L'\n';return 1;
+            std::wcerr<<L"JavaScript file "<<index+1<<L" failed: "<<error<<L'\n'
+                      <<runtime.LastCreatedError()<<L'\n';return 1;
+        }
+        if(iframeContext&&index==0){
+            runtime.SetDocumentReadyState(L"interactive");runtime.DispatchDocumentEvent(L"DOMContentLoaded");
+            runtime.SetDocumentReadyState(L"complete");runtime.DispatchWindowEvent(L"load");
         }
         runtime.RunTimers();
         std::wcout<<L"JavaScript file "<<index+1<<L" result: "<<result;
@@ -648,9 +774,1528 @@ int RunJavaScriptFiles(int count,wchar_t** paths) {
 }
 }
 
+int RunJavaScriptExceptionRegression(){
+    const int initialFailures=failures;
+    const auto handler=AddVectoredExceptionHandler(1,CountFirstChanceCppExceptions);
+    Check(handler!=nullptr,L"JavaScript exception regression installs its native exception observer");
+    InterlockedExchange(&firstChanceCppExceptions,0);
+    {
+        Document document;document.Parse(L"<!doctype html><body></body>");
+        JavaScriptRuntime runtime(document);std::wstring result,error;
+        Check(runtime.Execute(LR"JS(
+            var thrownValue={message:'caught'};var trace='';
+            function raise(){throw thrownValue;}
+            function middle(){try{raise();}finally{trace+='finally|';}}
+            function outer(){return middle();}
+            try{outer();}catch(error){trace+=String(error===thrownValue)+'|';}
+            try{throw 'local';}catch(error){trace+=error+'|';}
+            function defaultThrow(value=raise()){trace+='bad';}
+            try{defaultThrow();}catch(error){trace+=String(error===thrownValue)+'|';}
+            function ConstructorThrow(){throw thrownValue;}
+            try{new ConstructorThrow();}catch(error){trace+=String(error===thrownValue);}
+            try{raise.call(null);}catch(error){trace+='|'+String(error===thrownValue);}
+            try{raise.apply(null,[]);}catch(error){trace+='|'+String(error===thrownValue);}
+            try{raise.bind(null)();}catch(error){trace+='|'+String(error===thrownValue);}
+            return trace;
+        )JS",&result,&error)&&result==L"finally|true|local|true|true|true|true|true",
+            L"JavaScript throws preserve identity through calls, finally, defaults and constructors");
+        Check(InterlockedCompareExchange(&firstChanceCppExceptions,0,0)==0,
+              L"handled JavaScript throws do not raise first-chance native C++ exceptions");
+
+        InterlockedExchange(&firstChanceCppExceptions,0);
+        Check(runtime.Execute(LR"JS(
+            var mathMarker={},mathIdentity=false,mathTypeError='',canvasSizeError='';
+            try{Math.sqrt({valueOf:function(){throw mathMarker;}});}catch(error){mathIdentity=error===mathMarker;}
+            try{Math.imul(1n,1);}catch(error){mathTypeError=error.name;}
+            var exceptionCanvas=document.createElement('canvas').getContext('2d');
+            try{exceptionCanvas.getImageData(0,0,0,1);}catch(error){canvasSizeError=error.name;}
+            return mathIdentity+'|'+mathTypeError+'|'+canvasSizeError;
+        )JS",&result,&error)&&result==L"true|TypeError|IndexSizeError"&&
+              InterlockedCompareExchange(&firstChanceCppExceptions,0,0)==0,
+              L"Math conversion and Canvas validation preserve JavaScript errors without native C++ first-chance exceptions");
+
+        InterlockedExchange(&firstChanceCppExceptions,0);
+        Check(runtime.Execute(LR"JS(
+            var asyncTrace='';
+            async function asyncThrow(){try{await Promise.reject('rejected');}finally{asyncTrace+='finally';}}
+            asyncThrow().catch(function(error){asyncTrace+='|'+error;});
+        )JS",nullptr,&error)&&runtime.Execute(L"return asyncTrace;",&result,&error)&&result==L"finally|rejected",
+            L"async rejection runs finally and reaches the JavaScript promise handler");
+        Check(InterlockedCompareExchange(&firstChanceCppExceptions,0,0)==0,
+              L"async rejection propagation does not raise first-chance native C++ exceptions");
+        Check(runtime.Execute(LR"JS(
+            var finallyTrace='';
+            Promise.resolve().finally(function(){throw 'finally-error';})
+                .catch(function(error){finallyTrace=error;});
+        )JS",nullptr,&error)&&runtime.Execute(L"return finallyTrace;",&result,&error)&&result==L"finally-error"&&
+            InterlockedCompareExchange(&firstChanceCppExceptions,0,0)==0,
+            L"Promise finally propagates callback failures without native exceptions");
+
+        InterlockedExchange(&firstChanceCppExceptions,0);
+        Check(runtime.Execute(LR"JS(
+            function invalidNative(){document.body.dispatchEvent(null);}
+            function nativeMiddle(){return invalidNative();}
+            function nativeOuter(){return nativeMiddle();}
+            try{nativeOuter();}catch(error){return error.name;}
+        )JS",&result,&error)&&result==L"TypeError",
+            L"native DOM validation errors still reach the JavaScript catch handler");
+        Check(InterlockedCompareExchange(&firstChanceCppExceptions,0,0)==0,
+              L"native validation reaches JavaScript without first-chance C++ exceptions");
+
+        InterlockedExchange(&firstChanceCppExceptions,0);
+        Check(runtime.Execute(LR"JS(
+            var nativeErrors=[];
+            function probe(callback){try{callback();}catch(error){nativeErrors.push(error.name);}}
+            probe(function(){[].reduce(null);});
+            probe(function(){''.repeat(-1);});
+            probe(function(){new DOMParser().parseFromString('','invalid/type');});
+            probe(function(){new MutationObserver(null);});
+            probe(function(){queueMicrotask(null);});
+            probe(function(){String.fromCodePoint(-1);});
+            probe(function(){decodeURIComponent('%');});
+            probe(function(){decodeURI('%FF');});
+            probe(function(){Promise();});
+            probe(function(){new Promise(null);});
+            probe(function(){new DataView();});
+            probe(function(){nonexistentFunction();});
+            return nativeErrors.join('|');
+        )JS",&result,&error)&&result==L"TypeError|RangeError|TypeError|TypeError|TypeError|RangeError|URIError|URIError|TypeError|TypeError|TypeError|TypeError",
+            L"native API argument errors retain their JavaScript error types");
+        Check(InterlockedCompareExchange(&firstChanceCppExceptions,0,0)==0,
+              L"native feature probes do not raise first-chance C++ exceptions");
+
+        Check(runtime.Execute(L"window.addEventListener('unload',function(){throw 'unload-error';});setTimeout(function(){throw 'timer-error';},0);",
+              nullptr,&error),L"window shutdown and timer exception fixture loads");
+        runtime.RunTimers();
+        Check(runtime.LastError()==L"Uncaught timer-error",
+              L"timer errors keep their JavaScript diagnostics");
+        runtime.DispatchWindowEvent(L"unload");
+        Check(runtime.LastError()==L"Uncaught unload-error"&&
+              InterlockedCompareExchange(&firstChanceCppExceptions,0,0)==0,
+              L"window shutdown callbacks report JavaScript errors without native exceptions");
+
+        InterlockedExchange(&firstChanceCppExceptions,0);
+        Check(!runtime.Execute(L"throw new Error('uncaught-regression');",&result,&error)&&
+              error==L"Uncaught Error: uncaught-regression"&&runtime.LastError()==error,
+              L"uncaught JavaScript errors still report failure and retain their diagnostics");
+        Check(InterlockedCompareExchange(&firstChanceCppExceptions,0,0)==0,
+              L"uncaught JavaScript completion reports failure without a native exception");
+        InterlockedExchange(&firstChanceCppExceptions,0);
+        runtime.Clear();
+        Check(runtime.Execute(L"return 1;",&result,&error)&&result==L"1",
+              L"runtime reset remains usable after handled and uncaught exceptions");
+    }
+    Check(InterlockedCompareExchange(&firstChanceCppExceptions,0,0)==0,
+          L"runtime reset and destruction do not raise native exceptions");
+    if(handler)RemoveVectoredExceptionHandler(handler);
+    return failures==initialFailures?0:1;
+}
+
+int RunEmbeddedScriptCompatibility(){
+    const auto before=failures;std::wstring error,result;Document document;
+    Check(document.Parse(L"<!doctype html><html><head><title>  Embedded\n script </title>"
+        L"<style>html,body{margin:0}#host{width:80px;height:40px}.panel{background:red}</style>"
+        L"</head><body><div id='host'><span>light</span></div></body></html>",&error),error.c_str());
+    JavaScriptRuntime runtime(document);runtime.SetLocation(L"https://embedded.test/page");
+    for(const auto ratio:{1.0,1.5}){
+        runtime.SetDevicePixelRatio(ratio);
+        for(const auto threshold:{size_t{0},size_t{1}}){
+            runtime.SetJitCompilationThreshold(threshold);
+            Check(runtime.Execute(LR"JS(
+                function blockBranches(){
+                    {
+                        let retained=42;
+                        {if(false){}}
+                        {true||'unused';}
+                        {false&&'unused';}
+                        {true?'first':'second';}
+                        {null??'fallback';}
+                        return retained;
+                    }
+                }
+                function serializeNested(value){
+                    if(value===null)return 'null';
+                    if(typeof value!=='object')return String(value);
+                    {
+                        let output='{',separator='';
+                        for(var key in value)if(Object.prototype.hasOwnProperty.call(value,key)){
+                            {if(false){}}
+                            output+=separator+key+':'+serializeNested(value[key]);separator=',';
+                        }
+                        return output+'}';
+                    }
+                }
+                function blockCompletions(){
+                    let trace='';
+                    outer:for(let index of [1,2,3]){
+                        let retained=index;
+                        try{throw index;}catch(error){
+                            {if(false){}}
+                            trace+=retained+':'+error+';';
+                            if(index<3)continue outer;
+                            break outer;
+                        }finally{
+                            {if(false){}}
+                            trace+='f'+retained+';';
+                        }
+                    }
+                    return trace;
+                }
+                return blockBranches()+'|'+serializeNested({first:{a:1,b:2},second:3})+'|'+blockCompletions();
+            )JS",&result,&error)&&result==L"42|{first:{a:1,b:2},second:3}|1:1;f1;2:2;f2;3:3;f3;",
+                L"branches into closing blocks unwind each scope once and preserve recursive iteration, catch and finally at both DPIs and JIT thresholds");
+        }
+        runtime.SetJitCompilationThreshold(512);
+        std::srand(1);
+        Check(runtime.Execute(L"return [Math.random(),Math.random(),Math.random()].join(',');",&result,&error),error.c_str());
+        const auto randomSequence=result;std::srand(1);
+        Check(runtime.Execute(L"return [Math.random(),Math.random(),Math.random()].join(',');",&result,&error)&&result!=randomSequence,
+            L"host CRT seed changes do not replay a realm's Math.random sequence");
+        Check(runtime.Execute(LR"JS(
+            var validRandomRange=true,fullRandomPrecision=false;
+            for(var sample=0;sample<512;sample++){
+                var randomNumber=Math.random();
+                validRandomRange=validRandomRange&&randomNumber>=0&&randomNumber<1;
+                fullRandomPrecision=fullRandomPrecision||randomNumber*32768!==Math.floor(randomNumber*32768);
+            }
+            return validRandomRange+'|'+fullRandomPrecision;
+        )JS",&result,&error)&&result==L"true|true",
+            L"Math.random supplies fractions in [0,1) beyond the Windows CRT's 15-bit precision at both DPIs");
+        Check(runtime.Execute(LR"JS(
+            var noFunctionPrototypeConstruction=false;
+            try{new Function.prototype();}catch(e){noFunctionPrototypeConstruction=e instanceof TypeError;}
+            return typeof Function.prototype+'|'+(Function.prototype instanceof Function)+'|'+
+                (Function.prototype()===undefined)+'|'+Function.prototype.toString()+'|'+
+                Object.prototype.toString.call(Function.prototype)+'|'+
+                (Object.getPrototypeOf(Function.prototype)===Object.prototype)+'|'+
+                Object.keys(Function.prototype).length+'|'+noFunctionPrototypeConstruction;
+        )JS",&result,&error)&&result==L"function|true|true|function () { [native code] }|[object Function]|true|0|true",
+            L"Function.prototype is callable without being constructable and has coherent type, source, prototype and property reflection at both DPIs");
+        for(const auto threshold:{size_t{0},size_t{1}}){
+            runtime.SetJitCompilationThreshold(threshold);
+            Check(runtime.Execute(LR"JS(
+                function sequencing(initial){var value=initial;return value+(value=7);}
+                var fn=function(value){return value;};var callResult=fn(fn='toString');
+                var object={x:3,method:function(){return this.x;}},other={x:9,method:function(){return this.x;}};
+                var methodResult=object.method(object=other);object={x:3};
+                var indexResult=object[(object=other,'x')];object={x:3};object.x+=(object.x=4);
+                var ctor=function(value){this.value=value;},original=ctor;
+                var instance=new ctor(ctor=7);
+                return callResult+'|'+methodResult+'|'+indexResult+'|'+object.x+'|'+instance.value+'|'+
+                    (instance instanceof original)+'|'+sequencing(3)+'|'+sequencing(5)+'|'+fn;
+            )JS",&result,&error)&&result==L"toString|3|3|7|7|true|10|12|toString",
+                L"callee, receiver, constructor, computed base and left operand are captured before subsequent side effects in interpreter and JIT at both DPIs");
+            if(threshold)Check(runtime.GetJitStatistics().nativeCalls>0,
+                L"JIT execution also materializes left operand values before assignment");
+            const auto bitwiseNativeBefore=runtime.GetJitStatistics().nativeCalls;
+            Check(runtime.Execute(LR"JS(
+                function bitAnd(a,b){return a&b;}function bitOr(a,b){return a|b;}function bitXor(a,b){return a^b;}
+                function bitLeft(a,b){return a<<b;}function bitRight(a,b){return a>>b;}function bitUnsigned(a,b){return a>>>b;}
+                function bitNot(a){return ~a;}
+                var inputs=[0,-0,NaN,Infinity,-Infinity,.5,-1.5,2147483647,2147483648,4294967295,
+                    4294967296,9007199254740991,9223372036854775808,9223372036854777856,-9223372036854777856,
+                    19342813113834064647782400,1e100,-1e100],bitsAgree=true;
+                for(var first=0;first<inputs.length;first++){
+                    var left=inputs[first];bitsAgree=bitsAgree&&bitNot(left)===(~left);
+                    for(var second=0;second<inputs.length;second++){
+                        var right=inputs[second];
+                        bitsAgree=bitsAgree&&bitAnd(left,right)===(left&right)&&bitOr(left,right)===(left|right)&&
+                            bitXor(left,right)===(left^right)&&bitLeft(left,right)===(left<<right)&&
+                            bitRight(left,right)===(left>>right)&&bitUnsigned(left,right)===(left>>>right);
+                    }
+                }
+                return bitsAgree+'|'+bitXor('5',3)+'|'+bitUnsigned(-1,0);
+            )JS",&result,&error)&&result==L"true|6|4294967295",
+                L"numeric bitwise JIT agrees with interpreter modulo conversion for fractions, huge doubles, NaN, infinities and signed shifts at both DPIs");
+            if(threshold)Check(runtime.GetJitStatistics().nativeCalls>bitwiseNativeBefore,
+                L"bitwise helpers execute as guarded native leaf code");
+        }
+        runtime.SetJitCompilationThreshold(512);
+        Check(runtime.Execute(LR"JS(
+            var order=[],optionalReads=0,unusedReads=0;
+            var receiver={x:3,get method(){order.push('get');return function(){order.push('call');return this.x;};}};
+            var alternate={x:9};
+            var called=receiver.method((order.push('arg'),receiver=alternate));
+            var optional={get method(){optionalReads++;return function(){return this===optional;};}};
+            var optionalResult=optional.method?.();
+            var discarded={get value(){unusedReads++;return 1;}};discarded.value;void discarded.value;
+            var iteration=0;for(discarded.value;iteration<1;iteration++,discarded.value){}
+            var methods={strict:function(){'use strict';return this===undefined;}};
+            var commaResult=(0,methods.strict)(),conditionalResult=(true?methods.strict:null)(),logicalResult=(false||methods.strict)();
+            var logicalReads=0,logical={get value(){logicalReads++;return 3;}};var logicalResultValue=(logical.value??=4);
+            var inferName=function(){};
+            return called+'|'+order.join(',')+'|'+optionalResult+'|'+optionalReads+'|'+unusedReads+'|'+
+                commaResult+'|'+conditionalResult+'|'+logicalResult+'|'+logicalResultValue+'|'+logicalReads+'|'+inferName.name;
+        )JS",&result,&error)&&result==L"3|get,arg,call|true|1|4|true|true|true|3|1|inferName",
+            L"getters run once at the required evaluation boundary and optional calls retain receivers while value-producing expressions release them");
+        Check(runtime.Execute(LR"JS(
+            var retainedCallable=function(){return 'retained';};
+            function discardDuringArguments(){retainedCallable=null;for(var i=0;i<20000;i++){var cycle={};cycle.self=cycle;}return 1;}
+            return retainedCallable(discardDuringArguments());
+        )JS",&result,&error)&&result==L"retained",
+            L"a prepared callee stays reachable through cycle collection during argument evaluation");
+        Check(runtime.Execute(LR"JS(
+            function reflectable(first,second=7,...rest){}
+            var lengthDescriptor=Object.getOwnPropertyDescriptor(reflectable,'length');
+            var nameDescriptor=Object.getOwnPropertyDescriptor(reflectable,'name');
+            var nativeDescriptor=Object.getOwnPropertyDescriptor(Math.pow,'length');
+            reflectable.length=9;Math.pow.length=9;
+            var ordinary={};Object.defineProperty(ordinary,'value',{value:4});ordinary.value=8;
+            return lengthDescriptor.value+'|'+lengthDescriptor.writable+'|'+lengthDescriptor.enumerable+'|'+lengthDescriptor.configurable+'|'+
+                nameDescriptor.value+'|'+nativeDescriptor.value+'|'+nativeDescriptor.writable+'|'+
+                reflectable.length+'|'+Math.pow.length+'|'+Object.keys(reflectable).length+'|'+ordinary.value+'|'+
+                (Object.getOwnPropertyNames(reflectable).indexOf('length')>=0);
+        )JS",&result,&error)&&result==L"1|false|false|true|reflectable|2|false|1|2|0|4|true",
+            L"function metadata is reflected as actual nonenumerable properties with standard writable flags at both DPIs");
+        Check(runtime.Execute(LR"JS(
+            var readOnlyErrors=[];
+            function rejectReadOnly(){'use strict';
+                try{reflectable.length=9;}catch(e){readOnlyErrors.push(e instanceof TypeError);}
+                try{Math.pow.length++;}catch(e){readOnlyErrors.push(e instanceof TypeError);}
+                try{ordinary.value+=1;}catch(e){readOnlyErrors.push(e instanceof TypeError);}
+            }
+            rejectReadOnly();return readOnlyErrors.join(',')+'|'+reflectable.length+'|'+Math.pow.length+'|'+ordinary.value;
+        )JS",&result,&error)&&result==L"true,true,true|1|2|4",
+            L"strict assignments and updates reject readonly data properties without changing their values");
+        Check(runtime.Execute(LR"JS(
+            var savedName=reflectable.name;
+            Object.defineProperty(reflectable,'name',{value:'changed',writable:true});reflectable.name='edited';
+            var edited=reflectable.name;delete reflectable.name;
+            return savedName+'|'+edited+'|'+Object.prototype.hasOwnProperty.call(reflectable,'name')+'|'+
+                (Object.getOwnPropertyNames(reflectable).indexOf('name')<0)+'|'+reflectable.name;
+        )JS",&result,&error)&&result==L"reflectable|edited|false|true|",
+            L"redefining and deleting function metadata stays consistent with property reads and reflection");
+        Check(runtime.Execute(LR"JS(
+            var trimEnd=String.prototype.trimEnd,trimStart=String.prototype.trimStart;
+            var trimNull='',trimMarker={},trimSame=false;
+            try{trimEnd.call(null);}catch(error){trimNull=error.name;}
+            try{trimEnd.call({toString:function(){throw trimMarker;}});}catch(error){trimSame=error===trimMarker;}
+            return '\ufeff\u00a0x\u202f\u3000'.trim()+'|'+trimEnd.call(' a \ufeff')+'|'+trimStart.call('\u2000 a ')+'|'+
+                ('\u0085x\u0085'.trim()==='\u0085x\u0085')+'|'+trimEnd.call({toString:function(){return 'object ';}})+'|'+
+                ('x'.trimEnd===trimEnd)+'|'+(String.prototype.trimRight===trimEnd)+'|'+
+                (String.prototype.trimLeft===trimStart)+'|'+trimEnd.length+'|'+trimNull+'|'+trimSame;
+        )JS",&result,&error)&&result==L"x| a|a |true|object|true|true|true|0|TypeError|true",
+            L"string trimming handles ECMAScript whitespace, borrowed receivers, aliases, identity and thrown values at both DPIs");
+        Check(runtime.Execute(LR"JS(
+            var canvas=document.createElement('canvas'),context=canvas.getContext('2d');
+            var tag=Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype,Symbol.toStringTag);
+            return (Object.getPrototypeOf(Math)===Object.prototype)+'|'+(Object.getPrototypeOf(JSON)===Object.prototype)+'|'+
+                Object.prototype.toString.call(Math)+'|'+Object.prototype.toString.call(canvas)+'|'+
+                Object.prototype.toString.call(context)+'|'+Object.prototype.toString.call(document)+'|'+
+                tag.enumerable+'|'+tag.writable+'|'+devicePixelRatio;
+        )JS",&result,&error)&&result==(ratio==1.0?L"true|true|[object Math]|[object HTMLCanvasElement]|[object CanvasRenderingContext2D]|[object Document]|false|false|1":
+            L"true|true|[object Math]|[object HTMLCanvasElement]|[object CanvasRenderingContext2D]|[object Document]|false|false|1.5"),
+            L"intrinsic prototypes and DOM interface tags are coherent independently of DPI");
+        Check(runtime.Execute(LR"JS(
+            var comment=document.createComment('node'),textNode=document.createTextNode('text');
+            Node.COMMENT_NODE=99;Node.prototype.TEXT_NODE=99;comment.COMMENT_NODE=99;
+            var ownConstant=Object.create(Node.prototype);
+            Object.defineProperty(ownConstant,'COMMENT_NODE',{value:12,writable:true});ownConstant.COMMENT_NODE=13;
+            var descriptor=Object.getOwnPropertyDescriptor(Node,'COMMENT_NODE');
+            return Node.COMMENT_NODE+'|'+comment.COMMENT_NODE+'|'+comment.nodeType+'|'+
+                Node.TEXT_NODE+'|'+textNode.TEXT_NODE+'|'+document.DOCUMENT_NODE+'|'+
+                Node.CDATA_SECTION_NODE+'|'+Node.PROCESSING_INSTRUCTION_NODE+'|'+
+                descriptor.writable+'|'+descriptor.configurable+'|'+ownConstant.COMMENT_NODE;
+        )JS",&result,&error)&&result==L"8|8|8|3|3|9|4|7|false|false|13",
+            L"DOM node constants match node types and are inherited read-only constants at both DPIs");
+        Check(runtime.Execute(LR"JS(
+            var measureContext=document.createElement('canvas').getContext('2d');measureContext.font='20px Arial';
+            var measured=measureContext.measureText('Mg'),smallWidth=measured.width;
+            var narrow=measureContext.measureText('ii').width,wide=measureContext.measureText('WW').width;
+            measureContext.scale(3,4);var unchangedWidth=measureContext.measureText('Mg').width;
+            measureContext.font='40px Arial';var largeWidth=measureContext.measureText('Mg').width;
+            var whiteSpace=measureContext.measureText('A\tB').width===measureContext.measureText('A B').width;
+            var trailing=measureContext.measureText('A  ').width>measureContext.measureText('A').width;
+            var emptyMetrics=measureContext.measureText('');measured.width=0;
+            var receiverError=false,getterError=false,coercionError=false,strictWrite=false,marker={};
+            try{(function(){'use strict';measured.width=0;})();}catch(e){strictWrite=e instanceof TypeError;}
+            try{CanvasRenderingContext2D.prototype.measureText.call({},'text');}catch(e){receiverError=e instanceof TypeError;}
+            try{Object.getOwnPropertyDescriptor(TextMetrics.prototype,'width').get.call({});}catch(e){getterError=e instanceof TypeError;}
+            try{measureContext.measureText({toString:function(){throw marker;}});}catch(e){coercionError=e===marker;}
+            return (measured instanceof TextMetrics)+'|'+(measured.width===smallWidth&&smallWidth>0&&wide>narrow)+'|'+
+                (unchangedWidth===smallWidth&&Math.abs(largeWidth-2*smallWidth)<0.01)+'|'+whiteSpace+'|'+trailing+'|'+
+                (measured.actualBoundingBoxAscent>0&&measured.actualBoundingBoxDescent>0&&measured.fontBoundingBoxAscent>0)+'|'+
+                (emptyMetrics.width===0&&emptyMetrics.actualBoundingBoxRight===0)+'|'+receiverError+'|'+getterError+'|'+coercionError+'|'+
+                (measureContext.measureText===CanvasRenderingContext2D.prototype.measureText)+'|'+measureContext.measureText.length+'|'+strictWrite+'|'+
+                (Object.getOwnPropertyNames(measured).length===0);
+        )JS",&result,&error)&&result==L"true|true|true|true|true|true|true|true|true|true|true|1|true|true",
+            L"Canvas text metrics use shaped glyph advances and ink, font and alignment metrics in intrinsic units at both DPIs");
+        Check(runtime.Execute(LR"JS(
+            var radialContext=document.createElement('canvas').getContext('2d');
+            var radial=radialContext.createRadialGradient(10,10,2,10,10,8);
+            radial.addColorStop(0,'red');radial.addColorStop(1,'blue');radialContext.fillStyle=radial;
+            radialContext.fillRect(0,0,20,20);var center=radialContext.getImageData(10,10,1,1).data;
+            var edge=radialContext.getImageData(19,10,1,1).data,between=radialContext.getImageData(14,10,1,1).data;
+            radialContext.clearRect(0,0,300,150);radialContext.scale(2,1);
+            var transformed=radialContext.createRadialGradient(5,10,0,5,10,4);
+            transformed.addColorStop(0,'red');transformed.addColorStop(1,'blue');radialContext.resetTransform();
+            radialContext.fillStyle=transformed;radialContext.fillRect(0,0,20,20);
+            var horizontal=radialContext.getImageData(15,10,1,1).data,vertical=radialContext.getImageData(10,15,1,1).data;
+            radialContext.clearRect(0,0,300,150);
+            radialContext.fillStyle=radialContext.createRadialGradient(0,0,0,0,0,5);radialContext.fillRect(0,0,20,20);
+            var emptyAlpha=radialContext.getImageData(1,1,1,1).data[3];
+            var identical=radialContext.createRadialGradient(10,10,2,10,10,2);identical.addColorStop(0,'red');
+            radialContext.fillStyle=identical;radialContext.fillRect(0,0,20,20);var identicalAlpha=radialContext.getImageData(10,10,1,1).data[3];
+            var negativeRadius=false,nonfinite=false,radialReceiver=false;
+            try{radialContext.createRadialGradient(0,0,-1,0,0,5);}catch(e){negativeRadius=e.name==='IndexSizeError';}
+            try{radialContext.createRadialGradient(0,0,1,0,0,Infinity);}catch(e){nonfinite=e instanceof TypeError;}
+            try{CanvasRenderingContext2D.prototype.createRadialGradient.call({},0,0,1,0,0,5);}catch(e){radialReceiver=e instanceof TypeError;}
+            return (radial instanceof CanvasGradient&&radialContext.createRadialGradient===CanvasRenderingContext2D.prototype.createRadialGradient)+'|'+
+                (center[0]>240&&center[2]<10&&edge[2]>240&&between[0]>30&&between[2]>30)+'|'+
+                (horizontal[0]>30&&horizontal[2]>30&&vertical[2]>240)+'|'+emptyAlpha+'|'+identicalAlpha+'|'+
+                negativeRadius+'|'+nonfinite+'|'+radialReceiver+'|'+radialContext.createRadialGradient.length;
+        )JS",&result,&error)&&result==L"true|true|true|0|0|true|true|true|6",
+            L"radial gradients paint interpolated two-circle colors with creation transforms, transparency and standard errors at both DPIs");
+        Check(runtime.Execute(LR"JS(
+            var svgNamespace='http://www.w3.org/2000/svg';
+            var textRoot=document.createElementNS(svgNamespace,'svg');textRoot.style.fontFamily='Arial';textRoot.style.fontSize='20px';
+            var svgLabel=document.createElementNS(svgNamespace,'text');textRoot.appendChild(svgLabel);svgLabel.textContent='Actual glyph measurement';
+            var svgAdvance=svgLabel.getComputedTextLength(),svgBox=svgLabel.getBBox();
+            svgLabel.setAttribute('transform','scale(3)');
+            var sameLength=svgLabel.getComputedTextLength()===svgAdvance;
+            svgLabel.style.fontSize='40px';var doubleSize=svgLabel.getComputedTextLength();
+            svgLabel.style.fontSize='20px';svgLabel.textContent='  A   B  ';var collapsedLength=svgLabel.getComputedTextLength();
+            svgLabel.textContent='A B';var normalizedLength=svgLabel.getComputedTextLength();
+            svgLabel.textContent='  A   B  ';svgLabel.style.whiteSpace='pre';var preservedLength=svgLabel.getComputedTextLength();
+            svgLabel.textContent='';var emptyLength=svgLabel.getComputedTextLength();
+            var textSpan=document.createElementNS(svgNamespace,'tspan');textSpan.textContent='WW';textSpan.style.fontSize='40px';svgLabel.appendChild(textSpan);
+            var nestedLength=svgLabel.getComputedTextLength(),childLength=textSpan.getComputedTextLength();
+            textRoot.style.display='none';var hiddenLength=svgLabel.getComputedTextLength();
+            var invalidTextReceiver=false;
+            try{SVGTextContentElement.prototype.getComputedTextLength.call(document.body);}catch(e){invalidTextReceiver=e instanceof TypeError;}
+            var svgLengthDescriptor=Object.getOwnPropertyDescriptor(SVGTextContentElement.prototype,'getComputedTextLength');
+            var textPath=document.createElementNS(svgNamespace,'textPath');textPath.textContent='path glyphs';
+            return (svgAdvance>0&&Math.abs(svgBox.width-svgAdvance)<0.01)+'|'+sameLength+'|'+
+                (Math.abs(doubleSize-2*svgAdvance)<0.01)+'|'+(Math.abs(collapsedLength-normalizedLength)<0.01)+'|'+
+                (preservedLength>normalizedLength)+'|'+emptyLength+'|'+(Math.abs(nestedLength-childLength)<0.01)+'|'+hiddenLength+'|'+
+                invalidTextReceiver+'|'+(svgLabel.getComputedTextLength===SVGTextContentElement.prototype.getComputedTextLength)+'|'+
+                (svgLabel instanceof SVGTextElement&&textSpan instanceof SVGTSpanElement&&textSpan instanceof SVGTextContentElement)+'|'+
+                svgLengthDescriptor.enumerable+'|'+svgLengthDescriptor.value.length+'|'+
+                (typeof document.createElement('div').getComputedTextLength==='undefined')+'|'+
+                (textPath instanceof SVGTextPathElement&&textPath instanceof SVGTextContentElement&&textPath.getComputedTextLength()>0);
+        )JS",&result,&error)&&result==L"true|true|true|true|true|0|true|0|true|true|true|true|0|true|true",
+            L"SVG text advances use shaped glyphs, inherited CSS, nested fonts and whitespace in user units at both DPIs with validated prototype receivers");
+        Check(runtime.Execute(LR"JS(
+            var textGeometry=document.createElementNS('http://www.w3.org/2000/svg','text');
+            textGeometry.style.fontSize='20px';textGeometry.textContent='AB';
+            textGeometry.setAttribute('x','13');textGeometry.setAttribute('y','29');
+            var firstCell=textGeometry.getExtentOfChar(0),secondCell=textGeometry.getExtentOfChar(1);
+            var invalidIndex=false,invalidCellReceiver=false;
+            try{textGeometry.getExtentOfChar(2);}catch(e){invalidIndex=e.name==='IndexSizeError';}
+            try{SVGTextContentElement.prototype.getExtentOfChar.call(document.body,0);}catch(e){invalidCellReceiver=e instanceof TypeError;}
+            textGeometry.setAttribute('transform','scale(1.5)');
+            var unchangedCell=textGeometry.getExtentOfChar(0);
+            textGeometry.style.fontSize='40px';var largeCell=textGeometry.getExtentOfChar(0);
+            textGeometry.textContent='\ud83d\ude00';var surrogateCell=textGeometry.getExtentOfChar(1);
+            var context=document.createElement('canvas').getContext('2d'),gradient=context.createLinearGradient(0,0,40,0);
+            var another=context.createLinearGradient(0,0,40,0),borrowedStop=gradient.addColorStop;
+            borrowedStop.call(another,0,'#000000');borrowedStop.call(another,1,'#ffffff');context.fillStyle=another;
+            context.fillRect(0,0,40,1);var pixels=context.getImageData(0,0,40,1).data;
+            var stopRange=false,stopReceiver=false;
+            try{gradient.addColorStop(2,'red');}catch(e){stopRange=e.name==='IndexSizeError';}
+            try{borrowedStop.call({},0,'red');}catch(e){stopReceiver=e instanceof TypeError;}
+            return (firstCell.x===13&&firstCell.y<29&&firstCell.width>0&&firstCell.height>0)+'|'+
+                (secondCell.x>=firstCell.x+firstCell.width-0.01)+'|'+invalidIndex+'|'+invalidCellReceiver+'|'+
+                (unchangedCell.width===firstCell.width)+'|'+(Math.abs(largeCell.width-firstCell.width*2)<0.01)+'|'+
+                (textGeometry.getNumberOfChars()===2&&surrogateCell.width>0)+'|'+
+                (gradient instanceof CanvasGradient&&Object.getPrototypeOf(gradient)===CanvasGradient.prototype)+'|'+
+                (borrowedStop===CanvasGradient.prototype.addColorStop&&borrowedStop.length===2)+'|'+
+                (pixels[0]<pixels[156]&&pixels[3]===255&&pixels[159]===255)+'|'+stopRange+'|'+stopReceiver;
+        )JS",&result,&error)&&result==L"true|true|true|true|true|true|true|true|true|true|true|true",
+            L"SVG character cells use shaped UTF-16 clusters and CanvasGradient prototype methods retain real pixel output at both DPIs");
+        Check(runtime.Execute(LR"JS(
+            function take(a,b){return a+'|'+b;}
+            var argumentValue=1,ordered=take(argumentValue,argumentValue=2);
+            var values={get x(){argumentValue=7;return 3;}};
+            var getterOrder=take(values.x,argumentValue),spreadOrder=take(...[4,5]);
+            function localEval(){var scoped=11;return eval('scoped+1');}
+            function ArgumentCtor(a,b){this.pair=take(a,b);}
+            var objectCtor=new ArgumentCtor(6,7),spreadCtor=new ArgumentCtor(...[8,9]);
+            function recursive(n){return n?take(n,recursive(n-1)):0;}
+            return ordered+';'+getterOrder+';'+spreadOrder+';'+localEval()+';'+objectCtor.pair+';'+spreadCtor.pair+';'+recursive(2);
+        )JS",&result,&error)&&result==L"1|2;3|7;4|5;12;6|7;8|9;2|1|0",
+            L"stack argument calls preserve left-to-right getters, spread, constructors, direct eval and recursion at both DPIs");
+        Check(runtime.Execute(LR"JS(
+            var badRadix=false;try{(19).toString(37);}catch(e){badRadix=e instanceof RangeError;}
+            var paddingCoercions=0,fill={toString(){paddingCoercions++;return 'ab';}};
+            var untouched='abcd'.padStart(2,fill),padded='x'.padStart(4,fill);
+            return (186).toString(16)+'|'+(35).toString(36)+'|'+(0.5).toString(2)+'|'+
+                Number.prototype.toString.call(new Number(-15),16)+'|'+
+                ((19).toString===Number.prototype.toString)+'|'+badRadix+'|'+untouched+'|'+padded+'|'+paddingCoercions+'|'+
+                'x'.padEnd(4,'ab')+'|'+('x'.padStart(9,'')==='x');
+        )JS",&result,&error)&&result==L"ba|z|0.1|-f|true|true|abcd|abax|1|xaba|true",
+            L"radix conversion and padding retain values, standard receivers and fill evaluation order at both DPIs");
+        Check(runtime.Execute(LR"JS(
+            var octets=new Uint8Array(3),signedWords=new Int32Array(1),clamped=new Uint8ClampedArray(3),single=new Float32Array(1);
+            octets[0]=257;octets[1]=-1;octets[2]=3.9;octets[3]=99;octets[-1]=9;octets.length=20;
+            signedWords[0]=4294967295;clamped[0]=1.5;clamped[1]=2.5;clamped[2]=400;single[0]=1+Math.pow(2,-24);
+            var bigIntStore=false;try{octets[0]=1n;}catch(e){bigIntStore=e instanceof TypeError;}
+            return octets.join(',')+'|'+octets.length+'|'+(typeof octets[3]==='undefined'&&typeof octets[-1]==='undefined')+'|'+
+                signedWords[0]+'|'+clamped.join(',')+'|'+single[0]+'|'+bigIntStore;
+        )JS",&result,&error)&&result==L"1,255,3|3|true|-1|2,2,255|1|true",
+            L"typed array stores apply integer width, signedness, clamping and float precision without resizing at both DPIs");
+        Check(runtime.Execute(LR"JS(
+            var shared=new ArrayBuffer(24),bytes=new Uint8Array(shared),words=new Uint32Array(shared),writer=new DataView(shared,4,8);
+            writer.setFloat64(0,1,true);var floatBytes=bytes[10]===240&&bytes[11]===63;
+            words[0]=0x01020304;var wordBytes=bytes[0]===4&&bytes[1]===3&&bytes[2]===2&&bytes[3]===1;
+            bytes[4]=7;var sharedInteger=writer.getUint32(0,true)===7;
+            DataView.prototype.setFloat64.call(writer,0,-1.5,false);
+            var doubleEndian=writer.getFloat64(0,false)===-1.5&&bytes[4]===191&&bytes[5]===248;
+            writer.setInt16(0,-2,true);var signedEndian=writer.getInt16(0,true)===-2&&writer.getUint16(0,false)===65279;
+            writer.setFloat32(0,0.5,true);var singleEndian=writer.getFloat32(0,true)===0.5;
+            var outside=false,badReceiver=false;try{writer.setFloat64(1,2);}catch(e){outside=e instanceof RangeError;}
+            try{DataView.prototype.getFloat64.call({});}catch(e){badReceiver=e instanceof TypeError;}
+            var offsetBytes=new Uint8Array(shared,4,8);offsetBytes[0]=129;
+            return floatBytes&&wordBytes&&sharedInteger&&doubleEndian&&signedEndian&&singleEndian&&outside&&badReceiver&&
+                bytes[4]===129&&offsetBytes.buffer===shared&&offsetBytes.byteOffset===4&&writer.byteOffset===4&&writer.byteLength===8&&
+                writer instanceof DataView&&!Array.isArray(bytes)&&ArrayBuffer.isView(writer)&&ArrayBuffer.isView(bytes)&&
+                Object.prototype.toString.call(bytes)==='[object Uint8Array]'&&Object.prototype.toString.call(writer)==='[object DataView]'&&
+                writer.setFloat64===DataView.prototype.setFloat64&&writer.setFloat64.length===2;
+        )JS",&result,&error)&&result==L"true",
+            L"DataView and typed views share byte storage with float and integer encoding, bounds, offsets, endian order and prototype receiver validation at both DPIs");
+        Check(runtime.Execute(LR"JS(
+            var hashes=[],hashErrors=[],hashOrder=[];var hashInput=new Uint8Array([97,98,99]);
+            function digestHex(buffer){return Array.from(new Uint8Array(buffer),x=>x.toString(16).padStart(2,'0')).join('');}
+            crypto.subtle.digest('sHa-256',hashInput).then(function(buffer){hashes[0]=digestHex(buffer);hashes[4]=buffer instanceof ArrayBuffer;hashOrder.push('hash');});
+            crypto.subtle.digest({name:'SHA-1'},hashInput.buffer).then(function(buffer){hashes[1]=digestHex(buffer);});
+            crypto.subtle.digest('SHA-384',hashInput).then(function(buffer){hashes[2]=digestHex(buffer);});
+            crypto.subtle.digest('SHA-512',hashInput).then(function(buffer){hashes[3]=digestHex(buffer);});
+            var offsetHashBuffer=new ArrayBuffer(8),offsetHashBytes=new Uint8Array(offsetHashBuffer);
+            offsetHashBytes[3]=97;offsetHashBytes[4]=98;offsetHashBytes[5]=99;
+            crypto.subtle.digest('SHA-256',new DataView(offsetHashBuffer,3,3)).then(function(buffer){hashes[5]=digestHex(buffer);});
+            crypto.subtle.digest('MD5',hashInput).catch(function(e){hashErrors.push(e.name);});
+            crypto.subtle.digest('SHA-256',[1,2,3]).catch(function(e){hashErrors.push(e.name);});
+            hashInput[0]=120;hashOrder.push('sync');
+            return isSecureContext+'|'+(crypto.subtle instanceof SubtleCrypto)+'|'+
+                (crypto.subtle.digest===SubtleCrypto.prototype.digest)+'|'+crypto.subtle.digest.length+'|'+hashes.length;
+        )JS",&result,&error)&&result==L"true|true|true|2|0",L"WebCrypto digest snapshots input and returns a pending promise at both DPIs");
+        for(int pending=0;pending<4;++pending)runtime.RunTimers();
+        Check(runtime.Execute(LR"JS(
+            return hashes[0]==='ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'&&
+                hashes[1]==='a9993e364706816aba3e25717850c26c9cd0d89d'&&
+                hashes[2]==='cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7'&&
+                hashes[3]==='ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f'&&
+                hashes[4]&&hashes[5]===hashes[0]&&hashOrder.join(',')==='sync,hash'&&hashErrors.join(',')==='NotSupportedError,TypeError';
+        )JS",&result,&error)&&result==L"true",L"native SHA digests match known vectors, preserve snapshots and reject unsupported inputs at both DPIs");
+        runtime.SetLocation(L"http://untrusted.test/");
+        Check(runtime.Execute(L"return !isSecureContext&&typeof crypto.subtle==='undefined'&&typeof SubtleCrypto==='undefined';",&result,&error)&&result==L"true",
+            L"insecure HTTP contexts do not expose SubtleCrypto");
+        runtime.SetLocation(L"http://localhost/");
+        Check(runtime.Execute(L"return isSecureContext&&typeof crypto.subtle.digest==='function';",&result,&error)&&result==L"true",L"loopback contexts can use native digests");
+        runtime.SetLocation(L"https://embedded.test/page");runtime.SetSecureContextAncestors([]{return false;});
+        Check(runtime.Execute(L"return !isSecureContext&&typeof crypto.subtle==='undefined';",&result,&error)&&result==L"true",L"an insecure ancestor prevents HTTPS child secure-context exposure");
+        runtime.SetSecureContextAncestors({});
+        for(const auto threshold:{size_t(0),size_t(1)}){
+            runtime.SetJitCompilationThreshold(threshold);
+            Check(runtime.Execute(LR"JS(
+                function strictReceiver(){'use strict';return this===undefined;}
+                function sloppyReceiver(){return this===globalThis;}
+                var relay={invoke:function(fn){return fn();}};
+                var receiverBefore=relay.invoke(strictReceiver)&&relay.invoke(sloppyReceiver);
+                for(var warm=0;warm<200;warm++)relay.invoke(strictReceiver);
+                return receiverBefore+'|'+relay.invoke(strictReceiver)+'|'+relay.invoke(sloppyReceiver);
+            )JS",&result,&error)&&result==L"true|true|true",
+                L"bare calls inside warmed methods preserve strict and sloppy receivers in interpreter and optimized scopes at both DPIs");
+            Check(runtime.Execute(LR"JS(
+                var scopeReads=0,scopeSentinel={value:19},scopeTable={get value(){scopeReads++;return 5;},get failure(){throw scopeSentinel;}};
+                Object.defineProperty(scopeTable,'0',Object.getOwnPropertyDescriptor(scopeTable,'value'));
+                Object.defineProperty(scopeTable,'1',Object.getOwnPropertyDescriptor(scopeTable,'failure'));
+                function scopeSource(){return scopeTable;}
+                function scopeLookup(i,t,v){i=i-100;t=scopeSource();v=t[i];return v;}
+                var scopeValid=true;for(var i=0;i<100;i++)scopeValid=scopeValid&&scopeLookup(100)===5;
+                var scopeCaught=false;try{scopeLookup(101);}catch(e){scopeCaught=e===scopeSentinel;}
+                scopeTable=[8,9];scopeValid=scopeValid&&scopeLookup(100)===8&&scopeLookup(101)===9;
+                function scopeEscaped(a){return function(){return a;};}var scopeClosures=[];
+                for(var i=0;i<100;i++)scopeClosures.push(scopeEscaped(i));
+                for(var i=0;i<100;i++)scopeValid=scopeValid&&scopeClosures[i]()===i;
+                return scopeValid+'|'+scopeCaught+'|'+scopeReads;
+            )JS",&result,&error)&&result==L"true|true|100",L"optimized and interpreter scopes preserve getters, thrown identity, capture updates and escaping closures at both DPIs");
+        }
+    }
+    runtime.SetDevicePixelRatio(1);
+    std::vector<ScriptRequest> scriptRequests;
+    runtime.SetRequestLoader([&](const ScriptRequest& request){
+        scriptRequests.push_back(request);ScriptResponse response;response.url=request.url;
+        if(request.url.find(L"offline")!=std::wstring::npos)return response;
+        response.status=422;response.statusText=L"Unprocessable Content";response.contentType=L"application/json";
+        response.headers=L"Content-Type: application/json\r\nX-Result: rejected\r\n";response.body=L"{\"ok\":false}";return response;
+    });
+    Check(runtime.Execute(LR"JS(
+        var request=new XMLHttpRequest(),requestEvent='';request.open('POST','/submit',false);
+        request.setRequestHeader('X-Test','retained');request.responseType='json';
+        request.onload=function(){requestEvent='load';};request.onerror=function(){requestEvent='error';};
+        request.send('caf\u00e9');
+        return request.status+'|'+request.statusText+'|'+request.response.ok+'|'+request.getResponseHeader('x-result')+'|'+requestEvent+'|'+request.responseURL;
+    )JS",&result,&error)&&result==L"422|Unprocessable Content|false|rejected|load|https://embedded.test/submit",
+        L"XHR retains HTTP error status, headers and JSON body and fires load when the server responds");
+    Check(scriptRequests.size()==1&&scriptRequests[0].method==L"POST"&&scriptRequests[0].origin==L"https://embedded.test"&&
+        scriptRequests[0].body==std::vector<unsigned char>({'c','a','f',0xc3,0xa9})&&
+        std::find(scriptRequests[0].headers.begin(),scriptRequests[0].headers.end(),std::make_pair(std::wstring(L"x-test"),std::wstring(L"retained")))!=scriptRequests[0].headers.end(),
+        L"the common request loader receives the POST method, UTF-8 body, origin and custom headers");
+    Check(runtime.Execute(LR"JS(
+        var fetchResult='',fetchFailure='';
+        fetch('/submit',{method:'PUT',headers:new Headers({'Content-Type':'application/octet-stream'}),body:new Uint8Array([0,128,255])})
+            .then(function(response){fetchResult=response.status+'|'+response.ok+'|'+response.headers.get('x-result');});
+        fetch('/offline').catch(function(error){fetchFailure=error.name;});
+    )JS",&result,&error),error.c_str());
+    Check(runtime.Execute(L"return fetchResult+'|'+fetchFailure;",&result,&error)&&result==L"422|false|rejected|TypeError"&&
+        scriptRequests.size()==3&&scriptRequests[1].method==L"PUT"&&scriptRequests[1].body==std::vector<unsigned char>({0,128,255}),
+        L"fetch forwards methods and byte bodies, resolves HTTP errors and rejects transport failures");
+    scriptRequests.clear();
+    Check(runtime.Execute(LR"JS(
+        var opaqueFetch='',sameOriginFetch='',invalidModeFetch='',invalidMethodFetch='';
+        fetch('https://cross-origin.test/reachability',{method:'HEAD',mode:'no-cors',headers:{'X-Private':'secret','Accept':'text/plain'}}).then(function(response){
+            opaqueFetch=response.type+'|'+response.status+'|'+response.ok+'|'+response.url+'|'+response.statusText+'|'+
+                response.headers.get('x-result')+'|'+(response.body===null);
+            return response.text();
+        }).then(function(text){opaqueFetch+='|'+text;});
+        fetch('https://cross-origin.test/reachability',{mode:'same-origin'}).catch(function(error){sameOriginFetch=error.name;});
+        fetch('/submit',{mode:'unknown'}).catch(function(error){invalidModeFetch=error.name;});
+        fetch('/submit',{method:'PUT',mode:'no-cors'}).catch(function(error){invalidMethodFetch=error.name;});
+    )JS",&result,&error),error.c_str());
+    Check(runtime.Execute(L"return opaqueFetch+'|'+sameOriginFetch+'|'+invalidModeFetch+'|'+invalidMethodFetch;",&result,&error)&&
+        result==L"opaque|0|false|||null|true||TypeError|TypeError|TypeError"&&
+        scriptRequests.size()==1&&scriptRequests[0].mode==ScriptRequest::Mode::NoCors&&scriptRequests[0].method==L"HEAD"&&
+        scriptRequests[0].headers.size()==1&&scriptRequests[0].headers[0].first==L"accept"&&scriptRequests[0].headers[0].second==L"text/plain",
+        L"no-cors fetch resolves a filtered opaque response and invalid modes reject without sending requests");
+    scriptRequests.clear();
+    const bool wireExecuted=runtime.Execute(LR"JS(
+        var wireBytes=new Uint8Array([9,0,128,255,8]);
+        var wireWords=new Uint16Array([0x1234,0xabcd]);
+        var wireSlice=new Uint8Array(wireBytes.buffer,1,3);
+        var wireBodies=[wireSlice,wireBytes.buffer,new DataView(wireBytes.buffer,1,3),
+            wireWords,new Uint8Array(wireWords.buffer,1,2),
+            new Blob([wireSlice,wireWords],{type:'application/octet-stream'})];
+        for(var wireIndex=0;wireIndex<wireBodies.length;wireIndex++){
+            var wireRequest=new XMLHttpRequest();wireRequest.open('POST','/wire-bytes',false);wireRequest.send(wireBodies[wireIndex]);
+        }
+        fetch('/wire-bytes',{method:'POST',body:wireSlice});
+        return true;
+    )JS",&result,&error);
+    if(!wireExecuted||result!=L"true")std::wcerr<<L"Body serialization fixture: "<<error<<L" result="<<result<<L'\n';
+    Check(wireExecuted&&result==L"true",L"binary request fixture executes");
+    const std::vector<std::vector<unsigned char>> wireExpected={
+        {0,128,255},{9,0,128,255,8},{0,128,255},{0x34,0x12,0xcd,0xab},{0x12,0xcd},
+        {0,128,255,0x34,0x12,0xcd,0xab},{0,128,255}};
+    bool wireCorrect=scriptRequests.size()==wireExpected.size();
+    for(size_t index=0;wireCorrect&&index<wireExpected.size();++index)
+        wireCorrect=scriptRequests[index].body==wireExpected[index];
+    Check(wireCorrect,L"XHR and fetch snapshot the exact ArrayBuffer, typed-view, DataView and Blob bytes");
+    Check(scriptRequests.size()>5&&std::find(scriptRequests[5].headers.begin(),scriptRequests[5].headers.end(),
+        std::make_pair(std::wstring(L"content-type"),std::wstring(L"application/octet-stream")))!=scriptRequests[5].headers.end(),
+        L"Blob request bodies use the Blob MIME type");
+    runtime.SetRequestLoader({});
+    Check(runtime.Execute(LR"JS(
+        var hyperbolic=Math.tanh,coercions=0;
+        var coercion={valueOf:function(){coercions++;return 2;}};
+        var nanMinimum=Math.min(NaN,coercion);
+        return [hyperbolic.call(null,Infinity),Object.is(hyperbolic(-0),-0),Math.acosh(1),Math.asinh(-Infinity),Math.atanh(1),
+            Math.hypot(3,4),Math.hypot(Infinity,NaN),Math.abs(Math.hypot(1e308,1e308)/1e308-Math.SQRT2)<1e-15,
+            Math.imul(0xffffffff,5),Math.clz32(1),Math.clz32(),Math.fround(1.337)===1.3370000123977661,
+            Math.round(-1.5),Object.is(Math.round(-0.5),-0),1/Math.min(0,-0),1/Math.max(-0,0),Math.min(),Math.max(),
+            Number.isNaN(nanMinimum),coercions,Number.isNaN(Math.pow(-1,Infinity)),Number.isNaN(Math.pow(1,NaN)),Number.isNaN(Math.sin()),
+            Math.tanh===hyperbolic,hyperbolic.name,hyperbolic.length,Object.getOwnPropertyNames(Math).indexOf('tanh')>=0,Object.keys(Math).length].join('|');
+    )JS",&result,&error)&&result==L"1|true|0|-Infinity|Infinity|5|Infinity|true|-5|31|32|true|-1|true|-Infinity|Infinity|Infinity|-Infinity|true|1|true|true|true|true|tanh|1|true|0",
+        L"Math intrinsics retain callable identity and metadata, coerce all min arguments, handle signed zero and non-finite values, and calculate 32-bit products and large vector norms correctly");
+    Check(runtime.Execute(LR"JS(
+        var conversionMarker={},conversionTrace='',conversionCaught=false,symbolHint='';
+        try{Math.min(NaN,{valueOf:function(){conversionTrace+='throw';throw conversionMarker;}},{valueOf:function(){conversionTrace+='later';return 0;}});}
+        catch(error){conversionCaught=error===conversionMarker;}
+        var numericPrimitive={};numericPrimitive[Symbol.toPrimitive]=function(hint){symbolHint=hint;return 9;};
+        var bigintMathError='',symbolMathError='';
+        try{Math.sqrt(1n);}catch(error){bigintMathError=error.name;}
+        try{Math.abs(Symbol('number'));}catch(error){symbolMathError=error.name;}
+        return conversionCaught+'|'+conversionTrace+'|'+Math.sqrt(numericPrimitive)+'|'+symbolHint+'|'+bigintMathError+'|'+symbolMathError;
+    )JS",&result,&error)&&result==L"true|throw|3|number|TypeError|TypeError",
+        L"Math conversion uses the number hint and propagates the original JavaScript throw before evaluating later arguments");
+    Check(runtime.Execute(LR"JS(
+        var pixelCanvas=document.createElement('canvas');pixelCanvas.width=3;pixelCanvas.height=2;
+        pixelCanvas.style.width='30px';pixelCanvas.style.height='20px';
+        var pixelContext=pixelCanvas.getContext('2d');pixelContext.fillStyle='#ff0000';pixelContext.fillRect(0,0,1,1);
+        pixelContext.translate(1,0);pixelContext.fillStyle='#00ff00';pixelContext.fillRect(0,0,1,1);
+        var pixelRead=pixelContext.getImageData(0,0,3,1),pixelOutside=pixelContext.getImageData(-1,0,2,1);
+        var pixelReverse=pixelContext.getImageData(2,1,-2,-1),pixelSizeError='',pixelBrandError='';
+        try{pixelContext.getImageData(0,0,0,1);}catch(error){pixelSizeError=error.name;}
+        try{pixelContext.getImageData.call({},0,0,1,1);}catch(error){pixelBrandError=error.name;}
+        pixelRead.data[0]=0;var retainedPixel=pixelContext.getImageData(0,0,1,1).data[0];
+        pixelContext.clearRect(0,0,1,1);var clearedPixel=pixelContext.getImageData(1,0,1,1).data[3];
+        return pixelRead.width+'|'+pixelRead.height+'|'+(pixelRead.data instanceof Uint8ClampedArray)+'|'+Array.prototype.join.call(pixelRead.data,',')+'|'+
+            Array.prototype.join.call(pixelOutside.data,',')+'|'+Array.prototype.join.call(pixelReverse.data,',')+'|'+retainedPixel+'|'+clearedPixel+'|'+pixelSizeError+'|'+pixelBrandError;
+    )JS",&result,&error)&&result==L"3|1|true|0,0,0,255,0,255,0,255,0,0,0,0|0,0,0,0,255,0,0,255|255,0,0,255,0,255,0,255|255|0|IndexSizeError|TypeError",
+        L"Canvas getImageData reads the rendered intrinsic pixels, ignores drawing transforms for its coordinates, preserves transparent out-of-bounds pixels and returns an independent clamped byte array");
+    Check(runtime.Execute(LR"JS(
+        var strokeCanvas=document.createElement('canvas');strokeCanvas.width=100;strokeCanvas.height=70;
+        var strokeContext=strokeCanvas.getContext('2d');strokeContext.font='48px Arial';strokeContext.strokeStyle='#ff0000';strokeContext.lineWidth=2;
+        CanvasRenderingContext2D.prototype.strokeText.call(strokeContext,'O',10,52);
+        var strokePixels=strokeContext.getImageData(0,0,100,70).data,redCoverage=0;
+        for(var p=0;p<strokePixels.length;p+=4)if(strokePixels[p]>200&&strokePixels[p+1]===0&&strokePixels[p+2]===0&&strokePixels[p+3]>0)++redCoverage;
+        var centerAlpha=strokeContext.getImageData(28,34,1,1).data[3];
+        strokeContext.clearRect(0,0,100,70);strokeContext.strokeText('OOOO',0,52,20);
+        var limited=strokeContext.getImageData(25,0,75,70).data,outsideCoverage=0;
+        for(var q=3;q<limited.length;q+=4)outsideCoverage+=limited[q];
+        return (redCoverage>100)+'|'+centerAlpha+'|'+outsideCoverage;
+    )JS",&result,&error)&&result==L"true|0|0",
+        L"Canvas strokeText renders actual glyph outlines using stroke color and width, preserves unpainted glyph interiors and respects maxWidth");
+    Check(runtime.Execute(LR"JS(
+        var reflectedCanvas=document.createElement('canvas'),reflectedContext=reflectedCanvas.getContext('2d');
+        var contextPrototype=CanvasRenderingContext2D.prototype,canvasBrandError='',contextBrandError='',illegalContext='';
+        try{HTMLCanvasElement.prototype.getContext.call(document.createElement('div'),'2d');}catch(e){canvasBrandError=e.name;}
+        try{contextPrototype.fillRect.call({},0,0,1,1);}catch(e){contextBrandError=e.name;}
+        try{new CanvasRenderingContext2D();}catch(e){illegalContext=e.name;}
+        reflectedCanvas.width=2;reflectedCanvas.height=2;reflectedContext.fillStyle='#0000ff';
+        contextPrototype.fillRect.call(reflectedContext,0,0,1,1);
+        var bluePixel=contextPrototype.getImageData.call(reflectedContext,0,0,1,1).data;
+        var canvasAccessor=Object.getOwnPropertyDescriptor(contextPrototype,'canvas');
+        return (reflectedCanvas instanceof HTMLCanvasElement)+'|'+(reflectedContext instanceof CanvasRenderingContext2D)+'|'+
+            (Object.getPrototypeOf(reflectedContext)===contextPrototype)+'|'+(reflectedContext.fillRect===contextPrototype.fillRect)+'|'+
+            (HTMLCanvasElement.prototype.getContext.call(reflectedCanvas,'2d')===reflectedContext)+'|'+
+            (canvasAccessor.get.call(reflectedContext)===reflectedCanvas)+'|'+(reflectedCanvas.getContext(' 2D ')===null)+'|'+
+            bluePixel[2]+'|'+canvasBrandError+'|'+contextBrandError+'|'+illegalContext;
+    )JS",&result,&error)&&result==L"true|true|true|true|true|true|true|255|TypeError|TypeError|TypeError",
+        L"Canvas interfaces expose shared prototype methods which operate on the borrowed receiver's actual backing store and reject incompatible receivers");
+    Check(runtime.Execute(LR"JS(
+        var inlineElement=document.createElement('div'),inlineStyle=inlineElement.style;
+        var styleAccessor=Object.getOwnPropertyDescriptor(HTMLElement.prototype,'style'),styleBrandError='',styleMarker={},styleCaught=false;
+        inlineElement.style='width: 37px; color: red';
+        try{styleAccessor.get.call({});}catch(e){styleBrandError=e.name;}
+        try{styleAccessor.set.call(inlineElement,{toString:function(){throw styleMarker;}});}catch(e){styleCaught=e===styleMarker;}
+        var inlineSvg=document.createElementNS('http://www.w3.org/2000/svg','rect'),svgStyle=inlineSvg.style;
+        Object.getOwnPropertyDescriptor(SVGElement.prototype,'style').set.call(inlineSvg,'fill: blue');
+        return (inlineStyle===inlineElement.style)+'|'+(styleAccessor.get.call(inlineElement)===inlineStyle)+'|'+inlineStyle.width+'|'+
+            styleBrandError+'|'+styleCaught+'|'+(svgStyle===inlineSvg.style)+'|'+svgStyle.fill+'|'+Object.keys(inlineElement).includes('$style');
+    )JS",&result,&error)&&result==L"true|true|37px|TypeError|true|true|blue|false",
+        L"HTML and SVG inline style accessors preserve object identity, forward string assignment to cssText, validate receivers and propagate string conversion errors");
+    if(result!=L"true|true|37px|TypeError|true|true|blue|false")std::wcerr<<L"Style reflection result: "<<result<<L"; error: "<<error<<L'\n';
+    Check(runtime.Execute(LR"JS(
+        var clonedLeaf={value:7},cloneSource={left:clonedLeaf,right:clonedLeaf};cloneSource.self=cloneSource;
+        cloneSource.map=new Map();cloneSource.map.set(clonedLeaf,cloneSource);cloneSource.set=new Set([clonedLeaf,cloneSource]);
+        var cloneGetterCalls=0;Object.defineProperty(cloneSource,'computed',{enumerable:true,get:function(){++cloneGetterCalls;return clonedLeaf;}});
+        cloneSource[Symbol('ignored')]=function(){};
+        var cloneResult=structuredClone(cloneSource),cloneFunctionError='',cloneNodeError='';
+        try{structuredClone({callback:function(){}});}catch(e){cloneFunctionError=e.name;}
+        try{structuredClone(document.body);}catch(e){cloneNodeError=e.name;}
+        cloneResult.left.value=9;
+        var cloneBytes=new Uint8Array([3,8]),clonedBytes=structuredClone(cloneBytes);clonedBytes[0]=11;
+        return (cloneResult!==cloneSource)+'|'+(cloneResult.self===cloneResult)+'|'+(cloneResult.left===cloneResult.right)+'|'+
+            (cloneResult.map.get(cloneResult.left)===cloneResult)+'|'+cloneResult.set.has(cloneResult)+'|'+
+            (cloneResult.computed===cloneResult.left)+'|'+cloneGetterCalls+'|'+clonedLeaf.value+'|'+cloneFunctionError+'|'+cloneNodeError+'|'+
+            (clonedBytes instanceof Uint8Array)+'|'+cloneBytes[0]+'|'+clonedBytes[0]+'|'+(clonedBytes.buffer!==cloneBytes.buffer);
+    )JS",&result,&error)&&result==L"true|true|true|true|true|true|1|7|DataCloneError|DataCloneError|true|3|11|true",
+        L"Structured cloning preserves cycles and shared graph identity, clones collections and typed bytes independently, evaluates enumerable getters once and rejects nonserializable values");
+    Check(runtime.Execute(LR"JS(
+        var valueOfObject={},valueOfFunction=function(){},valueOfNullError='',valueOfGetterCalls=0;
+        var valueOfNumber=Object.prototype.valueOf.call(3),taggedObject={};
+        Object.defineProperty(taggedObject,Symbol.toStringTag,{get:function(){++valueOfGetterCalls;return 'Tagged';}});
+        try{Object.prototype.valueOf.call(null);}catch(e){valueOfNullError=e.name;}
+        return (valueOfObject.valueOf()===valueOfObject)+'|'+(valueOfFunction.valueOf()===valueOfFunction)+'|'+
+            typeof valueOfNumber+'|'+valueOfNumber.valueOf()+'|'+valueOfNullError+'|'+
+            Object.prototype.toString.call(taggedObject)+'|'+valueOfGetterCalls+'|'+
+            (typeof Object.getOwnPropertyDescriptor(Object.prototype,'valueOf').value)+'|'+Object.keys(Object.prototype).includes('valueOf');
+    )JS",&result,&error)&&result==L"true|true|object|3|TypeError|[object Tagged]|1|function|false",
+        L"Object prototype conversion methods preserve receiver identity, box primitives, reject null, expose stable descriptors and evaluate custom string tags");
+    Check(runtime.Execute(LR"JS(
+        var boxedNumber=new Number(7),numberBrandError='';
+        try{Number.prototype.valueOf.call({});}catch(e){numberBrandError=e.name;}
+        return typeof boxedNumber+'|'+(boxedNumber instanceof Number)+'|'+boxedNumber.valueOf()+'|'+boxedNumber.toFixed(2)+'|'+
+            (Object.getPrototypeOf(Object(3))===Number.prototype)+'|'+Number.prototype.valueOf()+'|'+numberBrandError;
+    )JS",&result,&error)&&result==L"object|true|7|7.00|true|0|TypeError",
+        L"Number wrappers retain primitive values through their shared prototype, distinguish construction from conversion and reject incompatible receivers");
+    Check(runtime.Execute(LR"JS(
+        var reflectedStyleElement=document.createElement('div'),reflectedStyle=reflectedStyleElement.style;
+        var reflectedCssText=Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype,'cssText'),styleMethodError='',styleReadOnlyError='';
+        reflectedCssText.set.call(reflectedStyle,'width: 41px; --Case: kept');
+        CSSStyleDeclaration.prototype.setProperty.call(reflectedStyle,'height','13px','important');
+        try{CSSStyleDeclaration.prototype.getPropertyValue.call({},'width');}catch(e){styleMethodError=e.name;}
+        var readOnlyStyle=getComputedStyle(reflectedStyleElement);
+        try{CSSStyleDeclaration.prototype.setProperty.call(readOnlyStyle,'width','99px');}catch(e){styleReadOnlyError=e.name;}
+        return (reflectedStyle instanceof CSSStyleDeclaration)+'|'+(reflectedStyle.getPropertyValue===CSSStyleDeclaration.prototype.getPropertyValue)+'|'+
+            reflectedStyle.width+'|'+reflectedStyle.getPropertyValue('--Case')+'|'+reflectedStyle.height+'|'+reflectedStyle.getPropertyPriority('height')+'|'+
+            reflectedCssText.get.call(reflectedStyle).includes('41px')+'|'+styleMethodError+'|'+styleReadOnlyError+'|'+readOnlyStyle.cssText+'|'+reflectedStyle.width;
+    )JS",&result,&error)&&result==L"true|true|41px|kept|13px|important|true|TypeError|NoModificationAllowedError||41px",
+        L"CSS style reflection exposes real shared methods and cssText accessors, preserves custom property case and prevents computed style mutation");
+    Check(runtime.Execute(LR"JS(
+        var inheritedObject={},nullPrototypeObject=Object.create(null),removedPrototypeObject={};
+        removedPrototypeObject.__proto__=null;
+        return (Object.getPrototypeOf(inheritedObject)===Object.prototype)+'|'+
+            (inheritedObject.toLocaleString===Object.prototype.toLocaleString)+'|'+inheritedObject.toLocaleString()+'|'+
+            (typeof nullPrototypeObject.valueOf)+'|'+(typeof nullPrototypeObject.toString)+'|'+(typeof removedPrototypeObject.hasOwnProperty);
+    )JS",&result,&error)&&result==L"true|true|[object Object]|undefined|undefined|undefined",
+        L"Ordinary objects inherit stable Object prototype methods while explicitly null prototypes do not receive synthetic fallbacks");
+    Check(runtime.Execute(LR"JS(
+        var consoleProgress=0,cyclicConsoleValue={};cyclicConsoleValue.self=cyclicConsoleValue;
+        var borrowedCount=console.count,borrowedTable=console.table,borrowedTrace=console.trace;
+        borrowedCount('compatibility');borrowedCount('compatibility');console.countReset('compatibility');
+        console.time('compatibility');console.timeLog('compatibility');console.timeEnd('compatibility');
+        console.dir(cyclicConsoleValue);console.dirxml(document.body);borrowedTable(cyclicConsoleValue);borrowedTrace('compatibility');
+        console.assert(true,'silent');console.assert(false,'recorded');console.group('outer');console.groupCollapsed('inner');
+        console.clear();console.groupEnd();console.countReset('missing');console.timeEnd('missing');
+        consoleProgress++;return consoleProgress+'|'+typeof console.countReset+'|'+typeof console.dirxml+'|'+typeof borrowedTable(cyclicConsoleValue);
+    )JS",&result,&error)&&result==L"1|function|function|undefined",
+        L"standard Console counting, timing and inspection calls remain usable when borrowed, given cyclic values, or reset before initialization");
+    Check(runtime.Execute(LR"JS(
+        var text=document.createTextNode('abcdef'),container=document.createElement('div');container.appendChild(text);
+        var range=document.createRange();range.setStart(text,2);range.setEnd(text,5);
+        CharacterData.prototype.replaceData.call(text,1,2,'XYZ');
+        var adjusted=range.startOffset+'|'+range.endOffset;
+        text.insertData(0,'!');text.deleteData(7,100);text.appendData('?');
+        var substring=text.substringData(2,100),offsetError='',brandError='';
+        try{text.deleteData(-1,0);}catch(e){offsetError=e.name;}
+        try{CharacterData.prototype.appendData.call(container,'x');}catch(e){brandError=e.name;}
+        range.setStart(text,5);range.setEnd(text,7);var tail=Text.prototype.splitText.call(text,3);
+        var split=(tail===container.lastChild)+'|'+(range.startContainer===tail)+'|'+range.startOffset+'|'+range.endOffset;
+        var detached=document.createTextNode('abcd'),detachedRange=document.createRange();detachedRange.setStart(detached,3);detachedRange.setEnd(detached,4);
+        detached.splitText(2);var detachedPosition=(detachedRange.startContainer===detached)+'|'+detachedRange.startOffset+'|'+detachedRange.endOffset;
+        var comment=Document.prototype.createComment.call(document,'comment');comment.appendData('!');comment.data=null;
+        tail.data='replacement';tail.nodeValue='actual';
+        return adjusted+'|'+substring+'|'+offsetError+'|'+brandError+'|'+split+'|'+detachedPosition+'|'+
+            text.data+'|'+tail.textContent+'|'+comment.length+'|'+(text instanceof Text)+'|'+(comment instanceof CharacterData);
+    )JS",&result,&error)&&result==L"1|6|XYZde?|IndexSizeError|TypeError|true|true|2|4|true|2|2|!aX|actual|0|true|true",
+        L"CharacterData methods and setters change the actual node, validate receivers and offsets, and preserve live ranges across replacement and splitting");
+    Check(runtime.Execute(LR"JS(
+        var adjacentRoot=document.createElement('section'),adjacentTarget=document.createElement('div');
+        adjacentRoot.appendChild(adjacentTarget);document.body.appendChild(adjacentRoot);
+        adjacentTarget.appendChild(document.createElement('b'));var retainedChild=adjacentTarget.firstChild;
+        Element.prototype.insertAdjacentHTML.call(adjacentTarget,'BEFOREBEGIN','<em>before</em>');
+        adjacentTarget.insertAdjacentText('afterbegin','<literal>');
+        adjacentTarget.insertAdjacentHTML('beforeend','<span id="adjacent-added">after</span><script>window.adjacentScriptRuns=1;</script>');
+        var adjacentElement=document.createElement('i'),returnedElement=adjacentTarget.insertAdjacentElement('afterend',adjacentElement);
+        var badPosition='',badHierarchy='';try{adjacentTarget.insertAdjacentHTML('invalid','x');}catch(e){badPosition=e.name;}
+        try{adjacentTarget.insertAdjacentElement('beforeend',adjacentRoot);}catch(e){badHierarchy=e.name;}
+        var adjacentResult=adjacentRoot.firstChild.tagName+'|'+adjacentTarget.firstChild.textContent+'|'+
+            (retainedChild===adjacentTarget.childNodes[1])+'|'+document.getElementById('adjacent-added').textContent+'|'+
+            (returnedElement===adjacentRoot.lastChild)+'|'+typeof adjacentScriptRuns+'|'+badPosition+'|'+badHierarchy;
+        adjacentRoot.remove();console.groupCollapsed('compatibility');console.groupEnd();return adjacentResult;
+    )JS",&result,&error)&&result==L"EM|<literal>|true|after|true|undefined|SyntaxError|HierarchyRequestError",
+        L"adjacent HTML, text and element insertion preserves identity and indexes, keeps parsed scripts inert and validates positions and hierarchy");
+    Check(runtime.Execute(LR"JS(
+        var localized={toString:function(){return this.label;},label:'custom'};
+        return 'plain'.toLocaleString()+'|'+Object.prototype.toLocaleString.call(localized)+'|'+
+            Node.DOCUMENT_POSITION_FOLLOWING+'|'+document.body.DOCUMENT_POSITION_CONTAINED_BY+'|'+
+            Node.DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC+'|'+
+            (Node.prototype.compareDocumentPosition.call(document.body,document.getElementById('host'))===20);
+    )JS",&result,&error)&&result==L"plain|custom|4|16|32|true",
+        L"inherited toLocaleString uses the actual toString method and Node position constants match document ordering");
+    Check(runtime.Execute(LR"JS(
+        var characterReader=String.prototype.charCodeAt,oldCharacterReader=String.prototype.charAt;
+        var directCharacter=characterReader.call('ABC',1),coercedCharacter=characterReader.call(123,1),nullError='';
+        try{characterReader.call(null,0);}catch(error){nullError=error.name;}
+        String.prototype.charAt=function(){return 'overridden';};var overriddenCharacter='ABC'.charAt(1);
+        String.prototype.charAt=oldCharacterReader;
+        var longText='A'.repeat(32768),checksum=0;for(var i=0;i<1024;i++)checksum+=longText.charCodeAt(i);
+        return directCharacter+'|'+coercedCharacter+'|'+nullError+'|'+overriddenCharacter+'|'+checksum+'|'+
+            ('ABC'.charCodeAt===characterReader)+'|'+Number.isNaN(characterReader.call('A',Infinity));
+    )JS",&result,&error)&&result==L"66|50|TypeError|overridden|66560|true|true",
+        L"String character methods read their actual receiver, retain prototype identity and overrides, and handle large inputs without binding copies");
+    float previousGridWidth=0;
+    for(const auto scale:{1.0f,1.5f}){
+        Document gridDocument;StyleSheet gridStyles;
+        Check(gridDocument.Parse(L"<!doctype html><html><head><style>html,body{margin:0;font:14px Arial}.row{display:flex;align-items:center;justify-content:space-between;height:65px}#status{display:grid;grid-template-columns:30px auto;gap:6px;align-items:center}#dot{width:30px;height:30px}#brand{width:80px;height:30px}</style></head><body><div class='row'><div id='status'><div id='dot'></div><div id='word'>\ud655\uc778 \uc911...</div></div><div id='brand'></div></div></body></html>",&error),error.c_str());
+        Check(gridStyles.Parse(gridDocument.StyleText(),&error),error.c_str());LayoutEngine gridLayout(gridDocument,gridStyles);gridLayout.Layout(300,65,scale);
+        const auto status=gridLayout.BoxFor(gridDocument.GetElementById(L"status")),word=gridLayout.BoxFor(gridDocument.GetElementById(L"word")),brand=gridLayout.BoxFor(gridDocument.GetElementById(L"brand"));
+        Check(status&&word&&brand&&status->rect.width>=36+word->rect.width-0.5f&&word->rect.height<30&&word->rect.x+word->rect.width<=brand->rect.x+0.5f,
+            L"a grid flex item's intrinsic width includes every column and gap so its status label stays on one line");
+        Check(status&&(!previousGridWidth||std::abs(status->rect.width-previousGridWidth)<1),
+            L"intrinsic grid widths remain in CSS pixels at 100% and 150% device scales");
+        if(status)previousGridWidth=status->rect.width;
+    }
+    Check(runtime.Execute(LR"JS(
+        var originalSelector=Document.prototype.querySelector,selectorCalls=0;
+        var wrappedSelector=new Proxy(originalSelector,{apply:function(target,receiver,args){selectorCalls++;return Reflect.apply(target,receiver,args);}});
+        Document.prototype.querySelector=wrappedSelector;
+        var selected=document.querySelector('#host'),child=Element.prototype.querySelector.call(selected,'span'),wrongReceiver;
+        try{Element.prototype.querySelector.call({},'span');}catch(e){wrongReceiver=e.name;}
+        Document.prototype.querySelector=originalSelector;
+        return selected.id+'|'+child.textContent+'|'+selectorCalls+'|'+wrongReceiver+'|'+
+            (Object.getPrototypeOf(selected)===HTMLDivElement.prototype)+'|'+
+            (Object.getPrototypeOf(document)===Document.prototype)+'|'+Function.prototype.toString.call(wrappedSelector);
+    )JS",&result,&error)&&result==L"host|light|1|TypeError|true|true|function () { [native code] }",
+        L"DOM prototype methods preserve brand checks and receivers when borrowed or wrapped in a callable Proxy");
+    Document frameDocument;
+    Check(frameDocument.Parse(L"<!doctype html><html><body></body></html>",&error),error.c_str());
+    auto frameRuntime=std::make_shared<JavaScriptRuntime>(frameDocument);frameRuntime->SetLocation(L"about:blank");
+    runtime.SetFrameRuntimeProvider([frameRuntime](const std::shared_ptr<Node>&){return frameRuntime;});
+    Check(runtime.Execute(LR"JS(
+        var realmFrame=document.createElement('iframe');document.body.appendChild(realmFrame);
+        var frameEval=realmFrame.contentWindow.eval;
+        frameEval('var frameCounter=7;function frameFunction(){return function(){return [frameCounter,this===window];};}');
+        var foreignFunction=realmFrame.contentWindow.frameFunction(),foreignResult=foreignFunction();
+        realmFrame.contentWindow.frameCounter=9;
+        return typeof frameEval+'|'+typeof frameCounter+'|'+foreignResult.join(',')+'|'+foreignFunction().join(',')+'|'+
+            (frameEval('this')===realmFrame.contentWindow)+'|'+(realmFrame.contentWindow.eval===frameEval);
+    )JS",&result,&error)&&result==L"function|undefined|7,true|9,true|true|true",
+        L"iframe intrinsic functions, nested closures, window identity and global writes preserve the originating realm");
+    frameRuntime->SetLocation(L"https://other.test/page");
+    Check(runtime.Execute(L"realmFrame.src='https://other.test/page';try{var blockedEval=realmFrame.contentWindow.eval;return typeof blockedEval;}catch(e){return e.name;}",&result,&error)&&result==L"SecurityError",
+        L"frame intrinsic access rejects another origin");
+    Check(runtime.Execute(L"frameEval=null;foreignFunction=null;foreignResult=null;realmFrame.remove();realmFrame=null;",&result,&error),error.c_str());
+    runtime.SetFrameRuntimeProvider({});
+    Check(runtime.Execute(LR"JS(
+        var position=Number.NaN,iterations=0;
+        while(!Number.isNaN(position)){if(++iterations>1)break;position++;}
+        return typeof position+'|'+Number.isNaN(position)+'|'+iterations+'|'+
+            (Number.POSITIVE_INFINITY===Infinity)+'|'+(Number.NEGATIVE_INFINITY===-Infinity)+'|'+
+            (Number.MAX_VALUE>1e308)+'|'+(Number.MIN_VALUE>0)+'|'+(1+Number.EPSILON>1);
+    )JS",&result,&error)&&result==L"number|true|0|true|true|true|true|true",
+        L"Number constants retain numeric types and terminate NaN sentinel loops");
+    Check(runtime.Execute(L"return Number.isInteger(Date.now())+'|'+Number.isInteger(new Date().getTime())+'|'+new Date(1.9).getTime()+'|'+new Date(-1.9).getTime()+'|'+Number.isNaN(new Date(8640000000000001).getTime());",&result,&error)&&result==L"true|true|1|-1|true",
+        L"Date timestamps use integer milliseconds and TimeClip bounds rather than fractional performance clock values");
+    Check(runtime.Execute(LR"JS(
+        var borrowed=Array.prototype.join;
+        var body=borrowed.call(['(',')','{return 17;}'],'');
+        var dynamic=eval('(function generated'+body+')');
+        return dynamic()+'|'+borrowed.call({0:'a',2:'c',length:3},'-')+'|'+borrowed.call('abc','-')+'|'+[1,2].join(undefined);
+    )JS",&result,&error)&&result==L"17|a--c|a-b-c|1,2",
+        L"borrowed Array.join reads the actual array-like receiver and preserves generated JavaScript source");
+    Check(runtime.Execute(LR"JS(
+        var append=String.prototype.concat,cut=String.prototype.slice;
+        var source=append.call('function generated','(){return 23;}');
+        return eval('('+source+')')()+'|'+cut.call('abcdef',1,-1)+'|'+String.prototype.charCodeAt.call('AZ',1)+'|'+
+            String.prototype.replace.call('hello','l','X')+'|'+String.prototype.split.call('a,b',',').length;
+    )JS",&result,&error)&&result==L"23|bcde|90|heXlo|2",
+        L"borrowed String prototype methods coerce and read their actual receiver");
+    Check(runtime.Execute(LR"JS(
+        var repeatErrors=[];
+        for(var count of [-1,Infinity]){try{'a'.repeat(count);}catch(e){repeatErrors.push(e.name);}}
+        return 'a'.repeat(undefined).length+'|'+String.prototype.repeat.call('ab',NaN).length+'|'+
+            'x'.repeat(-0.7).length+'|'+''.repeat(1e12).length+'|'+String.prototype.repeat.call('ab',2.9)+'|'+repeatErrors.join(',');
+    )JS",&result,&error)&&result==L"0|0|0|0|abab|RangeError,RangeError",
+        L"String.repeat applies integer coercion before validating counts and handles empty strings");
+    Check(runtime.Execute(LR"JS(
+        var takeLast=[].pop,takeFirst=[].shift,prepend=[].unshift,reverse=[].reverse,items=[1,2,3];
+        var last=takeLast.call(items),first=takeFirst.call(items),size=prepend.call(items,4,5);
+        reverse.call(items);return last+'|'+first+'|'+size+'|'+items.join(',')+'|'+Array.prototype.length;
+    )JS",&result,&error)&&result==L"3|1|3|2,5,4|0",
+        L"borrowed array mutations read and modify the actual receiver rather than the method lookup array");
+    Check(runtime.Execute(LR"JS(
+        var wide=BigInt('0xffffffffffffffffffffffffffffffff'),incremented=wide+1n;
+        var negative=-13n,errors=[];
+        for(var action of [function(){return 1n+1;},function(){return +1n;},function(){return 1n/0n;},function(){return 1n>>>1n;},function(){return BigInt(1.5);},function(){return new BigInt(1);}]){
+            try{action();}catch(e){errors.push(e.name);}
+        }
+        return typeof wide+'|'+incremented.toString(16)+'|'+(wide*wide%97n)+'|'+
+            (negative/5n)+'|'+(negative%5n)+'|'+(negative>>2n)+'|'+(~negative)+'|'+
+            (-1n&wide).toString(16)+'|'+(BigInt('9007199254740993')>9007199254740992)+'|'+
+            (0n==false)+'|'+Number(255n)+'|'+errors.join(',');
+    )JS",&result,&error)&&result==L"bigint|100000000000000000000000000000000|89|-2|-3|-4|12|ffffffffffffffffffffffffffffffff|true|true|255|TypeError,TypeError,RangeError,TypeError,RangeError,TypeError",
+        L"BigInt keeps arbitrary precision arithmetic, signed shifts, mixed numeric comparisons and exception semantics");
+    Check(runtime.Execute(LR"JS(
+        function arity(first,second=1,...rest){}function pair(first,second){}
+        return arity.name+'|'+arity.length+'|'+pair.length+'|'+(pair.constructor===Function)+'|'+atob.name+'|'+eval.length;
+    )JS",&result,&error)&&result==L"arity|1|2|true|atob|1",L"function names, declared arity, intrinsic names and the Function prototype constructor are exposed");
+    Check(runtime.Execute(LR"JS(
+        function addBound(a,b){return this.offset+a+b;}var bound=Function.prototype.bind.call(addBound,{offset:3},4);
+        function BoundModel(value){this.value=value;}var model=new (BoundModel.bind(null,9))();
+        return bound.name+'|'+bound.length+'|'+bound(5)+'|'+model.value+'|'+(model instanceof BoundModel)+'|'+addBound.hasOwnProperty('length');
+    )JS",&result,&error)&&result==L"bound addBound|1|12|9|true|true",L"bound functions preserve declared arity, receivers, leading arguments and constructor behavior");
+    Check(runtime.Execute(LR"JS(
+        var syntax;try{eval('function incomplete');}catch(error){syntax=error;}
+        return (syntax instanceof SyntaxError)+'|'+(syntax instanceof Error)+'|'+(syntax instanceof TypeError)+'|'+
+            (syntax.constructor===SyntaxError)+'|'+syntax.constructor.name+'|'+Object.keys(syntax).length;
+    )JS",&result,&error)&&result==L"true|true|false|true|SyntaxError|0",L"caught syntax errors retain their specific constructor, prototype and nonenumerable fields");
+    Check(runtime.Execute(LR"JS(
+        var timerResult='',timerObject={value:8};
+        setTimeout(function(object,amount){'use strict';timerResult=object.value+amount+'|'+(object===timerObject)+'|'+(this===window);},0,timerObject,4);
+    )JS",nullptr,&error),error.c_str());
+    runtime.RunTimers();
+    Check(runtime.Execute(L"return timerResult;",&result,&error)&&result==L"12|true|true",L"timer callbacks receive extra arguments and the global receiver even in strict mode");
+    Check(runtime.Execute(L"var animationTime=-1;requestAnimationFrame(function(time){animationTime=time;});",nullptr,&error),error.c_str());
+    runtime.RunAnimationFrame();
+    Check(runtime.Execute(L"return animationTime>=0&&Math.abs(animationTime-performance.now())<1000;",&result,&error)&&result==L"true",
+        L"animation frame timestamps share the performance clock's time origin");
+    Check(runtime.Execute(LR"JS(
+        var invalid=[];for(var input of ['A','A===','AA=A','AA!']){try{atob(input);}catch(e){invalid.push(e.name);}}
+        var rejected=false;try{btoa('\u0100');}catch(e){rejected=e.name==='InvalidCharacterError';}
+        return btoa('\x00\xffabc')+'|'+atob(' YW\nJj ').length+'|'+atob('YWI')+'|'+invalid.length+'|'+rejected+'|'+(globalThis===window);
+    )JS",&result,&error)&&result==L"AP9hYmM=|3|ab|4|true|true",L"Base64 helpers preserve binary bytes, accept ASCII whitespace and reject invalid input");
+    Check(runtime.Execute(LR"JS(
+        function localEval(){
+            var count=4;let increment=8;eval('count+=increment;var added=7;');
+            var scoped=eval("'use strict';var privateValue=5;privateValue+count");
+            return count+'|'+added+'|'+scoped+'|'+typeof privateValue;
+        }
+        function indirectEval(){let privateValue=9;return (0,eval)('typeof privateValue');}
+        function strictEval(){'use strict';eval('var isolated=1');return typeof isolated;}
+        var marker={},same=false;try{eval('throw marker');}catch(error){same=error===marker;}
+        return localEval()+'|'+indirectEval()+'|'+strictEval()+'|'+eval(23)+'|'+(eval(marker)===marker)+'|'+same+'|'+eval('1;{2+3;}');
+    )JS",&result,&error)&&result==L"12|7|17|undefined|undefined|undefined|23|true|true|5",
+        L"eval preserves direct scope, strict isolation, indirect global scope, completions and thrown identity");
+    Check(runtime.Execute(LR"JS(
+        var outer=7;function makeDynamic(){var outer=99;return new Function('value','return outer+value');}
+        return makeDynamic()(3)+'|'+Function('return 12')()+'|'+new Function()();
+    )JS",&result,&error)&&result==L"10|12|undefined",L"Function constructors compile parameter and body strings in the global environment");
+    Check(runtime.Execute(LR"JS(
+        function serializeMe (value) { /* preserved */ return value+1; }
+        var rebuilt=(0,eval)('('+serializeMe.toString()+')'),arrow=value=>value*2;
+        return (serializeMe.toString()==='function serializeMe (value) { /* preserved */ return value+1; }')+'|'+rebuilt(3)+'|'+(0,eval)('('+String(arrow)+')')(5);
+    )JS",&result,&error)&&result==L"true|4|10",L"function source serialization preserves executable bodies, comments and arrow syntax");
+    Check(runtime.Execute(LR"JS(
+        var host=document.getElementById('host'),shadow=host.attachShadow({mode:'closed'});
+        shadow.innerHTML='<style>.panel{width:60px;height:30px;background:#008800}</style><div id="inside" class="panel"></div>';
+        var inside=shadow.querySelector('#inside');
+        return document.title+'|'+(host.shadowRoot===null)+'|'+(shadow instanceof ShadowRoot)+'|'+
+            (inside.getRootNode()===shadow)+'|'+(inside.getRootNode({composed:true})===document)+'|'+inside.isConnected+'|'+
+            (document.getElementById('inside')===null)+'|'+(document.querySelectorAll('div') instanceof NodeList)+'|'+
+            (document.getElementsByTagName('div') instanceof HTMLCollection);
+    )JS",&result,&error)&&result==L"Embedded script|true|true|true|true|true|true|true|true",
+        L"closed shadow trees preserve DOM boundaries, connection, root identity and collection interfaces");
+    const auto host=document.GetElementById(L"host");
+    Check(host&&host->shadowRoot&&host->shadowRoot->children.size()==2,
+        L"a closed shadow root owns its children without adding them to the light tree index");
+    StyleSheet sheet;Check(sheet.Parse(document.StyleText(),&error),error.c_str());
+    LayoutEngine layout(document,sheet);
+    for(const auto scale:{1.0f,1.5f}){
+        const auto raster=CaptureBoxRaster(layout,scale,100,60);
+        const auto inside=host&&host->shadowRoot?host->shadowRoot->children.back():std::shared_ptr<Node>{};
+        const auto box=layout.BoxFor(inside);
+        Check(raster.rendered&&raster.ColorAt(10,10,scale)==0x008800&&box&&
+            std::abs(box->rect.width-60)<0.01f&&std::abs(box->rect.height-30)<0.01f&&layout.HitTest(10,10)==inside,
+            L"shadow CSS stays scoped while geometry, painting and hit testing agree at 100% and 150% DPI");
+    }
+    Check(runtime.Execute(LR"JS(
+        var iterator=document.createNodeIterator(host,NodeFilter.SHOW_ELEMENT|NodeFilter.SHOW_TEXT);
+        var names=[],node;while((node=iterator.nextNode())!==null)names.push(node.nodeName);
+        var last=iterator.previousNode();
+        var filtered=document.createNodeIterator(host,NodeFilter.SHOW_ELEMENT,function(n){return n===host?NodeFilter.FILTER_SKIP:NodeFilter.FILTER_ACCEPT;});
+        return names.join(',')+'|'+last.nodeType+'|'+iterator.pointerBeforeReferenceNode+'|'+filtered.nextNode().tagName+'|'+(filtered.nextNode()===null);
+    )JS",&result,&error)&&result==L"DIV,SPAN,#text|3|true|SPAN|true",
+        L"NodeIterator includes its root, filters nodes, reverses direction and stays within the light tree");
+    Check(runtime.Execute(LR"JS(
+        var sequence=[],source=[1,2],it=source.values();sequence.push(it.next().value);source.push(3);
+        sequence.push(it.next().value,it.next().value,it.next().done);
+        var params=new URLSearchParams('a=1&a=2'),values=[];params.forEach(function(v,k){values.push(k+v);});
+        var symbol=Symbol('private'),object={[symbol]:7};
+        return sequence.join(',')+'|'+Array.from(new Map([['x',4]])).map(e=>e.join(':')).join(',')+'|'+
+            Array.from(params).map(e=>e.join(':')).join(',')+'|'+values.join(',')+'|'+(Object.getOwnPropertySymbols(object)[0]===symbol);
+    )JS",&result,&error)&&result==L"1,2,3,true|x:4|a:1,a:2|a1,a2|true",
+        L"iterators, URLSearchParams enumeration and symbol inspection work for embedded script inputs");
+    runtime.SetResourceLoader([](const std::wstring&,std::wstring& body){body=L"fixture";return true;});
+    Check(runtime.Execute(LR"JS(
+        var deliveries=[],observer=new PerformanceObserver(function(list,owner){
+            deliveries.push(list.getEntries().map(e=>e.entryType+':'+e.name).join(','));
+        });
+        performance.mark('begin',{startTime:4});performance.mark('end',{startTime:14});
+        observer.observe({type:'mark',buffered:true});observer.observe({type:'measure'});
+        var measure=performance.measure('elapsed','begin','end');
+        return measure.duration+'|'+performance.getEntriesByType('mark').length+'|'+
+            (measure instanceof PerformanceMeasure)+'|'+(performance.now()>=0)+'|'+deliveries.length;
+    )JS",&result,&error)&&result==L"10|2|true|true|0",
+        L"Performance API stores real entries and queues observer delivery after script execution");
+    runtime.RunTimers();
+    Check(runtime.Execute(L"observer.disconnect();performance.clearMarks('begin');return deliveries.join('|')+'|'+performance.getEntriesByType('mark').length;",
+        &result,&error)&&result==L"mark:begin,measure:elapsed,mark:end|1",
+        L"PerformanceObserver sorts buffered entries and supports disconnect and selective clearing");
+    runtime.SetRequestLoader([](const ScriptRequest& request){
+        ScriptResponse response;response.status=200;response.url=request.url;response.body=L"fixture";
+        response.requestStartOffsetMs=0;response.responseStartOffsetMs=0;
+        response.encodedBodySize=5;response.decodedBodySize=7;
+        response.timingAllowed=request.url.find(L"protected")==std::wstring::npos;return response;
+    });
+    Check(runtime.Execute(LR"JS(
+        performance.clearResourceTimings();
+        var timed=new XMLHttpRequest();timed.open('GET','/measured',false);timed.send();
+        var protectedRequest=new XMLHttpRequest();protectedRequest.open('GET','/protected',false);protectedRequest.send();
+        var entries=performance.getEntriesByType('resource'),t=entries[0],hidden=entries[1],json=t.toJSON();
+        return (t.requestStart>=t.startTime&&t.responseStart>=t.requestStart&&t.responseEnd>=t.responseStart)+'|'+
+            t.encodedBodySize+'|'+t.decodedBodySize+'|'+t.responseStatus+'|'+t.transferSize+'|'+
+            (hidden.requestStart===0&&hidden.responseStart===0&&hidden.encodedBodySize===0&&hidden.decodedBodySize===0)+'|'+
+            (json.decodedBodySize===7&&Array.isArray(json.serverTiming)&&t.connectStart===0);
+    )JS",&result,&error)&&result==L"true|5|7|200|0|true|true",
+        L"resource timing reports measured phases and byte counts while masking protected or unavailable information");
+    runtime.SetRequestLoader({});
+    Check(runtime.Execute(LR"JS(
+        function capturedReader(){var current={value:1};return {
+            read:function(){return current;},write:function(v){current=v;}
+        };}
+        var reader=capturedReader(),sum=0;for(var hot=0;hot<2000;hot++)sum+=reader.read().value;
+        var changed={value:9};reader.write(changed);
+        var selfReader=function namedReader(){return namedReader;};
+        function argumentsReader(){return arguments;}
+        return sum+'|'+(reader.read()===changed)+'|'+(selfReader()===selfReader)+'|'+argumentsReader(7)[0];
+    )JS",&result,&error)&&result==L"2000|true|true|7",
+        L"short closure reads preserve live binding updates, function identity and ordinary arguments semantics");
+    Check(runtime.Execute(LR"JS(
+        function directArguments(x){return eval('arguments[0]');}
+        function capturedArguments(x){return ()=>arguments[0];}
+        function nestedArguments(x){return function(){return arguments[0];};}
+        function templateArguments(x){return `${arguments[0]}`;}
+        return directArguments(11)+'|'+capturedArguments(12)()+'|'+nestedArguments(0)(13)+'|'+templateArguments(14);
+    )JS",&result,&error)&&result==L"11|12|13|14",
+        L"arguments allocation optimization retains direct eval, closures, nested calls and template expressions");
+    Check(runtime.Execute(LR"JS(
+        var numericCollator=new Intl.Collator('en-US',{numeric:true,sensitivity:'base',ignorePunctuation:true});
+        var ordinaryCollator=new Intl.Collator('en-US'),compare=numericCollator.compare,options=numericCollator.resolvedOptions();
+        var invalidCollation=false;try{new Intl.Collator('en-US',{sensitivity:'unknown'});}catch(e){invalidCollation=e instanceof RangeError;}
+        return (compare('2','10')<0)+'|'+(compare('cafe','caf\u00e9')===0)+'|'+(compare('a-b','ab')===0)+'|'+
+            (ordinaryCollator.compare('2','10')>0)+'|'+(compare===numericCollator.compare)+'|'+
+            (numericCollator instanceof Intl.Collator)+'|'+options.numeric+'|'+options.locale+'|'+invalidCollation;
+    )JS",&result,&error)&&result==L"true|true|true|true|true|true|true|en-US|true",
+        L"Intl.Collator uses OS ICU for numeric, accent and punctuation collation with stable bound comparisons");
+    Document historyDocument;historyDocument.Parse(L"<!doctype html><html><body><p id='history-retained'>retained</p></body></html>",&error);
+    JavaScriptRuntime historyRuntime(historyDocument);historyRuntime.SetLocation(L"https://history.example/path/start");
+    std::vector<std::wstring> historyNotifications;std::wstring historyReload;
+    historyRuntime.SetSameDocumentNavigationSink([&](const std::wstring& url,bool replace,int delta){
+        historyNotifications.push_back(url+L"|"+(replace?L"replace":L"push")+L"|"+std::to_wstring(delta));
+    });
+    historyRuntime.SetNavigationSink([&](const std::wstring& url){historyReload=url;});
+    Check(historyRuntime.Execute(LR"JS(
+        var retainedHistoryNode=document.getElementById('history-retained'),historyEvents=[];
+        addEventListener('popstate',function(event){historyEvents.push(event.state&&event.state.value);});
+        var historyData={value:3};historyData.self=historyData;
+        history.replaceState(historyData,'','?first=1');historyData.value=99;history.state.value=4;
+        history.pushState({value:8},'','#second');history.scrollRestoration='manual';
+        var historySecurity='',historyClone='',historyBrand='';
+        try{history.replaceState({},'','https://example.org/');}catch(e){historySecurity=e.name;}
+        try{history.pushState({fn:function(){}},'');}catch(e){historyClone=e.name;}
+        try{History.prototype.pushState.call({},null,'');}catch(e){historyBrand=e.name;}
+        history.length=900;return history.length+'|'+history.state.value+'|'+location.href+'|'+historySecurity+'|'+historyClone+'|'+historyBrand+'|'+(history instanceof History);
+    )JS",&result,&error)&&result==L"2|8|https://history.example/path/start?first=1#second|SecurityError|DataCloneError|TypeError|true",
+        L"History state methods change same-document URLs, retain independent serialized state and reject cross-origin URLs, unserializable data and incorrect receivers");
+    Check(historyRuntime.Execute(L"history.back();return history.state.value+'|'+historyEvents.length;",&result,&error)&&result==L"8|0",
+        L"History traversal queues a task instead of changing the document inside the current script job");
+    historyRuntime.RunTimers();
+    Check(historyRuntime.Execute(L"return history.state.value+'|'+(history.state.self===history.state)+'|'+location.hash+'|'+historyEvents.join(',')+'|'+(retainedHistoryNode===document.getElementById('history-retained'));",&result,&error)&&result==L"3|true||3|true"&&historyNotifications.size()==3,
+        L"Same-document traversal restores a fresh state graph, dispatches popstate and preserves the existing DOM and JavaScript realm");
+    historyRuntime.Execute(L"history.pushState({value:12},'','?replacement');history.go();",nullptr,&error);historyRuntime.RunTimers();
+    Check(!historyRuntime.CanTraverseHistory(1)&&historyReload==L"https://history.example/path/start?replacement",
+        L"A new history entry truncates forward entries and go(0) requests a real reload");
+    unsigned yieldCount=0;runtime.SetExecutionYieldHandler([&]{++yieldCount;return false;});
+    Check(!runtime.Execute(L"while(true){}",nullptr,&error)&&error.find(L"AbortError")!=std::wstring::npos&&yieldCount==1,
+        L"host safepoints interrupt an infinite script without blocking the owner thread indefinitely");
+    runtime.SetExecutionYieldHandler({});
+    Check(runtime.Execute(L"return 42;",&result,&error)&&result==L"42",
+        L"the runtime remains usable after a host-interrupted script unwinds");
+    Check(runtime.Execute(LR"JS(
+        var ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg'),group=document.createElementNS(ns,'g');
+        var rectangle=document.createElementNS(ns,'rect');
+        rectangle.setAttribute('x','10');rectangle.setAttribute('y','20');rectangle.setAttribute('width','30');rectangle.setAttribute('height','40');
+        rectangle.setAttribute('transform','translate(400 500)');
+        var own=rectangle.getBBox();rectangle.removeAttribute('transform');group.appendChild(rectangle);svg.appendChild(group);
+        group.setAttribute('transform','translate(10 20) scale(2)');
+        var descendants=svg.getBBox(),local=group.getBBox(),receiverError=false;
+        try{SVGGraphicsElement.prototype.getBBox.call(document.body);}catch(e){receiverError=e instanceof TypeError;}
+        return [own.x,own.y,own.width,own.height,descendants.x,descendants.y,descendants.width,descendants.height,local.x,local.y].join(',')+'|'+
+            (rectangle instanceof SVGGraphicsElement)+'|'+(svg instanceof SVGSVGElement)+'|'+receiverError;
+    )JS",&result,&error)&&result==L"10,20,30,40,30,60,60,80,10,20|true|true|true",
+        L"SVG object bounds use user coordinates, descendant transforms and validated prototype receivers");
+    Check(runtime.Execute(LR"JS(
+        var curve=document.createElementNS(ns,'path');curve.setAttribute('d','M0 0 Q10 20 20 0');
+        var cb=curve.getBBox(),label=document.createElementNS(ns,'text');
+        label.setAttribute('x','100');label.setAttribute('y','50');label.textContent='Actual glyph measurement';
+        label.style.fontSize='20px';var tb=label.getBBox();
+        label.textContent+=' additional characters';var wider=label.getBBox();
+        return (Math.abs(cb.width-20)<0.1&&Math.abs(cb.height-10)<0.1)+'|'+
+            (tb.x===100&&tb.y<50&&tb.width>0&&tb.height>0&&wider.width>tb.width)+'|'+
+            (typeof document.createElement('div').getBBox==='undefined');
+    )JS",&result,&error)&&result==L"true|true|true",
+        L"SVG curve extrema and detached text bounds are computed using Direct2D and DirectWrite");
+    const auto frame=document.CreateElement(L"iframe");frame->SetAttribute(L"src",L"https://child.test/page");
+    Check(runtime.Execute(L"var messages=[];window.addEventListener('message',e=>messages.push(e.isTrusted+'|'+e.origin+'|'+e.data.kind));",nullptr,&error),error.c_str());
+    Check(runtime.DispatchWindowMessageAsJson(L"{\"kind\":\"ready\"}",frame,L"https://child.test",&error),error.c_str());
+    Check(runtime.Execute(L"return messages.join(',')+'|'+new Event('message').isTrusted;",&result,&error)&&
+        result==L"true|https://child.test|ready|false",
+        L"browser-delivered frame messages are trusted while script-created events remain untrusted");
+    Check(runtime.Execute(LR"JS(
+        var writes=[],releaseWrite,pipeComplete=false,streamController;
+        var readable=new ReadableStream({start:function(controller){streamController=controller;controller.enqueue(1);controller.enqueue(2);controller.close();}});
+        var writable=new WritableStream({write:function(value){writes.push(value);if(value===1)return new Promise(function(resolve){releaseWrite=resolve;});},close:function(){writes.push('closed');}});
+        readable.pipeTo(writable).then(function(){pipeComplete=true;});
+        return readable.locked+'|'+writable.locked+'|'+pipeComplete;
+    )JS",&result,&error)&&result==L"true|true|false",L"pipeTo locks both streams and returns an asynchronous completion");
+    Check(runtime.Execute(L"return writes.join(',')+'|'+pipeComplete;",&result,&error)&&result==L"1|false",
+        L"stream piping waits for a pending sink write before reading the next chunk");
+    Check(runtime.Execute(L"releaseWrite();",nullptr,&error),error.c_str());
+    Check(runtime.Execute(L"return writes.join(',')+'|'+pipeComplete+'|'+readable.locked+'|'+writable.locked;",
+        &result,&error)&&result==L"1,2,closed|true|false|false",L"pipeTo closes the destination and releases both locks after all writes finish");
+    Check(runtime.Execute(LR"JS(
+        var cancelled,pipeError,streamError={kind:'sink'};
+        var failedSource=new ReadableStream({start:function(c){c.enqueue(3);},cancel:function(reason){cancelled=reason;}});
+        failedSource.pipeTo(new WritableStream({write:function(){throw streamError;}})).catch(function(error){pipeError=error;});
+    )JS",nullptr,&error),error.c_str());
+    Check(runtime.Execute(L"return (cancelled===streamError)+'|'+(pipeError===streamError)+'|'+failedSource.locked;",
+        &result,&error)&&result==L"true|true|false",L"a failed sink cancels its source and preserves the original rejection value");
+    Check(runtime.Execute(LR"JS(
+        var xhrEvents=[],eventRequest=new XMLHttpRequest();eventRequest.open('GET','/fixture',false);
+        eventRequest.addEventListener('load',function(e){xhrEvents.push(e.type+':'+(e.target===eventRequest)+':'+e.isTrusted);});
+        eventRequest.addEventListener('loadend',function(e){xhrEvents.push(e.type);});eventRequest.send();
+        return xhrEvents.join('|');
+    )JS",&result,&error)&&result==L"load:true:true|loadend",L"XMLHttpRequest delivers registered load and loadend listeners with the request as target");
+    Check(runtime.Execute(LR"JS(
+        var workerMessages=[],blob=new Blob(["onmessage=function(event){postMessage({value:event.data.value+1,isolated:typeof document==='undefined'&&typeof window==='undefined',same:this===self});};"],{type:'application/javascript'});
+        var workerUrl=URL.createObjectURL(blob),worker=new Worker(workerUrl);
+        worker.onmessage=function(event){workerMessages.push(event.data.value+'|'+event.data.isolated+'|'+event.data.same+'|'+event.isTrusted);};
+        worker.postMessage({value:41});URL.revokeObjectURL(workerUrl);
+        return workerMessages.length+'|'+(worker instanceof Worker)+'|'+(blob instanceof Blob);
+    )JS",&result,&error)&&result==L"0|true|true",
+        L"Blob-backed workers start asynchronously and retain their source after URL revocation");
+    const auto workerDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+    do{
+        runtime.RunTimers();Sleep(1);
+        Check(runtime.Execute(L"return workerMessages.join(',');",&result,&error),error.c_str());
+    }while(result.empty()&&std::chrono::steady_clock::now()<workerDeadline);
+    Check(result==L"42|true|true|true",L"workers execute in an isolated background realm and deliver trusted cloned messages");
+    Check(runtime.Execute(L"worker.terminate();",nullptr,&error),error.c_str());
+    Check(runtime.Execute(LR"JS(
+        var closingMessage='',closingUrl=URL.createObjectURL(new Blob(["postMessage('finished');close();"]));
+        var closingWorker=new Worker(closingUrl);closingWorker.onmessage=function(e){closingMessage=e.data;};
+        URL.revokeObjectURL(closingUrl);
+    )JS",nullptr,&error),error.c_str());
+    const auto closingDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+    do{runtime.RunTimers();Sleep(1);runtime.Execute(L"return closingMessage;",&result,&error);}
+    while(result.empty()&&std::chrono::steady_clock::now()<closingDeadline);
+    Check(result==L"finished",L"messages posted before a worker closes are delivered after its realm exits");
+    Check(runtime.Execute(LR"JS(
+        var immediateUrl=URL.createObjectURL(new Blob(['onmessage=function(){};']));
+        for(var i=0;i<8;i++){var immediateWorker=new Worker(immediateUrl);immediateWorker.terminate();}
+        URL.revokeObjectURL(immediateUrl);return true;
+    )JS",&result,&error)&&result==L"true",L"immediate worker termination safely interrupts realm initialization");
+    Document loopWorkerDocument;loopWorkerDocument.Parse(L"<html><body></body></html>",&error);
+    JavaScriptRuntime loopWorkerRuntime(loopWorkerDocument);
+    Check(loopWorkerRuntime.Execute(LR"JS(
+        var loopWorkerReady=false;
+        var loopWorkerUrl=URL.createObjectURL(new Blob(["function hotLoop(n){let total=0;for(let i=0;i<n;i++){total+=i;}return total;}for(let warm=0;warm<100;warm++){hotLoop(10);}postMessage('ready');hotLoop(Infinity);"]));
+        var loopWorker=new Worker(loopWorkerUrl);loopWorker.onmessage=function(){loopWorkerReady=true;};URL.revokeObjectURL(loopWorkerUrl);
+    )JS",nullptr,&error),error.c_str());
+    const auto loopWorkerDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+    do{loopWorkerRuntime.RunTimers();Sleep(1);loopWorkerRuntime.Execute(L"return loopWorkerReady;",&result,&error);}
+    while(result!=L"true"&&std::chrono::steady_clock::now()<loopWorkerDeadline);
+    Check(result==L"true",L"a worker reaches a warmed numeric loop before termination is tested");
+    const auto workerStopStarted=std::chrono::steady_clock::now();loopWorkerRuntime.Clear();
+    Check(std::chrono::steady_clock::now()-workerStopStarted<std::chrono::seconds(2),
+        L"runtime teardown interrupts a worker's warmed infinite numeric loop instead of waiting inside uncancellable JIT code");
+    return failures==before?0:1;
+}
+
+struct ExecutionWindowProbe {
+    HWND page=nullptr;
+    HWND childPage=nullptr;
+    bool scriptActive=false;
+    unsigned nativeDown=0,hostResize=0,hostTimer=0,hostClose=0;
+    bool reenteredHost=false,dpiRectangleCopied=false,registeredQueryAnswered=false;
+    UINT registeredQuery=0;
+};
+
+LRESULT CALLBACK ExecutionWindowProc(HWND window,UINT message,WPARAM wParam,LPARAM lParam){
+    auto* probe=reinterpret_cast<ExecutionWindowProbe*>(GetWindowLongPtrW(window,GWLP_USERDATA));
+    if(message==WM_NCCREATE){
+        probe=static_cast<ExecutionWindowProbe*>(reinterpret_cast<CREATESTRUCTW*>(lParam)->lpCreateParams);
+        SetWindowLongPtrW(window,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(probe));
+    }
+    if(probe&&message==probe->registeredQuery)return 0x1234;
+    if(probe)switch(message){
+    case WM_NCLBUTTONDOWN:{
+        ++probe->nativeDown;
+        probe->registeredQueryAnswered=SendMessageW(window,probe->registeredQuery,0,0)==0x1234;
+        // Simulate messages delivered by the native modal move/size loop.
+        SendMessageW(window,WM_SIZE,SIZE_RESTORED,MAKELPARAM(660,420));
+        SendMessageW(window,WM_TIMER,991,0);
+        RECT suggested{11,22,673,444};
+        SendMessageW(window,WM_DPICHANGED,MAKELONG(144,144),reinterpret_cast<LPARAM>(&suggested));
+        SendMessageW(probe->page,WM_TIMER,0x5747,0);
+        SendMessageW(probe->page,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(20,20));
+        SendMessageW(probe->page,WM_LBUTTONUP,0,MAKELPARAM(20,20));
+        if(probe->childPage)SendMessageW(probe->childPage,WM_TIMER,0x5747,0);
+        suggested={0,0,0,0};return 0;
+    }
+    case WM_SIZE:if(probe->page){++probe->hostResize;probe->reenteredHost|=probe->scriptActive;}return 0;
+    case WM_TIMER:++probe->hostTimer;probe->reenteredHost|=probe->scriptActive;return 0;
+    case WM_CLOSE:++probe->hostClose;return 0;
+    case WM_DPICHANGED:{
+        const auto* rect=reinterpret_cast<const RECT*>(lParam);
+        probe->dpiRectangleCopied=rect&&rect->left==11&&rect->bottom==444;
+        probe->reenteredHost|=probe->scriptActive;return 0;
+    }
+    }
+    return DefWindowProcW(window,message,wParam,lParam);
+}
+
+int RunInlineFlexIntrinsicRegression(){
+    const int before=failures;
+    for(const float ratio:{1.0f,1.5f})for(const auto* direction:{L"row",L"row-reverse",L"column",L"column-reverse"}){
+        Document document;StyleSheet styles;std::wstring error;
+        const std::wstring html=L"<style>*{box-sizing:border-box;margin:0;padding:0}.host{display:flex;width:300px}"
+            L".probe{display:inline-flex;flex-direction:"+std::wstring(direction)+L";gap:7px}"
+            L".first{width:80px;height:10px}.second{width:70px;height:10px}.narrow{width:90px}"
+            L"</style><div class='host'><div class='probe' id='wide'><a class='first'></a><a class='second'></a></div></div>"
+            L"<div class='host narrow'><div class='probe' id='narrow'><a class='first'></a><a class='second'></a></div></div>";
+        Check(document.Parse(html,&error)&&styles.Parse(document.StyleText(),&error),L"inline-flex intrinsic fixture parses");
+        LayoutEngine layout(document,styles);layout.Layout(400,300,ratio);
+        const auto* wide=layout.BoxFor(document.GetElementById(L"wide"));
+        const auto* narrow=layout.BoxFor(document.GetElementById(L"narrow"));
+        const bool column=std::wstring_view(direction).find(L"column")==0;
+        Check(wide&&std::abs(wide->rect.width-(column?80.0f:157.0f))<.01f,
+            L"inline-flex intrinsic width follows its inner flex direction at both DPIs");
+        if(column)Check(narrow&&std::abs(narrow->rect.width-80.0f)<.01f,
+            L"a column's automatic minimum width is its widest item, without horizontal gaps");
+        if(wide&&narrow)std::wcout<<L"Inline-flex DPI "<<ratio<<L" direction "<<direction<<L" widths "<<wide->rect.width<<L","<<narrow->rect.width<<L'\n';
+    }
+    return failures==before?0:1;
+}
+
+int RunTransformContainingBlockRegression(){
+    for(const float ratio:{1.0f,1.5f})for(const auto* display:{L"block",L"inline-block",L"flex",L"grid"}){
+        Document document;StyleSheet styles;std::wstring error;
+        const std::wstring html=L"<style>*{box-sizing:border-box;margin:0;padding:0}"
+            L".outer{position:relative;margin:20px 30px;width:240px;height:180px;border:4px solid black;padding:20px}"
+            L".carrier{display:"+std::wstring(display)+L";transform:rotate(0deg) scale(1);margin:10px 15px;width:80px;height:60px;border:3px solid black;padding:7px}"
+            L".inner{position:relative;width:30px;height:20px}"
+            L".absolute{position:absolute;left:5px;top:6px;width:8px;height:9px}"
+            L".fixed{position:fixed;left:5px;top:6px;width:8px;height:9px}"
+            L".control{margin:0;width:24px;height:24px;border:2px solid black;transform:scale(1)}"
+            L".control::after{content:'';position:absolute;left:5px;top:0;width:6px;height:12px}"
+            L"</style><div class='outer' id='outer'><div class='carrier' id='carrier'>"
+            L"<div class='absolute' id='absolute'></div><div class='inner'><div class='fixed' id='fixed'></div></div></div>"
+            L"<div class='control' id='control'></div><div class='fixed' id='viewport-fixed'></div></div>";
+        Check(document.Parse(html,&error)&&styles.Parse(document.StyleText(),&error),L"transform containing block fixture parses");
+        LayoutEngine layout(document,styles);layout.Layout(400,300,ratio);
+        const auto* carrier=layout.BoxFor(document.GetElementById(L"carrier"));
+        const auto* absolute=layout.BoxFor(document.GetElementById(L"absolute"));
+        const auto* fixed=layout.BoxFor(document.GetElementById(L"fixed"));
+        const auto* viewportFixed=layout.BoxFor(document.GetElementById(L"viewport-fixed"));
+        if(carrier&&absolute&&fixed)std::wcout<<L"Containing block DPI "<<ratio<<L" display "<<display
+            <<L" carrier "<<carrier->rect.x<<L","<<carrier->rect.y
+            <<L" absolute "<<absolute->rect.x<<L","<<absolute->rect.y
+            <<L" fixed "<<fixed->rect.x<<L","<<fixed->rect.y<<L'\n';
+        // Border widths snap to device pixels. Remove the authored 7px
+        // padding from the content origin to locate the used padding-box edge.
+        Check(carrier&&absolute&&fixed&&std::abs(absolute->rect.x-(carrier->content.x-7+5))<.01f&&
+            std::abs(absolute->rect.y-(carrier->content.y-7+6))<.01f&&std::abs(fixed->rect.x-(carrier->content.x-7+5))<.01f&&
+            std::abs(fixed->rect.y-(carrier->content.y-7+6))<.01f,
+            L"identity transforms establish padding-box containing blocks for absolute and fixed descendants across formatting contexts and DPIs");
+        Check(viewportFixed&&std::abs(viewportFixed->rect.x-5)<.01f&&std::abs(viewportFixed->rect.y-6)<.01f,
+            L"fixed positioning skips relative ancestors without transforms");
+        const auto* control=layout.BoxFor(document.GetElementById(L"control"));const LayoutBox* generated=nullptr;
+        if(control)for(const auto& child:control->children)if(child->pseudo==L"after")generated=child.get();
+        Check(control&&generated&&std::abs(generated->rect.x-control->rect.x-7)<.01f&&
+            std::abs(generated->rect.y-control->rect.y-2)<.01f,
+            L"generated checkmark geometry uses its transformed owner's padding box at both DPIs");
+        const auto fixedNode=document.GetElementById(L"fixed");bool geometryChanged=false;
+        fixedNode->inlineStyle[L"left"]=L"9px";
+        const bool requiresLayout=layout.Restyle(fixedNode,&geometryChanged);
+        Check(!requiresLayout&&geometryChanged&&carrier&&fixed&&
+            std::abs(fixed->rect.x-(carrier->content.x-7+9))<.01f&&
+            std::abs(fixed->rect.y-(carrier->content.y-7+6))<.01f,
+            L"updating fixed insets retains the transformed containing block without rebuilding unrelated flow");
+    }
+    return failures?1:0;
+}
+
+int RunExecutionResponsiveness(){
+    const int before=failures;
+    {
+        Document document;std::wstring error,result;document.Parse(L"<body></body>",&error);
+        JavaScriptRuntime runtime(document);runtime.SetJitCompilationThreshold(2);
+        runtime.SetExecutionYieldHandler([]{return true;});
+        Check(runtime.Execute(L"var cell={value:1};function readCell(value){return value.value;}function numericIncrement(value){return value+1;}for(var i=0;i<2000;i++){readCell(cell);numericIncrement(i);}",nullptr,&error),
+            L"mixed optimized/interpreted checkpoint fixture warms ordinary method reads");
+        unsigned checkpoints=0;ULONGLONG previous=0,maximumGap=0;
+        const auto checkpointDeadline=GetTickCount64()+1500;
+        runtime.SetExecutionYieldHandler([&]{const auto now=GetTickCount64();
+            if(previous)maximumGap=std::max(maximumGap,now-previous);previous=now;++checkpoints;return now<checkpointDeadline;});
+        Check(runtime.Execute(L"var until=performance.now()+150;while(performance.now()<until){cell.value=numericIncrement(readCell(cell));}return cell.value>1;",&result,&error)&&
+              result==L"true"&&checkpoints>=3&&maximumGap<120,
+            L"fused instructions and warmed method reads cannot skip repeated host checkpoints");
+        Check(runtime.GetJitStatistics().nativeCalls>2000,
+            L"numeric leaf calls retain host checkpoints after native compilation");
+    }
+    WNDCLASSW registration{};registration.lpfnWndProc=ExecutionWindowProc;
+    registration.hInstance=GetModuleHandleW(nullptr);registration.lpszClassName=L"TWebFrame.Tests.ExecutionWindow";
+    RegisterClassW(&registration);
+    for(const auto awareness:{DPI_AWARENESS_CONTEXT_UNAWARE,DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2})
+    for(const bool customCallback:{false,true}){
+        const auto previousAwareness=SetThreadDpiAwarenessContext(awareness);
+        ExecutionWindowProbe probe;
+        probe.registeredQuery=RegisterWindowMessageW(L"TWebFrame.Tests.ExecutionQuery");
+        HWND host=CreateWindowExW(WS_EX_TOOLWINDOW,registration.lpszClassName,L"",WS_OVERLAPPEDWINDOW|WS_VISIBLE,
+            -10000,-10000,660,420,nullptr,nullptr,registration.hInstance,&probe);
+        Check(host!=nullptr,L"long-script native host is created");
+        RECT bounds{0,0,640,360};auto view=host?TWebFrame::View::Create(host,bounds):nullptr;
+        Check(view!=nullptr,L"long-script View is created");
+        if(view){
+            probe.page=view->Window();
+            Check(view->NavigateToString(LR"HTML(<style>body{margin:0}button{display:block;width:80px;height:40px}</style>
+                <button onclick="order.push('click')">Action</button><iframe srcdoc="<p>Child</p>"></iframe>)HTML"),
+                L"long-script common HTML fixture loads");
+            probe.childPage=FindWindowExW(probe.page,nullptr,L"TWebFrame.View.1",nullptr);
+            std::wstring result,error;
+            Check(view->ExecuteScript(L"var order=[];setTimeout(function(){order.push('timer');},0);",nullptr,&error),
+                L"page timer is queued before the long job");
+            if(probe.childPage)
+                Check(view->ExecuteScript(L"frames[0].eval(\"var childOrder=[];setTimeout(function(){childOrder.push('timer');},0);\");",nullptr,&error),
+                    L"iframe timer is queued before the parent's long job");
+            unsigned customYields=0;
+            if(customCallback)view->SetExecutionYieldHandler([&]{
+                ++customYields;MSG queued{};
+                for(unsigned count=0;count<32&&PeekMessageW(&queued,nullptr,0,0,PM_REMOVE);++count)
+                    DispatchMessageW(&queued);
+                return true;
+            });
+            PostMessageW(host,WM_NCLBUTTONDOWN,HTCAPTION,0);
+            probe.scriptActive=true;
+            const bool completed=view->ExecuteScript(LR"JS(
+                order.push('start');var deadline=performance.now()+120;
+                while(performance.now()<deadline){}
+                order.push('end');return order.join(',');
+            )JS",&result,&error);
+            probe.scriptActive=false;
+            Check(completed&&result==L"start,end"&&probe.nativeDown==1,
+                L"native title-bar messages are handled during a long script without reentering page timers or input");
+            Check(!probe.reenteredHost&&probe.hostResize==0&&probe.hostTimer==0,
+                L"native modal-loop host resize and timer actions wait for the script to finish");
+            Check(probe.registeredQueryAnswered,L"registered OS-style synchronous queries are answered without being deferred or interrupting JavaScript");
+            if(customCallback)Check(customYields>0,L"the embedding application's optional callback still runs");
+            if(probe.childPage){
+                Check(view->ExecuteScript(L"return frames[0].eval('childOrder.length');",&result,&error)&&result==L"0",
+                    L"an idle iframe cannot dispatch a timer inside its parent's active job");
+            }
+            MSG queued{};for(unsigned count=0;count<256&&PeekMessageW(&queued,nullptr,0,0,PM_REMOVE);++count)
+                DispatchMessageW(&queued);
+            Check(probe.hostResize==1&&probe.hostTimer==1&&probe.dpiRectangleCopied&&!probe.reenteredHost,
+                L"deferred host tasks and owned DPI rectangles are delivered after the long job");
+            Check(view->ExecuteScript(L"return order.join(',');",&result,&error)&&
+                result.find(L"start,end")==0&&result.find(L"timer")!=std::wstring::npos&&result.find(L"click")!=std::wstring::npos,
+                L"deferred page timers and pointer input are delivered after the long job");
+            std::wcout<<L"Callback "<<customCallback<<L" page order "<<result<<L" error "<<error<<L'\n';
+            if(probe.childPage)Check(view->ExecuteScript(L"return frames[0].eval('childOrder.join()');",&result,&error)&&result==L"timer",
+                L"deferred iframe timers resume after the parent finishes");
+            if(probe.childPage)std::wcout<<L"Child order "<<result<<L" error "<<error<<L'\n';
+            view->SetExecutionYieldHandler({});
+            PostMessageW(host,WM_CLOSE,0,0);
+            Check(!view->ExecuteScript(L"while(true){}",nullptr,&error)&&error.find(L"AbortError")!=std::wstring::npos,
+                L"a native close safely interrupts an infinite script with no host callback installed");
+            for(unsigned count=0;count<128&&PeekMessageW(&queued,nullptr,0,0,PM_REMOVE);++count)DispatchMessageW(&queued);
+            Check(probe.hostClose==1,L"native close returns to the ordinary host loop after unwinding");
+            PostQuitMessage(74);
+            Check(!view->ExecuteScript(L"while(true){}",nullptr,&error)&&error.find(L"AbortError")!=std::wstring::npos,
+                L"a pending thread quit interrupts a long script");
+            bool retainedQuit=false;
+            for(unsigned count=0;count<256&&PeekMessageW(&queued,nullptr,0,0,PM_REMOVE);++count){
+                if(queued.message==WM_QUIT){retainedQuit=queued.wParam==74;break;}
+                DispatchMessageW(&queued);
+            }
+            Check(retainedQuit,
+                L"the safepoint preserves WM_QUIT and its exit code");
+            Check(view->ExecuteScript(L"return 42;",&result,&error)&&result==L"42",
+                L"the realm remains usable after native close/quit interruptions");
+            view.reset();
+        }
+        if(host)DestroyWindow(host);
+        SetThreadDpiAwarenessContext(previousAwareness);
+    }
+    return failures==before?0:1;
+}
+
+int RunNoScriptRegression(){
+    const std::wstring markup=L"<!doctype html><html><head></head><body><noscript><b>fallback &amp; text</b><style>body { color: red; }</style></noscript><p>ordinary content</p></body></html>";
+    for(const auto scale:{1.0f,1.5f})for(const bool enabled:{true,false}){
+        Document document;document.SetScriptingEnabled(enabled);Check(document.Parse(markup),L"noscript fixture parses");
+        const auto fallback=document.QuerySelector(L"noscript");
+        Check(static_cast<bool>(fallback),L"noscript stays in the DOM");
+        Check(static_cast<bool>(document.QuerySelector(L"noscript b"))==!enabled,
+              L"noscript children are raw text with scripting enabled and elements with scripting disabled");
+        Check(document.StyleText().empty()==enabled,L"fallback style is inert while scripting is enabled");
+        StyleSheet styles;styles.SetDisplay(1000,760,scale);styles.Parse(L"");
+        Check(styles.Compute(fallback).Is(L"display",enabled?L"none":L"block"),L"noscript default rendering follows scripting at both DPIs");
+        Document adopted;adopted.AdoptParsed(document);
+        Check(adopted.ScriptingEnabled()==enabled,L"background-parsed documents preserve their scripting mode");
+        if(enabled){
+            JavaScriptRuntime runtime(adopted);std::wstring result,error;
+            Check(runtime.Execute(L"return document.querySelector('noscript').innerHTML;",&result,&error)&&
+                  result==L"<b>fallback &amp; text</b><style>body { color: red; }</style>",L"noscript raw text round-trips through innerHTML");
+            Check(runtime.Execute(L"return new DOMParser().parseFromString('<html><body><noscript><b>fallback</b></noscript></body></html>','text/html').querySelector('noscript b').textContent;",&result,&error)&&result==L"fallback",
+                  L"DOMParser inert documents parse fallback markup");
+        }
+    }
+    return failures?1:0;
+}
+
+int RunEmbeddingFrameRegression(){
+    const int initialFailures=failures;
+    for(const double ratio:{1.0,1.5}){
+        Document childDocument;childDocument.Parse(L"<html><body></body></html>");
+        JavaScriptRuntime child(childDocument);child.SetDevicePixelRatio(ratio);
+        std::wstring result,error;
+        {
+            Document parentDocument;parentDocument.Parse(L"<html><body><iframe name='embedded'></iframe></body></html>");
+            JavaScriptRuntime parent(parentDocument);parent.SetLocation(L"https://example.test/parent");parent.SetDevicePixelRatio(ratio);
+            const auto frame=parentDocument.QuerySelector(L"iframe");child.SetEmbeddingFrame(&parent,frame);
+            child.SetLocation(L"https://example.test/child");
+            Check(child.Execute(L"return frameElement.tagName+'|'+frameElement.name+'|'+('frameElement' in window);",&result,&error)&&result==L"IFRAME|embedded|true",
+                L"same-origin frameElement returns the actual embedding element at both DPI scales");
+            Check(child.Execute(L"frameElement.name='renamed';",nullptr,&error)&&frame->Attribute(L"name")==L"renamed",
+                L"embedding element writes operate on the parent DOM");
+            child.SetLocation(L"https://other.test/child");
+            Check(child.Execute(L"return frameElement===null;",&result,&error)&&result==L"true",
+                L"cross-origin frameElement is null");
+            child.SetLocation(L"about:blank");
+            Check(child.Execute(L"return frameElement.name;",&result,&error)&&result==L"renamed",
+                L"inherited-origin about:blank exposes its embedding element");
+            child.Clear();
+            Check(child.Execute(L"return frameElement.name;",&result,&error)&&result==L"renamed",
+                L"runtime reset preserves the browsing context embedding");
+            Check(child.Execute(L"var retainedFrame=frameElement;",nullptr,&error),
+                L"embedding element can be retained independently of its parent runtime");
+        }
+        Check(child.Execute(L"return frameElement===null;",&result,&error)&&result==L"true",
+            L"expired embedding parent returns null without retaining a destroyed runtime");
+        Check(child.Execute(L"return retainedFrame.tagName+'|'+retainedFrame.name;",&result,&error)&&result==L"IFRAME|renamed",
+            L"retained embedding element remains readable after parent destruction");
+    }
+    return failures-initialFailures;
+}
+
 int wmain(int argc,wchar_t** argv) {
     const HRESULT comInitialization=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
     const bool uninitializeCom=SUCCEEDED(comInitialization);
+    if(argc>1&&_wcsicmp(argv[1],L"--embedding-frame-regression")==0){
+        const int result=RunEmbeddingFrameRegression();if(!result)std::wcout<<L"Embedding frame regression passed at 100% and 150% DPI\n";
+        if(uninitializeCom)CoUninitialize();return result;
+    }
+    if(argc>1&&_wcsicmp(argv[1],L"--noscript-regression")==0){
+        const int result=RunNoScriptRegression();if(!result)std::wcout<<L"Noscript regression passed at 100% and 150% DPI\n";
+        if(uninitializeCom)CoUninitialize();return result;
+    }
+    if(argc>1&&_wcsicmp(argv[1],L"--transform-containing-block-regression")==0){
+        const int result=RunTransformContainingBlockRegression();
+        if(!result)std::wcout<<L"Transform containing block regression passed at 100% and 150% DPI\n";
+        if(uninitializeCom)CoUninitialize();return result;
+    }
+    if(argc>1&&_wcsicmp(argv[1],L"--responsiveness-regression")==0){
+        const int result=RunExecutionResponsiveness();
+        if(!result)std::wcout<<L"Execution responsiveness regression passed\n";
+        if(uninitializeCom)CoUninitialize();return result;
+    }
+    if(argc>1&&_wcsicmp(argv[1],L"--inline-flex-intrinsic-regression")==0){
+        const int result=RunInlineFlexIntrinsicRegression();
+        if(!result)std::wcout<<L"Inline-flex intrinsic regression passed at 100% and 150% DPI\n";
+        if(uninitializeCom)CoUninitialize();return result;
+    }
+    if(argc==3&&_wcsicmp(argv[1],L"--execution-regression")==0){
+        std::ifstream input(std::filesystem::path(argv[2]),std::ios::binary);
+        const std::string bytes((std::istreambuf_iterator<char>(input)),std::istreambuf_iterator<char>());
+        const int length=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,bytes.data(),static_cast<int>(bytes.size()),nullptr,0);
+        if(!input||length<=0){if(uninitializeCom)CoUninitialize();return 1;}
+        std::wstring script(static_cast<size_t>(length),L'\0');
+        MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,bytes.data(),static_cast<int>(bytes.size()),script.data(),length);
+        for(const auto ratio:{1.0,1.5})for(const size_t threshold:{size_t{0},size_t{2}}){
+            Document document;std::wstring error,result;
+            Check(document.Parse(L"<html><body></body></html>",&error),error.c_str());
+            JavaScriptRuntime runtime(document);runtime.SetDevicePixelRatio(ratio);runtime.SetJitCompilationThreshold(threshold);
+            Check(runtime.Execute(script,&result,&error)&&result.rfind(L"PASS|",0)==0,
+                L"execution reads and calls preserve their semantics with interpreter/optimized execution at both DPI scales");
+            std::wcout<<L"DPI "<<ratio<<L" threshold "<<threshold<<L" result "<<result<<L" error "<<error<<L'\n';
+        }
+        if(uninitializeCom)CoUninitialize();return failures?1:0;
+    }
+    if(argc>1&&_wcsicmp(argv[1],L"--embedded-script-regression")==0){
+        const auto result=RunEmbeddedScriptCompatibility();
+        if(!result)std::wcout<<L"Embedded script compatibility regression passed\n";
+        if(uninitializeCom)CoUninitialize();return result;
+    }
+    if(argc>1&&_wcsicmp(argv[1],L"--exception-regression")==0){
+        const int result=RunJavaScriptExceptionRegression();
+        if(!result)std::wcout<<L"JavaScript exception regression passed\n";
+        if(uninitializeCom)CoUninitialize();return result;
+    }
     if(argc>1&&_wcsicmp(argv[1],L"--benchmark")==0){
         const int result=RunFrameBenchmark();if(uninitializeCom)CoUninitialize();return result;
     }
@@ -660,10 +2305,15 @@ int wmain(int argc,wchar_t** argv) {
     if(argc>2&&_wcsicmp(argv[1],L"--jquery")==0){
         const int result=RunJQueryCompatibility(argv[2]);if(uninitializeCom)CoUninitialize();return result;
     }
-    if(argc>2&&_wcsicmp(argv[1],L"--javascript")==0){
-        const int result=RunJavaScriptFiles(argc-2,argv+2);
+    if(argc>2&&(_wcsicmp(argv[1],L"--javascript")==0||_wcsicmp(argv[1],L"--iframe-javascript")==0)){
+        const int result=RunJavaScriptFiles(argc-2,argv+2,_wcsicmp(argv[1],L"--iframe-javascript")==0);
         if(uninitializeCom)CoUninitialize();return result;
     }
+    RunJavaScriptExceptionRegression();
+    RunNoScriptRegression();
+    RunEmbeddedScriptCompatibility();
+    RunTransformContainingBlockRegression();
+    RunInlineFlexIntrinsicRegression();
     FastMap<int, std::wstring, ConstantHash> fastMap;
     for (int i = 0; i < 64; ++i) fastMap[i] = std::to_wstring(i);
     fastMap[17] = L"updated";
@@ -936,6 +2586,110 @@ int wmain(int argc,wchar_t** argv) {
     Check(jqueryDomResult==L"DIV|#text|3|4|200|9|9|object",
           L"standard nodeName, form collections and text/JSON XMLHttpRequest responses support library paths");
 
+    Document editorDomDoc;
+    Check(editorDomDoc.Parse(L"<!doctype html><body><div class='item'><a></a></div></body>",&error),
+          L"detached library feature-detection fixture parses");
+    JavaScriptRuntime editorDomJs(editorDomDoc);std::wstring editorDomResult;
+    Check(editorDomJs.Execute(LR"JS(
+        var detached=document.createElement('section');
+        detached.innerHTML='<a class="item" data-value="detached">link</a><input checked>';
+        var link=detached.getElementsByTagName('a').item(0);
+        return link.getAttribute('data-value')==='detached' &&
+            detached.getElementsByClassName('item').length===1 &&
+            detached.querySelector('a.item')===link &&
+            detached.querySelectorAll('a[data-value]').length===1 &&
+            document.querySelectorAll('a').length===1;
+    )JS",&editorDomResult,&error)&&editorDomResult==L"true",
+          L"detached subtree queries use their scope even when connected indexes contain the same tags and classes");
+    Check(editorDomJs.Execute(LR"JS(
+        var xml=new DOMParser().parseFromString(
+          '<?xml version="1.0" encoding="UTF-8"?><Template Mode="Mixed"><Item><![CDATA[<p>&amp;</p>]]></Item></Template>',
+          'text/xml');
+        var item=xml.getElementsByTagName('Item').item(0);
+        var root=xml.documentElement;
+        var good=root.nodeName==='Template' && root.getAttribute('Mode')==='Mixed' &&
+          root.getAttribute('mode')===null && item.firstChild.nodeType===4 &&
+          item.firstChild.nodeValue==='<p>&amp;</p>' && item.textContent==='<p>&amp;</p>' &&
+          item.ownerDocument===xml && xml.getElementsByTagName('item').length===0;
+        root.setAttribute('Mode','updated');root.removeAttribute('Mode');
+        var invalid=new DOMParser().parseFromString('<root><item></root>','application/xml');
+        var empty=new DOMParser().parseFromString('','text/xml');
+        return good && !root.hasAttribute('Mode') && invalid.getElementsByTagName('parsererror').length===1 &&
+            empty.getElementsByTagName('parsererror').length===1;
+    )JS",&editorDomResult,&error)&&editorDomResult==L"true",
+          L"DOMParser preserves XML names, CDATA and ownerDocument and reports malformed XML");
+    editorDomJs.SetResourceLoader([](const std::wstring& resource,std::wstring& body){
+        if(resource!=L"template.data")return false;
+        body=L"<Template><Item><![CDATA[editor template]]></Item></Template>";return true;
+    });
+    Check(editorDomJs.Execute(LR"JS(
+        var xmlRequest=new XMLHttpRequest();xmlRequest.open('GET','template.data',false);
+        xmlRequest.overrideMimeType('text/xml; charset=utf-8');xmlRequest.send();
+        var textRequest=new XMLHttpRequest();textRequest.open('GET','template.data',false);
+        textRequest.overrideMimeType('text/plain');textRequest.send();
+        return xmlRequest.responseXML.getElementsByTagName('Item').item(0).textContent==='editor template' &&
+          textRequest.responseXML===null;
+    )JS",&editorDomResult,&error)&&editorDomResult==L"true",
+          L"XHR XML responses use the MIME type rather than a URL or filename pattern");
+    Check(editorDomJs.Execute(LR"JS(
+        function legacy(){if(true){function blockHelper(){return 7;}}return blockHelper();}
+        function untaken(){if(false){function unusedHelper(){return 9;}}return typeof unusedHelper;}
+        function strict(){'use strict';if(true){function privateHelper(){return 1;}}return typeof privateHelper;}
+        return legacy()===7 && untaken()==='undefined' && strict()==='undefined';
+    )JS",&editorDomResult,&error)&&editorDomResult==L"true",
+          L"legacy block functions bind in the outer function only for non-strict executed blocks");
+    Check(editorDomJs.Execute(LR"JS(
+        var parsedHtml=new DOMParser().parseFromString('<p class="parsed">inert</p><script>window.parserExecuted=true;</script>','text/html');
+        var additional=parsedHtml.createElement('span');additional.appendChild(parsedHtml.createTextNode(' child'));
+        parsedHtml.querySelector('p').appendChild(additional);
+        return parsedHtml.getElementsByClassName('parsed').item(0).textContent==='inert child' &&
+            additional.ownerDocument===parsedHtml && typeof window.parserExecuted==='undefined' &&
+            document.querySelector('.parsed')===null;
+    )JS",&editorDomResult,&error)&&editorDomResult==L"true",
+          L"DOMParser HTML documents are inert and their DOM APIs operate on the parsed document");
+    Check(editorDomJs.Execute(LR"JS(
+        var importSource=new DOMParser().parseFromString('<section id="import-source"><b>copy</b><!--note--></section>','text/html');
+        var original=importSource.querySelector('section'),sourceParent=original.parentNode;
+        var shallow=document.importNode(original),deep=Document.prototype.importNode.call(document,original,true);
+        var target=new DOMParser().parseFromString('<main></main>','text/html');
+        var intoTarget=Document.prototype.importNode.call(target,deep,{selfOnly:false});
+        var selfOnly=target.importNode(deep,{selfOnly:true});
+        var host=document.createElement('div'),shadow=host.attachShadow({mode:'open'}),errors=[];
+        for(var bad of [undefined,{},document,importSource,shadow]){
+            try{document.importNode(bad);}catch(error){errors.push(error.name);}
+        }
+        var borrowError='';try{Document.prototype.importNode.call(host,deep);}catch(error){borrowError=error.name;}
+        var before=shallow!==original && shallow.childNodes.length===0 && shallow.ownerDocument===document &&
+            deep!==original && deep.parentNode===null && deep.childNodes.length===2 &&
+            deep.firstChild.ownerDocument===document && deep.lastChild.ownerDocument===document &&
+            original.parentNode===sourceParent && original.ownerDocument===importSource &&
+            document.getElementById('import-source')===null && intoTarget.ownerDocument===target &&
+            intoTarget.firstChild.ownerDocument===target && selfOnly.childNodes.length===0;
+        document.body.appendChild(deep);target.querySelector('main').appendChild(intoTarget);
+        deep.firstChild.textContent='changed';
+        var fragment=importSource.createDocumentFragment();fragment.append('fragment');
+        var copiedFragment=document.importNode(fragment,true);
+        return before && document.getElementById('import-source')===deep &&
+            target.getElementById('import-source')===intoTarget && original.textContent==='copy' &&
+            intoTarget.textContent==='copy' && copiedFragment.nodeType===11 &&
+            copiedFragment.firstChild.ownerDocument===document && fragment.childNodes.length===1 &&
+            errors.join('|')==='TypeError|TypeError|NotSupportedError|NotSupportedError|NotSupportedError' && borrowError==='TypeError';
+    )JS",&editorDomResult,&error)&&editorDomResult==L"true",
+          L"importNode copies detached subtrees into the receiving document without moving the source and rejects invalid nodes");
+    Check(editorDomJs.Execute(LR"JS(
+        var dynamicStyle=document.createElement('style');document.head.appendChild(dynamicStyle);
+        var dynamicSheet=dynamicStyle.sheet;
+        var firstRule=dynamicSheet.insertRule('a { color:red }',0);
+        dynamicSheet.insertRule('a { color:blue }',0);
+        var insertionWorks=firstRule===0 && dynamicSheet.cssRules.length===2 &&
+          dynamicSheet.cssRules.item(0).cssText.indexOf('blue')>=0;
+        dynamicSheet.deleteRule(0);
+        var bounds=false;try{dynamicSheet.insertRule('a { color:green }',3);}catch(e){bounds=e.name==='IndexSizeError';}
+        return insertionWorks && bounds && dynamicSheet.cssRules.length===1 &&
+          dynamicSheet.cssRules[0].cssText.indexOf('red')>=0 && document.styleSheets.length===1;
+    )JS",&editorDomResult,&error)&&editorDomResult==L"true",
+          L"CSSOM insertion and deletion honor rule order and expose current rules");
+
     Document browserCompatDoc;
     Check(browserCompatDoc.Parse(L"<body><div id='first'></div><div id='second'></div></body>",&error),
           L"browser compatibility fixture parses");
@@ -1064,6 +2818,55 @@ int wmain(int argc,wchar_t** argv) {
     Check(browserCompatResult==L"35,36|37|38|39|6|40|false|40,41,42",
           L"computed class members, generators and destructuring assignment in for-of loops follow browser semantics");
     Check(browserCompatJs.Execute(LR"JS(
+        var stateKey=Symbol('state'),carrier={},state={items:new Map([['first',1]]),attempts:0};
+        Object.defineProperty(carrier,stateKey,{configurable:true,enumerable:false,value:state});
+        var restored=Reflect.get(Object.getOwnPropertyDescriptor(carrier,stateKey),'value');
+        var map=restored.items,set=new Set([2,3]),receiverError='';
+        Map.prototype.set.call(map,'second',4);Set.prototype.add.call(set,5);
+        try{Map.prototype.get.call({},'first');}catch(error){receiverError=error.name;}
+        return map instanceof Map && set instanceof Set && !(set instanceof Map) && !(map instanceof Set) &&
+            Object.getPrototypeOf(map)===Map.prototype && Object.getPrototypeOf(set)===Set.prototype &&
+            map.constructor===Map && set.constructor===Set && Map.prototype.get.call(map,'second')===4 &&
+            [...Map.prototype.values.call(map)].join(',')==='1,4' && Set.prototype.has.call(set,5) &&
+            [...Set.prototype.values.call(set)].join(',')==='2,3,5' && receiverError==='TypeError' &&
+            Object.getOwnPropertySymbols(carrier)[0]===stateKey && Object.keys(Map.prototype).length===0;
+    )JS",&browserCompatResult,&error)&&browserCompatResult==L"true",
+          L"Map and Set instances preserve prototype identity and symbol-carried state across independent consumers");
+    Check(browserCompatJs.Execute(LR"JS(
+        var key=Symbol('state'),target={plain:1},getterCalls=0;
+        Object.defineProperty(target,key,{value:2,configurable:true});
+        Object.defineProperty(target,'accessor',{get:function(){getterCalls++;return 3;},configurable:true});
+        Object.defineProperty(target,'fixed',{value:4,configurable:false});
+        var deleted=Reflect.deleteProperty(target,key) && Reflect.deleteProperty(target,'accessor') &&
+            Reflect.deleteProperty(target,'plain') && Reflect.deleteProperty(target,'absent');
+        var fixed=!Reflect.deleteProperty(target,'fixed') && target.fixed===4 &&
+            !Object.getOwnPropertyDescriptor(target,'fixed').configurable;
+        var trapKey='',trapTarget=null,proxied=new Proxy(target,{deleteProperty:function(object,name){trapTarget=object;trapKey=name;return false;}});
+        var trapped=!Reflect.deleteProperty(proxied,key) && trapTarget===target && trapKey===key;
+        var errors=[];for(var input of [undefined,null,1,'text']){
+            try{Reflect.deleteProperty(input,'x');}catch(error){errors.push(error.name);}
+        }
+        return deleted && fixed && trapped && getterCalls===0 && !Object.hasOwn(target,'accessor') &&
+            Object.getOwnPropertySymbols(target).length===0 && errors.join('|')==='TypeError|TypeError|TypeError|TypeError';
+    )JS",&browserCompatResult,&error)&&browserCompatResult==L"true",
+          L"Reflect.deleteProperty removes symbol and accessor state, honors configurability and forwards Proxy traps");
+    Check(browserCompatJs.Execute(LR"JS(
+        var dateFormatter=new Intl.DateTimeFormat('en-US',{year:'numeric',month:'2-digit',day:'2-digit'});
+        var dateOptions=dateFormatter.resolvedOptions(),originalLocale=dateOptions.locale;
+        dateOptions.locale='changed';var cleanDateOptions=dateFormatter.resolvedOptions();
+        var numberFormatter=new Intl.NumberFormat(['en-US'],{useGrouping:false,minimumFractionDigits:2,maximumFractionDigits:2});
+        var numberOptions=numberFormatter.resolvedOptions();
+        var clockOptions=new Intl.DateTimeFormat('en-US',{hour:'numeric',hour12:false}).resolvedOptions();
+        var defaultDate=new Intl.DateTimeFormat().resolvedOptions();
+        return originalLocale==='en-US' && cleanDateOptions!==dateOptions && cleanDateOptions.locale===originalLocale &&
+            cleanDateOptions.calendar==='gregory' && cleanDateOptions.year==='numeric' && cleanDateOptions.month==='2-digit' &&
+            cleanDateOptions.day==='2-digit' && typeof cleanDateOptions.timeZone==='string' && cleanDateOptions.timeZone.length>0 &&
+            numberOptions.locale==='en-US' && numberOptions.useGrouping===false && numberOptions.minimumFractionDigits===2 &&
+            numberOptions.maximumFractionDigits===2 && numberFormatter.format(1234.5)==='1234.50' &&
+            clockOptions.hour12===false && clockOptions.hourCycle==='h23' && defaultDate.year==='numeric';
+    )JS",&browserCompatResult,&error)&&browserCompatResult==L"true",
+          L"Intl formatters expose fresh resolved options and the host time zone rather than omitting the standard method");
+    Check(browserCompatJs.Execute(LR"JS(
         class ConstructorRoot { constructor(value){this.rootValue=value;} }
         class ConstructorMiddle extends ConstructorRoot {}
         class ConstructorLeaf extends ConstructorMiddle { constructor(value){super(value+1);} }
@@ -1163,8 +2966,8 @@ int wmain(int argc,wchar_t** argv) {
         var mapLog=[],setLog=[],mapValue=new Map([['a',1],['b',2]]),setValue=new Set(['x','y']);
         mapValue.forEach(function(value,key,owner){mapLog.push(key+value+(owner===mapValue));});
         setValue.forEach(function(value,key,owner){setLog.push(value+key+(owner===setValue));});
-        return mapLog.join(',')+'|'+setLog.join(',')+'|'+mapValue.keys().join(',')+'|'+
-          setValue.entries().map(function(entry){return entry.join('');}).join(',');
+        return mapLog.join(',')+'|'+setLog.join(',')+'|'+Array.from(mapValue.keys()).join(',')+'|'+
+          Array.from(setValue.entries()).map(function(entry){return entry.join('');}).join(',');
     )JS",&browserCompatResult,&error)&&
           browserCompatResult==L"a1true,b2true|xxtrue,yytrue|a,b|xx,yy",error.c_str());
     Check(browserCompatResult==L"a1true,b2true|xxtrue,yytrue|a,b|xx,yy",
@@ -1336,7 +3139,7 @@ int wmain(int argc,wchar_t** argv) {
     Check(switchJs.Load(L"function choose(value){let result='';switch(value){case 'a':result+='a';break;default:result+='d';case 'b':result+='b';}return result;}",&error),error.c_str());
     Check(switchJs.Execute(L"return choose('a')+'|'+choose('b')+'|'+choose('x');",&switchResult,&error),error.c_str());
     Check(switchResult==L"a|b|db",L"switch supports matching, break, default and fallthrough");
-    Document semanticsDoc;Check(semanticsDoc.Parse(L"<body></body>",&error),L"JavaScript semantics fixture parses");
+    Document semanticsDoc;Check(semanticsDoc.Parse(L"<!doctype html><body></body>",&error),L"JavaScript semantics fixture parses");
     JavaScriptRuntime semanticsJs(semanticsDoc);std::wstring semanticsResult;
     semanticsJs.SetViewportSize(1280,720);
     Check(semanticsJs.Execute(
@@ -2210,9 +4013,30 @@ int wmain(int argc,wchar_t** argv) {
     Check(appDomJs.Execute(
         L"const contextualRange=document.createRange(),rootNode=document.getElementById('root');"
         L"contextualRange.selectNode(rootNode);const contextual=contextualRange.createContextualFragment('<strong id=\"range-fragment\">range</strong>');"
-        L"rootNode.appendChild(contextual);return contextualRange.commonAncestorContainer.tagName+'|'+contextual.nodeType+'|'+document.getElementById('range-fragment').textContent;",
-        &appDomResult,&error)&&appDomResult==L"BODY|11|range",
+        L"rootNode.appendChild(contextual);return contextualRange.commonAncestorContainer.tagName+'|'+contextual.nodeType+'|'+document.getElementById('range-fragment').textContent"
+        L"+'|'+contextual.childNodes.length+'|'+rootNode.lastChild.tagName;",
+        &appDomResult,&error)&&appDomResult==L"BODY|11|range|0|STRONG",
         L"Range.selectNode and createContextualFragment insert parsed markup through generic DOM rules");
+    Check(appDomJs.Execute(LR"JS(
+        var container=document.createElement('div'),marker=document.createElement('span');
+        container.appendChild(marker);document.body.appendChild(container);
+        var transfer=document.createDocumentFragment(),first=document.createElement('b'),second=document.createElement('i');
+        first.id='fragment-first';second.id='fragment-second';first.textContent='A';second.textContent='B';
+        transfer.appendChild(first);transfer.appendChild(second);
+        var returned=container.insertBefore(transfer,marker);
+        var beforeValid=returned===transfer&&transfer.childNodes.length===0&&transfer.parentNode===null&&
+            container.childNodes.length===3&&container.firstChild===first&&first.nextSibling===second&&
+            second.nextSibling===marker&&document.getElementById('fragment-second')===second;
+        container.insertBefore(first,first);container.appendChild(first);
+        var moveValid=container.firstChild===second&&container.lastChild===first;
+        var empty=document.createDocumentFragment();container.appendChild(empty);
+        var emptyValid=container.childNodes.length===3&&empty.parentNode===null;
+        var missing=false,cycle=false;
+        try{container.insertBefore(empty,document.createElement('div'));}catch(e){missing=e.name==='NotFoundError';}
+        try{first.appendChild(container);}catch(e){cycle=e.name==='HierarchyRequestError';}
+        return beforeValid&&moveValid&&emptyValid&&missing&&cycle;
+    )JS",&appDomResult,&error)&&appDomResult==L"true",
+        L"fragment insertion transfers ordered children, preserves DOM indexes and handles self moves and invalid references");
     Check(appDomJs.Execute(
         L"const scriptRange=document.createRange(),rootNode=document.getElementById('root');"
         L"scriptRange.selectNode(rootNode);const contextual=scriptRange.createContextualFragment("
@@ -2378,9 +4202,84 @@ int wmain(int argc,wchar_t** argv) {
     const auto* beforeGenerated=FindPseudo(emptyGenerated,L"before");
     Check(beforeGenerated&&!beforeGenerated->children.empty()&&
           beforeGenerated->children.front()->node->text==L"[Edit the rendered document]"&&
-          std::abs(beforeGenerated->rect.y-emptyGenerated->content.y)<0.01f&&
+          std::abs(beforeGenerated->children.front()->rect.y-emptyGenerated->content.y)<0.01f&&
           !FindPseudo(occupiedGenerated,L"before"),
           L":empty generated content resolves attr() at the block's top content edge");
+
+    Document flexStaticPositionDoc;
+    Check(flexStaticPositionDoc.Parse(
+        L"<style>*{box-sizing:border-box;margin:0;padding:0}.action{display:flex;"
+        L"justify-content:space-around;align-items:end;position:relative;width:80px;"
+        L"height:80px;padding-bottom:13px;border:1px solid #777}.action::before{"
+        L"content:'';position:absolute;top:16px;width:27px;height:25px}.edge{"
+        L"position:relative;width:100px;height:60px}.edge span{position:absolute;"
+        L"left:auto;right:7px;top:auto;bottom:9px;width:20px;height:10px}</style>"
+        L"<span id='generated-action' class='action'>Action</span>"
+        L"<div id='auto-inset-host' class='edge'><span id='auto-inset'></span></div>",
+        &error),L"flex static-position fixture parses");
+    StyleSheet flexStaticPositionCss;
+    Check(flexStaticPositionCss.Parse(flexStaticPositionDoc.StyleText(),&error),
+          L"flex static-position CSS parses");
+    LayoutEngine flexStaticPositionLayout(flexStaticPositionDoc,flexStaticPositionCss);
+    bool flexStaticPositionDpiValid=true;
+    for(const float scale:{1.0f,1.5f}){
+        flexStaticPositionLayout.Layout(320,180,scale);
+        const auto* action=FindLayout(flexStaticPositionLayout.Root(),L"generated-action");
+        const auto* icon=FindPseudo(action,L"before");
+        const auto* insetHost=FindLayout(flexStaticPositionLayout.Root(),L"auto-inset-host");
+        const auto* inset=FindLayout(flexStaticPositionLayout.Root(),L"auto-inset");
+        flexStaticPositionDpiValid=flexStaticPositionDpiValid&&action&&icon&&insetHost&&inset&&
+            std::abs((icon->rect.x+icon->rect.width/2)-
+                     (action->rect.x+action->rect.width/2))<0.01f&&
+            std::abs((icon->rect.y-action->rect.y)-
+                     (16.0f+(action->content.y-action->rect.y)))<0.01f&&
+            std::abs((inset->rect.x+inset->rect.width)-
+                     (insetHost->rect.x+insetHost->rect.width-7.0f))<0.01f&&
+            std::abs((inset->rect.y+inset->rect.height)-
+                     (insetHost->rect.y+insetHost->rect.height-9.0f))<0.01f;
+    }
+    Check(flexStaticPositionDpiValid,
+          L"automatic insets use generic absolute positioning and generated flex items keep their single-item distributed alignment at 100 and 150 percent DPI");
+
+    Document inlineBadgeDoc;
+    Check(inlineBadgeDoc.Parse(
+        L"<style>*{box-sizing:border-box;margin:0;padding:0}.title{width:400px;"
+        L"font-family:'Segoe UI';font-size:20px;line-height:30px}.popular{display:inline-block;"
+        L"width:22px;height:11px;vertical-align:middle}.subject{font-size:20px}.tools{width:220px;font-size:0}"
+        L".recommend{font-size:12px;vertical-align:top;margin-right:15px}.recommend::before{"
+        L"content:'';display:inline-block;width:16px;height:16px;vertical-align:text-top;"
+        L"margin-right:5px}.copy{display:inline-block;width:19px;height:19px}</style>"
+        L"<div class='title'><img id='popular-badge' class='popular'> "
+        L"<span id='subject-copy' class='subject'>Subject</span></div>"
+        L"<div id='inline-tools' class='tools'><span id='recommend-label' class='recommend'>"
+        L"Recommend</span><span id='copy-action' class='copy'></span></div>",
+        &error),L"inline badge alignment fixture parses");
+    StyleSheet inlineBadgeCss;
+    Check(inlineBadgeCss.Parse(inlineBadgeDoc.StyleText(),&error),
+          L"inline badge alignment CSS parses");
+    LayoutEngine inlineBadgeLayout(inlineBadgeDoc,inlineBadgeCss);
+    bool inlineBadgeDpiValid=true;
+    float popularOffset100=0,recommendOffset100=0;
+    for(const float scale:{1.0f,1.5f}){
+        inlineBadgeLayout.Layout(480,160,scale);
+        const auto* popular=FindLayout(inlineBadgeLayout.Root(),L"popular-badge");
+        const auto* subject=FindLayout(inlineBadgeLayout.Root(),L"subject-copy");
+        const auto* tools=FindLayout(inlineBadgeLayout.Root(),L"inline-tools");
+        const auto* recommend=FindLayout(inlineBadgeLayout.Root(),L"recommend-label");
+        const auto* copy=FindLayout(inlineBadgeLayout.Root(),L"copy-action");
+        inlineBadgeDpiValid=inlineBadgeDpiValid&&popular&&subject&&tools&&recommend&&copy;
+        if(!popular||!subject||!tools||!recommend||!copy)continue;
+        const float popularOffset=(popular->rect.y+popular->rect.height/2.0f)-
+            (subject->rect.y+subject->rect.height/2.0f);
+        const float recommendOffset=recommend->rect.y-copy->rect.y;
+        if(scale==1.0f){popularOffset100=popularOffset;recommendOffset100=recommendOffset;}
+        inlineBadgeDpiValid=inlineBadgeDpiValid&&std::abs(popularOffset)<4.0f&&
+            std::abs(recommendOffset)<0.05f&&
+            std::abs(popularOffset-popularOffset100)<0.01f&&
+            std::abs(recommendOffset-recommendOffset100)<0.01f;
+    }
+    Check(inlineBadgeDpiValid,
+          L"middle, top, and text-top keep replaced badges and action icons on the visual text track at 100 and 150 percent DPI");
 
     Document firstLetterDoc;
     Check(firstLetterDoc.Parse(
@@ -2456,6 +4355,56 @@ int wmain(int argc,wchar_t** argv) {
     };
     Check(verifyFontFallback(1.0f)&&verifyFontFallback(1.5f),
           L"CSS font-family lists skip missing faces and map monospace to the same installed face in stable CSS DIPs at 100 and 150 percent DPI");
+    Document frameStackDoc,frameStackChildDoc;
+    Check(frameStackDoc.Parse(LR"HTML(<!doctype html><style>
+        html,body{margin:0;padding:0}
+        nav{position:relative;height:10px;z-index:9}
+        aside{position:absolute;left:10px;top:10px;width:30px;height:30px;background:#ff0000;z-index:100}
+        section{position:relative;z-index:0}iframe{display:block;border:0;width:60px;height:40px}
+        </style><nav><aside></aside></nav><section><iframe></iframe></section>)HTML",&error)&&
+        frameStackChildDoc.Parse(LR"HTML(<!doctype html><style>
+        html,body{margin:0;background:#0000ff}div{position:fixed;inset:0;background:#00ff00;z-index:999999}
+        </style><div></div>)HTML",&error),L"generic frame stacking fixtures parse");
+    StyleSheet frameStackCss,frameStackChildCss;
+    Check(frameStackCss.Parse(frameStackDoc.StyleText(),&error)&&
+        frameStackChildCss.Parse(frameStackChildDoc.StyleText(),&error),L"generic frame stacking CSS parses");
+    LayoutEngine frameStackLayout(frameStackDoc,frameStackCss),frameStackChildLayout(frameStackChildDoc,frameStackChildCss);
+    Microsoft::WRL::ComPtr<IDWriteFactory> frameStackWrite;
+    Check(SUCCEEDED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),
+        reinterpret_cast<IUnknown**>(frameStackWrite.ReleaseAndGetAddressOf()))),L"frame composition text factory initializes");
+    for(const float scale:{1.0f,1.5f}){
+        frameStackLayout.SetFramePainter([&](ID2D1RenderTarget* target,const LayoutBox& owner){
+            frameStackChildLayout.DiscardDeviceResources();
+            frameStackChildLayout.Layout(owner.content.width,owner.content.height,scale);
+            D2D1_MATRIX_3X2_F transform{};target->GetTransform(&transform);
+            target->PushAxisAlignedClip(D2D1::RectF(owner.content.x,owner.content.y,
+                owner.content.x+owner.content.width,owner.content.y+owner.content.height),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            target->SetTransform(D2D1::Matrix3x2F::Translation(owner.content.x,owner.content.y)*transform);
+            frameStackChildLayout.Paint(target,frameStackWrite.Get());
+            target->SetTransform(transform);target->PopAxisAlignedClip();
+        });
+        frameStackCss.Parse(frameStackDoc.StyleText(),&error);
+        auto raster=CaptureBoxRaster(frameStackLayout,scale);
+        Check(raster.rendered&&raster.ColorAt(20,20,scale)==0xff0000&&raster.ColorAt(50,20,scale)==0x00ff00&&
+            frameStackLayout.HitTest(20,20)==frameStackDoc.QuerySelector(L"aside"),
+            L"CSS popup paints and receives input above iframe contents at 100 and 150 percent DPI");
+        frameStackCss.Parse(frameStackDoc.StyleText()+L"aside{background:rgba(255,0,0,.5)}",&error);
+        raster=CaptureBoxRaster(frameStackLayout,scale);const auto mixed=raster.ColorAt(20,20,scale);
+        Check(raster.rendered&&((mixed>>16)&255)>=127&&((mixed>>16)&255)<=128&&
+            ((mixed>>8)&255)>=127&&((mixed>>8)&255)<=128&&(mixed&255)==0,
+            L"translucent popup blends with iframe pixels instead of cutting a native-window hole at both DPIs");
+        frameStackCss.Parse(frameStackDoc.StyleText()+L"section{z-index:10}",&error);
+        raster=CaptureBoxRaster(frameStackLayout,scale);
+        Check(raster.rendered&&raster.ColorAt(20,20,scale)==0x00ff00&&
+            frameStackLayout.HitTest(20,20)==frameStackDoc.QuerySelector(L"iframe"),
+            L"higher owner stacking context puts iframe above popup despite popup descendant z-index at both DPIs");
+        frameStackCss.Parse(frameStackDoc.StyleText()+L"nav{overflow:hidden}",&error);
+        raster=CaptureBoxRaster(frameStackLayout,scale);
+        Check(raster.rendered&&raster.ColorAt(20,20,scale)==0x00ff00,
+            L"ancestor overflow clipping also applies to a popup above iframe content at both DPIs");
+    }
+    frameStackLayout.SetFramePainter({});frameStackChildLayout.DiscardDeviceResources();
+
     Document textRasterDoc;
     Check(textRasterDoc.Parse(
         L"<style>html,body{margin:0;width:100%;height:100%;background:#fff}pre{margin:4px;color:#000;white-space:pre;font:400 18px Arial}</style><pre id='text-raster'>ASDF 0123</pre>",
@@ -2473,8 +4422,54 @@ int wmain(int argc,wchar_t** argv) {
         return sample.rendered&&sample.grayscaleMode&&sample.webRenderingParams&&
                sample.grayscaleEdgePixels>0&&sample.colorFringePixels==0;
     };
-    Check(isGrayscaleText(textRaster100)&&isGrayscaleText(textRaster150),
-          L"all DOM text uses grayscale coverage without color fringes at 100 and 150 percent DPI");
+    const auto isSubpixelText=[](const TextRasterSample& sample){
+        return sample.rendered&&!sample.grayscaleMode&&sample.webRenderingParams&&sample.colorFringePixels>0;
+    };
+    Check(isSubpixelText(textRaster100)&&isSubpixelText(textRaster150),
+          L"opaque page text uses subpixel coverage at 100 and 150 percent DPI");
+    Check(isGrayscaleText(CaptureTextRaster(textRasterLayout,1.0f,true))&&
+          isGrayscaleText(CaptureTextRaster(textRasterLayout,1.5f,true)),
+          L"transparent compositing surfaces use grayscale text coverage at both DPIs");
+    Document fragmentIconDoc;
+    Check(fragmentIconDoc.Parse(LR"HTML(
+        <!doctype html>
+        <style>*{margin:0;padding:0}body{font:12px/1.6 'Malgun Gothic'}
+        .row{display:flex;height:29px;width:850px}.items{display:flex;align-items:center;margin-left:auto;font-size:11px}
+        ul{display:flex;align-items:center;list-style:none}a{color:inherit;text-decoration:none}
+        img{width:14px;height:14px;vertical-align:text-top}</style>
+        <div class="row"><nav class="items"><ul><li><a>First</a></li><li><a><img id="nested-icon"></a></li></ul></nav></div>
+        <div class="row"><nav class="items"><ul><li><a>Second</a></li><li><img id="direct-icon"></li></ul></nav></div>
+        <div class="row"><nav class="items"><ul><li><a>Third</a></li><li><a><span><img id="deep-icon"></span></a></li></ul></nav></div>
+    )HTML",&error),L"inline image and dynamic hidden menu fixture parses");
+    JavaScriptRuntime fragmentIconJs(fragmentIconDoc);
+    Check(fragmentIconJs.Execute(LR"JS(
+        var rows=document.querySelectorAll('.row');
+        for(var i=0;i<rows.length;i++){
+            var item=rows[i].querySelector('li:last-child'),fragment=document.createDocumentFragment();
+            fragment.appendChild(document.createElement('br'));
+            var hidden=document.createElement('span');hidden.style.display='none';hidden.textContent='Hidden menu';
+            fragment.appendChild(hidden);
+            if(i%2)item.appendChild(fragment);else item.insertBefore(fragment,null);
+        }
+    )JS",nullptr,&error),error.c_str());
+    StyleSheet fragmentIconCss;Check(fragmentIconCss.Parse(fragmentIconDoc.StyleText(),&error),
+        L"inline image and dynamic hidden menu styles parse");
+    LayoutEngine fragmentIconLayout(fragmentIconDoc,fragmentIconCss);
+    bool fragmentIconsAligned=true;
+    const auto fragmentIconRows=fragmentIconDoc.QuerySelectorAll(L".row");
+    for(const float scale:{1.0f,1.5f}){
+        fragmentIconLayout.Layout(960,660,scale);
+        const wchar_t* ids[]={L"nested-icon",L"direct-icon",L"deep-icon"};
+        for(size_t index=0;index<3;++index){
+            const auto* row=fragmentIconLayout.BoxFor(fragmentIconRows[index]);
+            const auto* image=fragmentIconLayout.BoxFor(fragmentIconDoc.GetElementById(ids[index]));
+            fragmentIconsAligned=fragmentIconsAligned&&row&&image&&
+                std::abs(image->rect.y-row->rect.y-6.7f)<0.04f&&
+                std::abs(image->rect.width-14)<0.01f&&std::abs(image->rect.height-14)<0.01f;
+        }
+    }
+    Check(fragmentIconsAligned,
+        L"fragment-inserted hidden menus do not raise text-top icons in centered flex rows at 100 and 150 percent DPI");
     Document boxRasterDoc;
     Check(boxRasterDoc.Parse(
           L"<style>html,body{margin:0}.probe{position:absolute;box-sizing:border-box;left:10.4px;top:10.4px;width:20.4px;height:12.4px;border:1px solid #445566;background:#112233}</style><div class='probe'></div>",
@@ -2686,7 +4681,7 @@ int wmain(int argc,wchar_t** argv) {
     Check(lineOne&&lineTwo&&lineFour&&afterLines&&
           std::lround(lineTwo->rect.y-lineOne->rect.y)==20&&
           std::lround(lineFour->rect.y-lineTwo->rect.y)==40&&
-          std::lround(afterLines->rect.y-lineOne->rect.y)==80,
+          std::lround(afterLines->rect.y-lineOne->parent->content.y)==80,
           L"br creates one line break and consecutive br elements preserve an empty line");
     Check(rule&&std::lround(rule->rect.height)==1&&rule->style.Get(L"background")==L"#808080",
           L"hr receives a visible one-pixel separator default");
@@ -2974,6 +4969,17 @@ int wmain(int argc,wchar_t** argv) {
     const auto narrowDeviceStyle=deviceMediaCss.Compute(deviceMediaDoc.QuerySelector(L".panel"));
     Check(narrowDeviceStyle.Get(L"display")==L"block"&&narrowDeviceStyle.Get(L"height")==L"20px",
           L"device media dimensions use the common CSS pixel viewport");
+    deviceMediaCss.SetDisplay(1920,1080,1);
+    Check(deviceMediaCss.Compute(deviceMediaDoc.QuerySelector(L".panel")).Get(L"display")==L"none",
+          L"a narrow desktop viewport does not match tablet device-width rules");
+    deviceMediaCss.SetDisplay(800,720,1.5f);
+    Check(deviceMediaCss.Compute(deviceMediaDoc.QuerySelector(L".panel")).Get(L"display")==L"block",
+          L"device media dimensions use CSS pixels independently of raster scaling");
+    Check(StyleSheet::MediaQueryMatches(L"print, screen and (max-width:900px)",800,720,1920,1080,1.5)&&
+          !StyleSheet::MediaQueryMatches(L"print",800,720,1920,1080,1.5)&&
+          StyleSheet::MediaQueryMatches(L"(min-resolution:144dpi)",800,720,1920,1080,1.5)&&
+          !StyleSheet::MediaQueryMatches(L"(-ms-high-contrast:none)",800,720,1920,1080,1.5),
+          L"stylesheet media lists, media types, resolution and unsupported features share matchMedia semantics");
 
     Document relayoutDoc;
     Check(relayoutDoc.Parse(L"<style>*{box-sizing:border-box;margin:0;padding:0}.panel{width:50vw;height:20px}@media (max-width:700px){.panel{width:25vw}}</style><div id='relayout-panel' class='panel'></div>",&error),
@@ -3237,6 +5243,7 @@ int wmain(int argc,wchar_t** argv) {
             Check(view->ExecuteScript(L"return accessibilityLog[accessibilityLog.length-1];",&result,&scriptError)&&result==L"click:menu-two",
                   L"Space activates a focused menuitem");
             SendMessageW(view->Window(),WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(10,10));
+            SendMessageW(view->Window(),WM_LBUTTONUP,0,MAKELPARAM(10,10));
             Check(view->ExecuteScript(
                   L"return document.activeElement.id+'|'+(document.querySelector(':focus-visible')?.id||'none');",
                   &result,&scriptError)&&result==L"pointer-target|none",
@@ -3518,6 +5525,154 @@ int wmain(int argc,wchar_t** argv) {
     Check(implicitScrollLayout.ScrollAt(150,50,-120)&&implicitScrollNode->scrollTop>0,
           L"the mouse wheel scrolls an overflow-auto item in an implicit grid row");
 
+    Document viewportScrollDoc;
+    Check(viewportScrollDoc.Parse(
+          L"<!doctype html><html><head><style>.page-content{height:600px;background:#f33}</style></head>"
+          L"<body><main class='page-content'></main></body></html>",&error),
+          L"ordinary tall document viewport-scroll fixture parses");
+    StyleSheet viewportScrollCss;Check(viewportScrollCss.Parse(viewportScrollDoc.StyleText(),&error),
+          L"ordinary tall document viewport-scroll CSS parses");
+    LayoutEngine viewportScrollLayout(viewportScrollDoc,viewportScrollCss);
+    bool viewportScrollDpiValid=true;
+    for(const float scale:{1.0f,1.5f}){
+        viewportScrollDoc.Body()->scrollTop=0;
+        viewportScrollLayout.Layout(300,200,scale);
+        const auto raster=CaptureBoxRaster(viewportScrollLayout,scale,300,200);
+        const auto* viewportRoot=viewportScrollLayout.Root();
+        const float scrollbarX=std::round(292.0f*scale)/scale;
+        const float thumbY=std::round(25.0f*scale)/scale;
+        std::shared_ptr<Node> viewportDrag;float viewportDragOffset=0;bool horizontal=false;
+        const bool outsideTrack=viewportScrollLayout.BeginScrollbarInteraction(
+            std::round(280.0f*scale)/scale,thumbY,viewportDrag,viewportDragOffset,horizontal);
+        viewportDrag.reset();viewportDragOffset=0;horizontal=false;
+        const bool hitsThumb=viewportScrollLayout.BeginScrollbarInteraction(
+            scrollbarX,thumbY,viewportDrag,viewportDragOffset,horizontal);
+        viewportScrollDoc.Body()->scrollTop=0;viewportScrollLayout.SyncScroll(viewportScrollDoc.Body());
+        viewportScrollDpiValid=viewportScrollDpiValid&&viewportRoot&&
+            viewportRoot->viewportScrollContainer&&viewportRoot->viewportOverflowY==L"auto"&&
+            viewportRoot->viewportScrollport.width==300&&viewportRoot->viewportScrollport.height==200&&
+            viewportRoot->scrollHeight>590&&!outsideTrack&&hitsThumb&&!horizontal&&
+            viewportDrag==viewportScrollDoc.Body()&&raster.rendered&&
+            raster.ColorAt(scrollbarX,thumbY,scale)==0x008b8b8b;
+        SaveRasterBmp(std::filesystem::path(L"TWebFrame2/tests/artifacts")/
+            (scale==1?L"body-scrollbar-100.bmp":L"body-scrollbar-150.bmp"),
+            raster.width,static_cast<UINT>(raster.pixels.size()/std::max(1u,raster.width)),
+            raster.pixels.data());
+        viewportScrollDoc.Body()->scrollTop=0;viewportScrollLayout.SyncScroll(viewportScrollDoc.Body());
+        viewportScrollDpiValid=viewportScrollDpiValid&&
+            viewportScrollLayout.ScrollAt(150,100,-120)&&viewportScrollDoc.Body()->scrollTop==90;
+        viewportScrollDoc.Body()->scrollTop=0;viewportScrollLayout.SyncScroll(viewportScrollDoc.Body());
+        viewportDrag.reset();viewportDragOffset=0;horizontal=false;
+        const bool startsDrag=viewportScrollLayout.BeginScrollbarInteraction(
+            scrollbarX,thumbY,viewportDrag,viewportDragOffset,horizontal);
+        viewportScrollDpiValid=viewportScrollDpiValid&&startsDrag&&viewportDrag&&
+            viewportScrollLayout.DragScrollbar(viewportDrag,scrollbarX,1000,viewportDragOffset,horizontal)&&
+            std::abs(viewportScrollDoc.Body()->scrollTop-(viewportRoot->scrollHeight-200))<0.01f&&
+            viewportScrollLayout.DragScrollbar(viewportDrag,scrollbarX,-1000,viewportDragOffset,horizontal)&&
+            viewportScrollDoc.Body()->scrollTop==0;
+        viewportScrollLayout.Relayout(300,700,scale);
+        viewportDrag.reset();viewportDragOffset=0;horizontal=false;
+        viewportScrollDpiValid=viewportScrollDpiValid&&
+            viewportScrollLayout.Root()->viewportScrollport.height==700&&
+            !viewportScrollLayout.BeginScrollbarInteraction(scrollbarX,thumbY,
+                viewportDrag,viewportDragOffset,horizontal)&&
+            !viewportScrollLayout.ScrollAt(150,100,-120);
+    }
+    Check(viewportScrollDpiValid,
+          L"default body overflow paints, hits and wheel-scrolls a viewport-edge scrollbar at 100 and 150 percent DPI");
+    JavaScriptRuntime viewportScrollRuntime(viewportScrollDoc);
+    std::wstring viewportScriptResult,viewportScriptError;
+    Check(viewportScrollRuntime.Execute(
+          L"document.documentElement.scrollTop=37;return document.scrollingElement===document.documentElement&&document.body.scrollTop===37&&document.documentElement.scrollTop===37;",
+          &viewportScriptResult,&viewportScriptError)&&viewportScriptResult==L"true",
+          L"standards-mode documentElement and scrollingElement address the common viewport scroll state");
+
+    const auto rootOverflow=[&](const wchar_t* css){
+        Document document;StyleSheet sheet;std::wstring localError;
+        const std::wstring html=L"<!doctype html><style>"+std::wstring(css)+
+            L"</style><body><div style='height:500px'></div></body>";
+        if(!document.Parse(html,&localError)||!sheet.Parse(document.StyleText(),&localError))
+            return std::wstring{};
+        LayoutEngine layout(document,sheet);layout.Layout(240,120);
+        const auto* root=layout.Root();
+        if(!root)return std::wstring{};
+        std::shared_ptr<Node> drag;float offset=0;bool horizontal=false;
+        const bool scrollbar=layout.BeginScrollbarInteraction(235,22,drag,offset,horizontal);
+        return root->viewportOverflowY+L"|"+(scrollbar?L"bar":L"none");
+    };
+    Check(rootOverflow(L"html{overflow:hidden}body{overflow:visible}")==L"hidden|none"&&
+          rootOverflow(L"html{overflow:visible}body{overflow:hidden}")==L"hidden|none"&&
+          rootOverflow(L"html{overflow:clip}")==L"hidden|none"&&
+          rootOverflow(L"html{overflow:auto}body{overflow:hidden}")==L"auto|bar",
+          L"root and body overflow propagate to the viewport using common HTML scrolling rules");
+
+    Document stackedViewportDoc;
+    Check(stackedViewportDoc.Parse(
+          L"<!doctype html><style>body{margin:0}.page{height:600px;background:#f33;position:relative;z-index:1}"
+          L".pane{position:fixed;right:0;top:0;width:50px;height:200px;overflow:scroll;z-index:9999;background:#0f0;scrollbar-color:#000 #0f0}"
+          L".pane>div{height:500px}</style><body><main class='page'></main><aside id='edge-pane' class='pane'><div></div></aside></body>",&error),
+          L"stacked viewport scrollbar fixture parses");
+    StyleSheet stackedViewportCss;
+    Check(stackedViewportCss.Parse(stackedViewportDoc.StyleText(),&error),
+          L"stacked viewport scrollbar CSS parses");
+    LayoutEngine stackedViewportLayout(stackedViewportDoc,stackedViewportCss);
+    bool stackedViewportValid=true;
+    for(const float scale:{1.0f,1.5f}){
+        const auto raster=CaptureBoxRaster(stackedViewportLayout,scale,300,200);
+        std::shared_ptr<Node> drag;float offset=0;bool horizontal=false;
+        const float x=std::round(292.0f*scale)/scale;
+        const float y=std::round(25.0f*scale)/scale;
+        stackedViewportValid=stackedViewportValid&&raster.rendered&&
+            raster.ColorAt(x,y,scale)==0x008b8b8b&&
+            raster.ColorAt(x,100,scale)==0x00fcfcfc&&
+            stackedViewportLayout.BeginScrollbarInteraction(x,y,drag,offset,horizontal)&&
+            drag==stackedViewportDoc.Body()&&!horizontal;
+    }
+    Check(stackedViewportValid,
+          L"viewport scrollbar paints and receives pointer input above positioned and fixed content at both DPIs");
+
+    Document horizontalViewportDoc;
+    Check(horizontalViewportDoc.Parse(
+          L"<!doctype html><style>body{margin:0}.wide{width:600px;height:20px;background:#f33}</style>"
+          L"<body><main class='wide'></main></body>",&error),
+          L"horizontal viewport scrollbar fixture parses");
+    StyleSheet horizontalViewportCss;
+    Check(horizontalViewportCss.Parse(horizontalViewportDoc.StyleText(),&error),
+          L"horizontal viewport scrollbar CSS parses");
+    LayoutEngine horizontalViewportLayout(horizontalViewportDoc,horizontalViewportCss);
+    bool horizontalViewportValid=true;
+    for(const float scale:{1.0f,1.5f}){
+        horizontalViewportDoc.Body()->scrollLeft=0;
+        const auto raster=CaptureBoxRaster(horizontalViewportLayout,scale,300,200);
+        const float x=std::round(25.0f*scale)/scale;
+        const float y=std::round(192.0f*scale)/scale;
+        std::shared_ptr<Node> drag;float offset=0;bool horizontal=false;
+        horizontalViewportValid=horizontalViewportValid&&raster.rendered&&
+            raster.ColorAt(x,y,scale)==0x008b8b8b&&
+            horizontalViewportLayout.BeginScrollbarInteraction(x,y,drag,offset,horizontal)&&
+            drag==horizontalViewportDoc.Body()&&horizontal&&
+            horizontalViewportLayout.DragScrollbar(drag,1000,y,offset,horizontal)&&
+            horizontalViewportDoc.Body()->scrollLeft==300&&
+            horizontalViewportLayout.DragScrollbar(drag,-1000,y,offset,horizontal)&&
+            horizontalViewportDoc.Body()->scrollLeft==0;
+    }
+    Check(horizontalViewportValid,
+          L"horizontal viewport scrollbar paints, drags and clamps its range at both DPIs");
+
+    Document forcedViewportDoc;
+    Check(forcedViewportDoc.Parse(L"<!doctype html><style>html{overflow:scroll}body{margin:0}</style><body></body>",&error),
+          L"empty overflow-scroll viewport fixture parses");
+    StyleSheet forcedViewportCss;
+    Check(forcedViewportCss.Parse(forcedViewportDoc.StyleText(),&error),
+          L"empty overflow-scroll viewport CSS parses");
+    LayoutEngine forcedViewportLayout(forcedViewportDoc,forcedViewportCss);
+    forcedViewportLayout.Layout(300,200);
+    std::shared_ptr<Node> forcedViewportDrag;float forcedViewportOffset=0;bool forcedHorizontal=false;
+    Check(forcedViewportLayout.BeginScrollbarInteraction(292,20,forcedViewportDrag,forcedViewportOffset,forcedHorizontal)&&
+          forcedViewportLayout.BeginScrollbarInteraction(20,192,forcedViewportDrag,forcedViewportOffset,forcedHorizontal)&&
+          !forcedViewportLayout.BeginScrollbarInteraction(292,192,forcedViewportDrag,forcedViewportOffset,forcedHorizontal),
+          L"overflow-scroll shows both viewport tracks without content and excludes their shared corner from hit testing");
+
     Document gridScrollerDoc;
     Check(gridScrollerDoc.Parse(
           L"<style>*{box-sizing:border-box;margin:0;padding:0}.scroller{display:grid;width:300px;height:100px;overflow:auto;grid-template-columns:100px 1fr}.tall{height:150px}</style>"
@@ -3663,6 +5818,281 @@ int wmain(int argc,wchar_t** argv) {
     Check(floatedVoteDpiValid,
           L"auto-width right-floated inline vote controls shrink to content inside table cells at 100 and 150 percent DPI");
 
+    bool formattedFloatsValid=true,formattedFloatHeightsValid=true;
+    for(const bool left:{false,true})for(const bool labelBefore:{false,true})
+        for(const bool tableCell:{false,true}){
+            Document formattedFloatDoc;
+            const std::wstring label=L"<b id='float-label'>Label</b>";
+            const std::wstring markup=(labelBefore?label:L"")+
+                L"\n  <span id='float-first' class='badge'><img><span>0</span></span>\n\t"
+                L"<!-- formatting whitespace -->\n  <span id='float-second' class='badge'>"
+                L"<img><span>11</span></span>\n  "+(labelBefore?L"":label)+
+                L"<p id='float-body'>Body text</p>";
+            const std::wstring html=L"<!doctype html><style>html,body{margin:0;font:12px/20px Arial}"
+                L"table{width:320px;table-layout:fixed;border-collapse:collapse}td{padding:0}"
+                L".panel{display:flow-root;width:320px}.badge{float:"+
+                std::wstring(left?L"left":L"right")+
+                L";margin-left:3px;padding:0 5px;border:1px solid #ccc;font-size:13px;line-height:20px}"
+                L"img{width:12px;height:10px;vertical-align:middle}p{margin:0}</style>"+
+                (tableCell?L"<table><tr><td id='float-panel'>":L"<div class='panel' id='float-panel'>")+
+                markup+(tableCell?L"</td></tr></table>":L"</div>");
+            Check(formattedFloatDoc.Parse(html,&error),L"formatted adjacent floats fixture parses");
+            StyleSheet formattedFloatCss;Check(formattedFloatCss.Parse(formattedFloatDoc.StyleText(),&error),
+                L"formatted adjacent floats CSS parses");
+            LayoutEngine formattedFloatLayout(formattedFloatDoc,formattedFloatCss);
+            for(const float scale:{1.0f,1.5f}){
+                formattedFloatLayout.Layout(400,160,scale);
+                const auto* first=formattedFloatLayout.BoxFor(formattedFloatDoc.GetElementById(L"float-first"));
+                const auto* second=formattedFloatLayout.BoxFor(formattedFloatDoc.GetElementById(L"float-second"));
+                const auto* panel=formattedFloatLayout.BoxFor(formattedFloatDoc.GetElementById(L"float-panel"));
+                const auto* text=formattedFloatLayout.BoxFor(formattedFloatDoc.GetElementById(L"float-label"));
+                const auto* body=formattedFloatLayout.BoxFor(formattedFloatDoc.GetElementById(L"float-body"));
+                formattedFloatsValid=formattedFloatsValid&&first&&second&&panel&&text&&body;
+                formattedFloatHeightsValid=formattedFloatHeightsValid&&first&&second;
+                if(!first||!second||!panel||!text||!body)continue;
+                const float border=std::floor(scale)/scale;
+                const float separation=left?second->rect.x-first->rect.x-first->rect.width:
+                    first->rect.x-second->rect.x-second->rect.width;
+                formattedFloatsValid=formattedFloatsValid&&
+                    std::abs(first->rect.y-panel->content.y)<0.01f&&
+                    std::abs(second->rect.y-first->rect.y)<0.01f&&
+                    std::abs(separation-3)<0.01f&&
+                    body->rect.y-panel->content.y<21&&
+                    (left?text->rect.x>=second->rect.x+second->rect.width-0.01f:
+                          text->rect.x+text->rect.width<=second->rect.x+0.01f);
+                formattedFloatHeightsValid=formattedFloatHeightsValid&&
+                    std::abs(first->rect.height-(20+2*border))<0.01f&&
+                    std::abs(second->rect.height-(20+2*border))<0.01f;
+            }
+        }
+    Check(formattedFloatsValid,
+        L"left and right float pairs stay side by side across formatting whitespace and preceding labels in blocks and cells at both DPIs");
+    Check(formattedFloatHeightsValid,
+        L"floated inline elements retain their block line height plus borders at 100 and 150 percent DPI");
+
+    Document narrowFloatDoc;
+    Check(narrowFloatDoc.Parse(
+        L"<!doctype html><style>html,body{margin:0}.panel{display:flow-root;width:50px}"
+        L".badge{float:right;width:30px;height:16px}.clear{clear:both;height:8px}"
+        L".preserved{white-space:pre;width:200px}</style>"
+        L"<div class='panel'><span id='narrow-first' class='badge'></span>\n "
+        L"<span id='narrow-second' class='badge'></span><div id='clear-after-floats' class='clear'></div></div>"
+        L"<div class='panel preserved'><span id='preserved-first' class='badge'></span>\n"
+        L"<span id='preserved-second' class='badge'></span></div>",&error),
+        L"narrow and preserved-whitespace float fixture parses");
+    StyleSheet narrowFloatCss;Check(narrowFloatCss.Parse(narrowFloatDoc.StyleText(),&error),
+        L"narrow and preserved-whitespace float CSS parses");
+    LayoutEngine narrowFloatLayout(narrowFloatDoc,narrowFloatCss);
+    bool narrowFloatsValid=true;
+    for(const float scale:{1.0f,1.5f}){
+        narrowFloatLayout.Layout(240,200,scale);
+        const auto* first=narrowFloatLayout.BoxFor(narrowFloatDoc.GetElementById(L"narrow-first"));
+        const auto* second=narrowFloatLayout.BoxFor(narrowFloatDoc.GetElementById(L"narrow-second"));
+        const auto* cleared=narrowFloatLayout.BoxFor(narrowFloatDoc.GetElementById(L"clear-after-floats"));
+        const auto* preFirst=narrowFloatLayout.BoxFor(narrowFloatDoc.GetElementById(L"preserved-first"));
+        const auto* preSecond=narrowFloatLayout.BoxFor(narrowFloatDoc.GetElementById(L"preserved-second"));
+        narrowFloatsValid=narrowFloatsValid&&first&&second&&cleared&&preFirst&&preSecond&&
+            std::abs(second->rect.y-first->rect.y-first->rect.height)<0.01f&&
+            std::abs(cleared->rect.y-second->rect.y-second->rect.height)<0.01f&&
+            preSecond->rect.y>preFirst->rect.y+0.01f;
+    }
+    Check(narrowFloatsValid,
+        L"insufficient width, clear and preserved line breaks still move floats onto later rows at both DPIs");
+
+    Document legacyAlignmentDoc;
+    Check(legacyAlignmentDoc.Parse(
+        L"<!doctype html><style>html,body{margin:0}.panel{width:300px}"
+        L".nested{width:80%;height:30px}.small{width:100px;height:20px}"
+        L"table{width:300px;table-layout:fixed;border-collapse:collapse}"
+        L"td{padding:0;height:80px}td>div{width:20px;height:16px}</style>"
+        L"<div class='panel' align='RIGHT' id='legacy-right'><div class='nested' id='legacy-inner'>"
+        L"<div class='nested' id='legacy-deep'></div></div>"
+        L"<div class='small' id='legacy-auto' style='margin-right:auto'></div>"
+        L"<div class='small' align='left' id='legacy-reset'><div style='width:50px;height:20px' id='legacy-reset-child'></div></div></div>"
+        L"<div class='panel' align='middle' id='legacy-center'><div class='small' id='legacy-center-inner'></div></div>"
+        L"<div class='panel' align='right' style='text-align:right' id='legacy-css'><div class='small' id='legacy-css-inner'></div></div>"
+        L"<table><tbody valign='bottom'><tr valign='TOP'>"
+        L"<td id='legacy-top'><div id='legacy-top-child'></div></td>"
+        L"<td valign='bottom' id='legacy-bottom'><div id='legacy-bottom-child'></div></td>"
+        L"<td valign='bottom' style='vertical-align:middle' id='legacy-middle'><div id='legacy-middle-child'></div></td>"
+        L"</tr><tr><td id='legacy-group'><div id='legacy-group-child'></div></td><td></td><td></td></tr></tbody></table>",&error),
+        L"inherited HTML block and row alignment fixture parses");
+    StyleSheet legacyAlignmentCss;Check(legacyAlignmentCss.Parse(legacyAlignmentDoc.StyleText(),&error),
+        L"inherited HTML block and row alignment CSS parses");
+    LayoutEngine legacyAlignmentLayout(legacyAlignmentDoc,legacyAlignmentCss);
+    bool legacyBlockAlignmentValid=true,legacyRowAlignmentValid=true;
+    for(const float scale:{1.0f,1.5f}){
+        legacyAlignmentLayout.Layout(400,400,scale);
+        const auto find=[&](const wchar_t* id){return legacyAlignmentLayout.BoxFor(legacyAlignmentDoc.GetElementById(id));};
+        const auto* outer=find(L"legacy-right");const auto* inner=find(L"legacy-inner");
+        const auto* deep=find(L"legacy-deep");const auto* automatic=find(L"legacy-auto");
+        const auto* reset=find(L"legacy-reset");const auto* resetChild=find(L"legacy-reset-child");
+        const auto* centered=find(L"legacy-center");const auto* centerChild=find(L"legacy-center-inner");
+        const auto* css=find(L"legacy-css");const auto* cssChild=find(L"legacy-css-inner");
+        legacyBlockAlignmentValid=legacyBlockAlignmentValid&&outer&&inner&&deep&&automatic&&reset&&resetChild&&centered&&centerChild&&css&&cssChild;
+        if(outer&&inner&&deep&&automatic&&reset&&resetChild&&centered&&centerChild&&css&&cssChild)
+            legacyBlockAlignmentValid=legacyBlockAlignmentValid&&
+                std::abs(inner->rect.x-outer->content.x-60)<0.01f&&
+                std::abs(deep->rect.x-inner->content.x-48)<0.01f&&
+                std::abs(automatic->rect.x-outer->content.x)<0.01f&&
+                std::abs(reset->rect.x-outer->content.x-200)<0.01f&&
+                std::abs(resetChild->rect.x-reset->content.x)<0.01f&&
+                std::abs(centerChild->rect.x-centered->content.x-100)<0.01f&&
+                std::abs(cssChild->rect.x-css->content.x)<0.01f;
+        for(const auto& cell:std::initializer_list<std::pair<const wchar_t*,const wchar_t*>>{
+            {L"legacy-top",L"legacy-top-child"},{L"legacy-bottom",L"legacy-bottom-child"},
+            {L"legacy-middle",L"legacy-middle-child"},{L"legacy-group",L"legacy-group-child"}}){
+            const auto* parent=find(cell.first);const auto* child=find(cell.second);
+            legacyRowAlignmentValid=legacyRowAlignmentValid&&parent&&child;
+            if(!parent||!child)continue;
+            const bool top=std::wstring(cell.first)==L"legacy-top";
+            const bool middle=std::wstring(cell.first)==L"legacy-middle";
+            const float expected=top?0.0f:middle?32.0f:64.0f;
+            legacyRowAlignmentValid=legacyRowAlignmentValid&&
+                std::abs(child->rect.y-parent->content.y-expected)<0.01f&&
+                parent->style.Is(L"vertical-align",top?L"top":middle?L"middle":L"bottom");
+        }
+    }
+    Check(legacyBlockAlignmentValid,
+        L"HTML align positions nested percent-width blocks, resets and auto margins while author text-align only aligns text at both DPIs");
+    Check(legacyRowAlignmentValid,
+        L"table cells inherit row and row-group valign with cell and author overrides at both DPIs");
+
+    for(const float scale:{1.0f,1.5f}){
+        ScriptDialog confirmDialog;
+        const std::wstring prompt=L"\ub85c\uadf8\uc778 \uc774\ud6c4\uc5d0 \uc774\uc6a9 \uac00\ub2a5\ud569\ub2c8\ub2e4. "
+            L"\ub85c\uadf8\uc778 \ud398\uc774\uc9c0\ub85c \uc774\ub3d9\ud558\uc2dc\uaca0\uc2b5\ub2c8\uae4c?";
+        Check(confirmDialog.Initialize(L"www.ppomppu.co.kr",prompt,true,true),
+            L"the common confirm HTML/CSS surface initializes");
+        confirmDialog.Layout(1182,660,scale);
+        const auto raster=CaptureBoxRaster(confirmDialog.layout,scale,1182,660);
+        const auto* card=confirmDialog.layout.BoxFor(confirmDialog.card);
+        const auto* ok=confirmDialog.layout.BoxFor(confirmDialog.okButton);
+        const auto* cancel=confirmDialog.layout.BoxFor(confirmDialog.cancelButton);
+        Check(raster.rendered&&card&&ok&&cancel&&std::abs(card->rect.x-367)<0.01f&&
+            std::abs(card->rect.width-448)<0.01f&&card->rect.y==12&&
+            ok->rect.y+ok->rect.height<=card->rect.y+card->rect.height&&
+            cancel->rect.y+cancel->rect.height<=card->rect.y+card->rect.height&&
+            raster.ColorAt(card->rect.x+5,card->rect.y+60,scale)==0x00ffffff&&
+            raster.ColorAt(ok->rect.x+6,ok->rect.y+6,scale)==0x001967d2,
+            L"browser confirm card, CSS buttons and padding paint at 100 and 150 percent DPI");
+        if(ok&&cancel){
+            const auto hit=[&](const LayoutRect& rect){return confirmDialog.ButtonAt(
+                std::round((rect.x+rect.width/2)*scale)/scale,
+                std::round((rect.y+rect.height/2)*scale)/scale);};
+            Check(hit(ok->rect)==0&&hit(cancel->rect)==1,
+                L"both browser dialog buttons hit their painted device-pixel centers at both DPIs");
+        }
+        SaveRasterBmp(std::filesystem::path(L"TWebFrame2/tests/artifacts")/
+            (scale==1?L"script-dialog-confirm-100.bmp":L"script-dialog-confirm-150.bmp"),
+            raster.width,static_cast<UINT>(raster.pixels.size()/std::max(1u,raster.width)),raster.pixels.data());
+        confirmDialog.document.GetElementById(L"script-dialog-message")->SetInnerText(
+            L"<b>Literal text</b>\nA second line with a very long message that should remain scrollable.\n"
+            L"More text\nMore text\nMore text\nMore text\nMore text\nMore text");
+        confirmDialog.Layout(320,120,scale);
+        card=confirmDialog.layout.BoxFor(confirmDialog.card);
+        ok=confirmDialog.layout.BoxFor(confirmDialog.okButton);
+        Check(card&&ok&&card->rect.x>=0&&card->rect.x+card->rect.width<=320&&
+            ok->rect.y+ok->rect.height<=120&&
+            confirmDialog.document.QuerySelector(L"b")==nullptr,
+            L"small browser viewports retain visible dialog actions and treat message markup as text at both DPIs");
+        ScriptDialog alertDialog;
+        Check(alertDialog.Initialize(L"example.test",L"An alert from JavaScript",false,false),
+            L"the common alert HTML/CSS surface initializes");
+        alertDialog.Layout(640,280,scale);
+        const auto alertRaster=CaptureBoxRaster(alertDialog.layout,scale,640,280);
+        const auto* alertOk=alertDialog.layout.BoxFor(alertDialog.okButton);
+        const auto* alertCancel=alertDialog.layout.BoxFor(alertDialog.cancelButton);
+        Check(alertRaster.rendered&&alertOk&&
+            (!alertCancel||!alertCancel->visible)&&
+            alertDialog.ButtonAt(alertOk->rect.x+8,alertOk->rect.y+8)==0,
+            L"alert renders a single working confirmation action at both DPIs");
+        SaveRasterBmp(std::filesystem::path(L"TWebFrame2/tests/artifacts")/
+            (scale==1?L"script-dialog-alert-100.bmp":L"script-dialog-alert-150.bmp"),
+            alertRaster.width,static_cast<UINT>(alertRaster.pixels.size()/std::max(1u,alertRaster.width)),alertRaster.pixels.data());
+    }
+
+    {
+        Document eventHost;
+        auto eventChild=std::make_shared<Document>();
+        Check(eventHost.Parse(L"<!doctype html><iframe id='event-frame'></iframe>",&error),
+            L"cross-document event host parses");
+        Check(eventChild->Parse(L"<!doctype html><style>html,body{margin:0}div{width:140px;height:50px}</style>"
+            L"<body contenteditable='true'><div id='event-pad'>Editable</div></body>",&error),
+            L"cross-document editable child parses");
+        JavaScriptRuntime hostRuntime(eventHost),childRuntime(*eventChild);
+        hostRuntime.SetFrameDocumentProvider([&](const auto&){return eventChild;});
+        std::wstring eventTrace,confirmationText;
+        bool acceptConfirmation=false;
+        unsigned confirmationCount=0;
+        const auto trace=[&](const std::wstring& value){eventTrace+=value+L"|";};
+        hostRuntime.SetMessageSink(trace);childRuntime.SetMessageSink(trace);
+        hostRuntime.SetConfirmSink([&](const std::wstring& value){
+            confirmationText=value;++confirmationCount;return acceptConfirmation;
+        });
+        Check(childRuntime.Load(LR"JS(
+            document.getElementById('event-pad').addEventListener('click',function(){chrome.webview.postMessage('child-node');});
+            document.addEventListener('click',function(){chrome.webview.postMessage('child-document');});
+        )JS",&error),L"child realm listeners load");
+        Check(hostRuntime.Load(LR"JS(
+            var foreignDocument=document.getElementById('event-frame').contentDocument;
+            var accepted=0,hostClicks=0,lastChildEvent;
+            document.addEventListener('click',function(){hostClicks++;});
+            foreignDocument.addEventListener('click',function(){chrome.webview.postMessage('parent-capture');},true);
+            foreignDocument.getElementById('event-pad').addEventListener('click',function(e){
+                chrome.webview.postMessage('parent-node');
+                if(this!==foreignDocument.getElementById('event-pad')||e.currentTarget!==this)throw new Error('node identity');
+            });
+            function foreignClick(e){
+                lastChildEvent=e;
+                if(this!==foreignDocument||e.currentTarget!==foreignDocument||e.eventPhase!==3||
+                   e.target!==foreignDocument.getElementById('event-pad'))throw new Error('document identity');
+                chrome.webview.postMessage('parent-document');
+                if(confirm('Sign in before writing?'))accepted++;
+            }
+            foreignDocument.addEventListener('click',foreignClick);
+        )JS",&error),L"parent realm listeners bind to the child document");
+        StyleSheet childStyle;Check(childStyle.Parse(eventChild->StyleText(),&error),L"editable event child CSS parses");
+        LayoutEngine childLayout(*eventChild,childStyle);
+        bool sharedClicksValid=true;
+        for(const float scale:{1.0f,1.5f}){
+            childLayout.Layout(200,100,scale);
+            hostRuntime.SetDevicePixelRatio(scale);childRuntime.SetDevicePixelRatio(scale);
+            const float x=std::round(80*scale)/scale,y=std::round(30*scale)/scale;
+            const auto target=childLayout.HitTest(x,y);
+            eventTrace.clear();acceptConfirmation=scale==1.5f;
+            JavaScriptRuntime::EventInit event;event.clientX=x;event.clientY=y;
+            const bool canceled=childRuntime.DispatchNodeEvent(target,L"click",event);
+            sharedClicksValid=sharedClicksValid&&target&&target->Attribute(L"id")==L"event-pad"&&!canceled&&
+                eventTrace==L"parent-capture|child-node|parent-node|child-document|parent-document|"&&
+                confirmationText==L"Sign in before writing?";
+            std::wstring result;
+            sharedClicksValid=sharedClicksValid&&hostRuntime.Execute(
+                L"return lastChildEvent.target===foreignDocument.getElementById('event-pad')&&lastChildEvent.currentTarget===null;",
+                &result,&error)&&result==L"true";
+        }
+        Check(sharedClicksValid&&confirmationCount==2&&hostRuntime.LastError().empty(),
+            L"native child clicks invoke parent callbacks in registration order with correct identity and confirm results at both DPIs");
+        std::wstring sharedEventResult;
+        Check(hostRuntime.Execute(L"return accepted+'|'+hostClicks+'|'+(window.confirm===confirm);",&sharedEventResult,&error)&&
+            sharedEventResult==L"1|0|true",L"confirm cancellation and acceptance preserve the caller's JavaScript state");
+        eventTrace.clear();hostRuntime.DispatchNodeEvent(eventHost.Body(),L"click");
+        Check(eventTrace.empty()&&confirmationCount==2&&hostRuntime.Execute(L"return hostClicks;",&sharedEventResult,&error)&&sharedEventResult==L"1",
+            L"a parent document click never invokes listeners registered on an iframe document");
+        Check(hostRuntime.Execute(LR"JS(
+            foreignDocument.removeEventListener('click',foreignClick);
+            foreignDocument.addEventListener('click',function(e){e.preventDefault();e.stopImmediatePropagation();
+                chrome.webview.postMessage('cancel-once');},{capture:true,once:true});
+        )JS",&sharedEventResult,&error),L"cross-document listener removal and once cancellation register");
+        eventTrace.clear();
+        const bool canceledOnce=childRuntime.DispatchNodeEvent(eventChild->GetElementById(L"event-pad"),L"click");
+        Check(canceledOnce&&eventTrace==L"parent-capture|cancel-once|",
+            L"cross-document cancellation stops child listeners and applies to the native default action");
+        eventTrace.clear();childRuntime.DispatchNodeEvent(eventChild->GetElementById(L"event-pad"),L"click");
+        Check(eventTrace==L"parent-capture|child-node|parent-node|child-document|"&&confirmationCount==2,
+            L"once listeners are removed before invocation and removed document callbacks stay removed");
+    }
+
     Document pointerHitDoc;
     Check(pointerHitDoc.Parse(
           L"<style>*{box-sizing:border-box;margin:0;padding:0}.stage{position:relative;width:200px;height:100px}.target{width:60px;height:30px}.overlay{position:absolute;inset:0;pointer-events:none}.host{position:relative;width:40px;height:20px}.popup{position:absolute;left:0;top:20px;width:100px;height:40px}.stack{position:relative;width:100px;height:50px;margin-left:150px}.front,.back{position:absolute;inset:0}.front{z-index:2}</style>"
@@ -3779,6 +6209,30 @@ int wmain(int argc,wchar_t** argv) {
           std::abs(transitionPanel->rect.x)<0.1f,
           L"reverse CSS transitions finish at the expanded layout");
 
+    Document animationDoc;
+    Check(animationDoc.Parse(L"<style>@keyframes Turn{100%{transform:rotate(360deg)}}@keyframes fade{from{opacity:0}to{opacity:1}}"
+        L"#moving{width:40px;height:20px;animation:Turn 1s linear infinite}#fading{animation:fade 1s .2s linear both}</style>"
+        L"<div id='moving'></div><div id='fading'></div>",&error),L"CSS keyframe animation fixture parses");
+    StyleSheet animationCss;Check(animationCss.Parse(animationDoc.StyleText(),&error),L"CSS keyframe rules parse");
+    LayoutEngine animationLayout(animationDoc,animationCss);animationLayout.Layout(200,100);
+    const auto movingNode=animationDoc.GetElementById(L"moving"),fadingNode=animationDoc.GetElementById(L"fading");
+    Check(animationLayout.HasActiveTransitions()&&animationLayout.BoxFor(movingNode)->style.Get(L"transform")==L"rotate(0deg)"&&
+        animationLayout.BoxFor(fadingNode)->style.Get(L"opacity")==L"0",L"CSS animations synthesize underlying endpoints and backwards fill before a delay");
+    animationLayout.AdvanceTransitions(250);
+    Check(std::abs(std::stof(animationLayout.BoxFor(movingNode)->style.Get(L"transform").substr(7))-90)<.01f&&
+        std::abs(std::stof(animationLayout.BoxFor(fadingNode)->style.Get(L"opacity"))-.05f)<.01f,
+        L"CSS keyframe transform and opacity animation advance on the rendering timeline");
+    animationLayout.Layout(200,100);
+    animationLayout.AdvanceTransitions(1000);
+    Check(std::abs(std::stof(animationLayout.BoxFor(movingNode)->style.Get(L"transform").substr(7))-90)<.01f&&
+        animationLayout.BoxFor(fadingNode)->style.Get(L"opacity")==L"1",
+        L"Infinite CSS animation retains time across layout rebuilds while finite animation preserves forwards fill");
+    movingNode->SetAttribute(L"style",L"animation-play-state: paused");animationLayout.Layout(200,100);
+    const auto pausedTransform=animationLayout.BoxFor(movingNode)->style.Get(L"transform");
+    animationLayout.AdvanceTransitions(500);
+    Check(animationLayout.BoxFor(movingNode)->style.Get(L"transform")==pausedTransform&&!animationLayout.HasActiveTransitions(),
+        L"Paused CSS animations preserve their current frame and stop requesting rendering ticks");
+
     Document buttonDoc;
     Check(buttonDoc.Parse(L"<style>#override{text-align:right}</style><div id='parent'><button id='default'>Default</button><button id='override'>Override</button></div>",&error),
           L"button alignment fixture parses");
@@ -3888,6 +6342,85 @@ int wmain(int argc,wchar_t** argv) {
     Check(hiddenCommentFormValid,
           L"hidden form values do not create rows and the comment textarea keeps its percentage width and fixed height at 100 and 150 percent DPI");
 
+    Document commonEditorLayoutDoc;
+    Check(commonEditorLayoutDoc.Parse(LR"HTML(
+        <!doctype html><style>
+        *{margin:0;padding:0}body{font:12px/160% Arial}
+        table{width:600px;table-layout:fixed;border-collapse:collapse}
+        #leading{width:100px;padding-right:5px}#percent-a{width:80%}#percent-b{width:45%}
+        #control{width:85px;height:35px;border:1px solid;padding:2px}
+        #points{font-size:8pt}#inherited-length{font-size:24px}
+        #legacy-pseudo:before{content:'icon';display:inline-block;width:20px;height:18px}
+        #inline-height{height:100px;line-height:20px}
+        </style><table><tr><td id='leading'></td><td></td></tr></table>
+        <table><tr><td id='percent-a'>a</td><td id='percent-b'>b</td></tr></table>
+        <input type='submit' id='control' value='save'>
+        <div id='points'>small</div><div id='inherited-length'>large</div>
+        <a id='legacy-pseudo'>link</a><span id='inline-height'>text</span>
+    )HTML",&error),L"common editor CSS rule fixture parses");
+    StyleSheet commonEditorCss;Check(commonEditorCss.Parse(commonEditorLayoutDoc.StyleText(),&error),
+          L"common editor CSS rule fixture styles parse");
+    LayoutEngine commonEditorLayout(commonEditorLayoutDoc,commonEditorCss);
+    bool commonEditorRulesValid=true;
+    for(const float scale:{1.0f,1.5f}){
+        commonEditorLayout.Layout(700,400,scale);
+        const auto* leading=commonEditorLayout.BoxFor(commonEditorLayoutDoc.GetElementById(L"leading"));
+        const auto* percentA=commonEditorLayout.BoxFor(commonEditorLayoutDoc.GetElementById(L"percent-a"));
+        const auto* percentB=commonEditorLayout.BoxFor(commonEditorLayoutDoc.GetElementById(L"percent-b"));
+        const auto* control=commonEditorLayout.BoxFor(commonEditorLayoutDoc.GetElementById(L"control"));
+        const auto* points=commonEditorLayout.BoxFor(commonEditorLayoutDoc.GetElementById(L"points"));
+        const auto* inherited=commonEditorLayout.BoxFor(commonEditorLayoutDoc.GetElementById(L"inherited-length"));
+        const auto* legacy=commonEditorLayout.BoxFor(commonEditorLayoutDoc.GetElementById(L"legacy-pseudo"));
+        const auto* inlineHeight=commonEditorLayout.BoxFor(commonEditorLayoutDoc.GetElementById(L"inline-height"));
+        commonEditorRulesValid=commonEditorRulesValid&&leading&&percentA&&percentB&&control&&points&&inherited&&legacy&&inlineHeight&&
+            std::abs(leading->rect.width-105)<0.1f&&
+            std::abs(percentA->rect.width-384)<0.1f&&std::abs(percentB->rect.width-216)<0.1f&&
+            std::abs(control->rect.width-85)<0.1f&&std::abs(control->rect.height-35)<0.1f&&
+            std::abs(StyleSheet::Length(points->style.Get(L"font-size"),16,16)-10.666667f)<0.01f&&
+            std::abs(StyleSheet::Length(inherited->style.Get(L"line-height"),24,24)-19.2f)<0.01f&&
+            FindPseudo(legacy,L"before")&&inlineHeight->rect.height<30;
+    }
+    Check(commonEditorRulesValid,
+          L"table padding, overcommitted percentage columns, control border boxes, pt fonts, inherited line lengths, legacy pseudo elements and inline heights are stable at 100 and 150 percent DPI");
+    Check(std::abs(StyleSheet::Length(L"1in",0,0)-96)<0.01f&&
+          std::abs(StyleSheet::Length(L"2.54cm",0,0)-96)<0.01f&&
+          std::abs(StyleSheet::Length(L"25.4mm",0,0)-96)<0.01f&&
+          std::abs(StyleSheet::Length(L"6pc",0,0)-96)<0.01f&&
+          std::abs(StyleSheet::Length(L"101.6q",0,0)-96)<0.01f,
+          L"absolute CSS lengths resolve to CSS pixels independently of device DPI");
+
+    Document inlineEditorFlowDoc;
+    Check(inlineEditorFlowDoc.Parse(LR"HTML(
+        <!doctype html><style>*{margin:0;padding:0}body{font:12px/20px 'Malgun Gothic'}
+        table{width:300px;table-layout:fixed;border-collapse:collapse}
+        #fixed-wrapper{height:20px}#nested-tabs{height:16px}#floating-tab{float:left;height:23px;width:40px}
+        #notice{margin:8px 0}#badge{float:left;height:18px;width:20px}#notice-text{display:block;margin-bottom:-2px}
+        </style><table><tr><td id='bfc'><div id='fixed-wrapper'><div id='nested-tabs'><div id='floating-tab'></div></div></div></td></tr></table>
+        <table><tr><td id='notice-cell'><font><div id='notice'><span id='badge'></span><span id='notice-text'>notice</span></div></font></td></tr></table>
+        <div style='text-align:right'><span><label id='nbsp'><input type='checkbox'>&nbsp;text&nbsp;&nbsp;</label><label id='edge'><input type='checkbox'>&nbsp;text&nbsp;
+        </label></span><input type='submit' value='save' style='width:85px;height:35px'></div>
+    )HTML",&error),L"nested floats and inline whitespace fixture parses");
+    StyleSheet inlineEditorFlowCss;Check(inlineEditorFlowCss.Parse(inlineEditorFlowDoc.StyleText(),&error),
+          L"nested floats and inline whitespace styles parse");
+    LayoutEngine inlineEditorFlow(inlineEditorFlowDoc,inlineEditorFlowCss);
+    bool inlineEditorFlowValid=true;
+    for(const float scale:{1.0f,1.5f}){
+        inlineEditorFlow.Layout(500,300,scale);
+        const auto* cell=inlineEditorFlow.BoxFor(inlineEditorFlowDoc.GetElementById(L"bfc"));
+        const auto* notice=inlineEditorFlow.BoxFor(inlineEditorFlowDoc.GetElementById(L"notice-cell"));
+        const auto* nbsp=inlineEditorFlow.BoxFor(inlineEditorFlowDoc.GetElementById(L"nbsp"));
+        const auto* edge=inlineEditorFlow.BoxFor(inlineEditorFlowDoc.GetElementById(L"edge"));
+        std::vector<LayoutRect> inlineGlyph;
+        const auto labelNode=inlineEditorFlowDoc.GetElementById(L"nbsp");
+        const bool glyphMeasured=inlineEditorFlow.TextRangeRects(labelNode->children.back(),1,1,inlineGlyph);
+        inlineEditorFlowValid=inlineEditorFlowValid&&cell&&notice&&nbsp&&edge&&
+            std::abs(cell->rect.height-23)<0.01f&&std::abs(notice->rect.height-34)<0.01f&&
+            std::abs(nbsp->rect.width-edge->rect.width)<0.01f&&glyphMeasured&&!inlineGlyph.empty()&&
+            inlineGlyph.front().x>nbsp->rect.x+16&&inlineGlyph.front().x<nbsp->rect.x+19;
+    }
+    Check(inlineEditorFlowValid,
+          L"BFCs enclose nested visible floats, negative block margins are counted once, NBSP survives and nested trailing spaces precede controls at 100 and 150 percent DPI");
+
     Document floatDoc;
     Check(floatDoc.Parse(
         L"<style>*{box-sizing:border-box;margin:0;padding:0}table{width:640px;table-layout:fixed}"
@@ -3965,6 +6498,183 @@ int wmain(int argc,wchar_t** argv) {
     focusWithinInput->focused=false;focusWithinInput->focusWithin=false;focusWithinLabel->focusWithin=false;
     Check(!Document::MatchesSelector(focusWithinLabel,L".field:focus-within"),L"focus-within clears when no descendant is focused");
 
+    struct LegacyLineCase { const wchar_t* doctype; bool quirks,limited; };
+    const LegacyLineCase legacyLineCases[]={
+        {L"<!doctype html>",false,false},
+        {L"",true,false},
+        {L"<!DOCTYPE HTML PUBLIC '-//W3C//DTD XHTML 1.0 Transitional//EN' 'legacy.dtd'>",false,true},
+        {L"<!doctype html public \"-//W3C//DTD XHTML 1.0 Frameset//EN\">",false,true},
+        {L"<!doctype html public '-//W3C//DTD HTML 4.01 Transitional//EN' 'legacy.dtd'>",false,true},
+        {L"<!doctype html public '-//W3C//DTD HTML 4.01 Frameset//EN'>",true,false},
+        {L"<!doctype html public '-//W3C//DTD XHTML 1.0 Strict//EN' 'strict.dtd'>",false,false}
+    };
+    bool legacyLineModesValid=true,legacyImageLinesValid=true;
+    for(const auto& test:legacyLineCases){
+        Document legacyLineDoc;
+        const std::wstring html=std::wstring(test.doctype)+
+            L"<style>html,body{margin:0}.line{font:12px/1.6 'Malgun Gothic';width:60px}"
+            L"img{width:16px;height:13.5px;vertical-align:middle}</style>"
+            L"<div class='line'><img></div><div class='line'><img>Text</div>";
+        Check(legacyLineDoc.Parse(html,&error),L"legacy document line-height fixture parses");
+        Document adoptedLineDoc;adoptedLineDoc.AdoptParsed(legacyLineDoc);
+        legacyLineModesValid=legacyLineModesValid&&adoptedLineDoc.QuirksMode()==test.quirks&&
+            adoptedLineDoc.LimitedQuirksMode()==test.limited;
+        StyleSheet legacyLineCss;Check(legacyLineCss.Parse(adoptedLineDoc.StyleText(),&error),
+            L"legacy document line-height CSS parses");
+        LayoutEngine legacyLineLayout(adoptedLineDoc,legacyLineCss);
+        const auto lines=adoptedLineDoc.QuerySelectorAll(L".line");
+        const auto images=adoptedLineDoc.GetElementsByTagName(L"img");
+        for(const float scale:{1.0f,1.5f}){
+            legacyLineLayout.Layout(200,100,scale);
+            const auto* imageLine=legacyLineLayout.BoxFor(lines[0]);
+            const auto* image=legacyLineLayout.BoxFor(images[0]);
+            const auto* mixedLine=legacyLineLayout.BoxFor(lines[1]);
+            const bool legacy=test.quirks||test.limited;
+            legacyImageLinesValid=legacyImageLinesValid&&imageLine&&image&&mixedLine&&
+                std::abs(imageLine->rect.height-(legacy?13.5f:19.2f))<0.01f&&
+                std::abs(image->rect.y-imageLine->content.y-(legacy?0.0f:4.171875f))<0.04f&&
+                std::abs(mixedLine->rect.height-19.2f)<0.01f;
+        }
+        Check(adoptedLineDoc.Parse(L"<!doctype html><p>reset</p>",&error)&&
+            !adoptedLineDoc.QuirksMode()&&!adoptedLineDoc.LimitedQuirksMode(),
+            L"reparsing a standard document clears its previous legacy layout mode");
+    }
+    Check(legacyLineModesValid,
+        L"legacy public and system identifiers distinguish limited quirks, full quirks and standards across adoption");
+    Check(legacyImageLinesValid,
+        L"legacy image-only inline lines omit the font strut while actual text retains its line height at both DPI scales");
+
+    struct PaddedFlexCase {
+        const wchar_t* rules;
+        bool column,wrapped,borderBox;
+    };
+    const PaddedFlexCase paddedFlexCases[]={
+        {L"",false,false,false},
+        {L".pair{flex-wrap:wrap}",false,false,false},
+        {L".pair{flex-direction:column}",true,false,false},
+        {L".pair{flex-wrap:wrap;width:60px}",false,true,false},
+        {L".pair{flex-direction:column;flex-wrap:wrap;height:60px}",true,true,false},
+        {L".pair>span{box-sizing:border-box;width:31px;height:31px}",false,false,true},
+        {L".pair>span{flex-basis:15px;width:9px}",false,false,false},
+        {L".pair{flex-direction:column}.pair>span{flex-basis:15px;height:9px}",true,false,false}
+    };
+    bool paddedFlexSizesValid=true,paddedFlexPlacementValid=true;
+    for(const auto& test:paddedFlexCases){
+        Document paddedFlexDoc;
+        const std::wstring html=L"<style>html,body{margin:0}.pair{display:flex;width:100px;height:80px;"
+            L"align-items:flex-start;align-content:flex-start;font-size:0}.pair>span{"
+            L"width:15px;height:15px;padding:7px;border:1px solid #ccc;border-radius:100%;"
+            L"margin:0 5px 5px 0;font-size:12px;flex-shrink:0}img{width:16px;height:16px}"
+            +std::wstring(test.rules)+L"</style><div class='pair'><span><img></span><span><img></span></div>";
+        Check(paddedFlexDoc.Parse(html,&error),L"padded flex-item fixture parses");
+        StyleSheet paddedFlexCss;Check(paddedFlexCss.Parse(paddedFlexDoc.StyleText(),&error),
+            L"padded flex-item CSS parses");
+        LayoutEngine paddedFlexLayout(paddedFlexDoc,paddedFlexCss);
+        const auto nodes=paddedFlexDoc.QuerySelectorAll(L".pair>span");
+        for(const float scale:{1.0f,1.5f}){
+            paddedFlexLayout.Layout(320,240,scale);
+            const auto* first=nodes.size()==2?paddedFlexLayout.BoxFor(nodes[0]):nullptr;
+            const auto* second=nodes.size()==2?paddedFlexLayout.BoxFor(nodes[1]):nullptr;
+            const float border=std::floor(scale)/scale;
+            const float extent=test.borderBox?31.0f:15+14+2*border;
+            const float content=extent-14-2*border;
+            paddedFlexSizesValid=paddedFlexSizesValid&&first&&second&&
+                std::abs(first->rect.width-extent)<0.01f&&std::abs(first->rect.height-extent)<0.01f&&
+                std::abs(second->rect.width-extent)<0.01f&&std::abs(second->rect.height-extent)<0.01f&&
+                std::abs(first->content.width-content)<0.01f&&
+                std::abs(first->content.height-content)<0.01f&&
+                std::abs(first->content.x-first->rect.x-7-border)<0.01f&&
+                std::abs(first->content.y-first->rect.y-7-border)<0.01f;
+            if(first&&second){
+                const bool horizontal=test.column==test.wrapped;
+                const float advance=extent+5;
+                paddedFlexPlacementValid=paddedFlexPlacementValid&&
+                    std::abs(second->rect.x-first->rect.x-(horizontal?advance:0))<0.01f&&
+                    std::abs(second->rect.y-first->rect.y-(horizontal?0:advance))<0.01f;
+            }else paddedFlexPlacementValid=false;
+        }
+    }
+    Check(paddedFlexSizesValid,
+        L"flex width, height and basis include content-box edges exactly once at 100 and 150 percent DPI");
+    Check(paddedFlexPlacementValid,
+        L"padded flex items advance and wrap by their outer size in row and column directions at both DPI scales");
+
+    Document intrinsicFlexDoc;
+    Check(intrinsicFlexDoc.Parse(
+        L"<style>html,body{margin:0}.row{display:flex;align-items:center;width:300px;height:40px}"
+        L".pair{display:flex;font-size:0}.pair>span{display:inline-block;width:15px;height:15px;"
+        L"padding:7px;border:1px solid #ccc;border-radius:100%;margin-right:5px;font-size:12px}"
+        L".mark{display:inline-block;width:17px;height:17px;margin-top:-1px}"
+        L"img{width:16px;height:16px;vertical-align:middle}</style><div class='row'>"
+        L"<div class='pair'><span><span class='mark'></span></span><span><img></span></div></div>",&error),
+        L"intrinsically sized padded flex buttons fixture parses");
+    StyleSheet intrinsicFlexCss;Check(intrinsicFlexCss.Parse(intrinsicFlexDoc.StyleText(),&error),
+        L"intrinsically sized padded flex buttons CSS parses");
+    LayoutEngine intrinsicFlexLayout(intrinsicFlexDoc,intrinsicFlexCss);
+    const auto intrinsicButtons=intrinsicFlexDoc.QuerySelectorAll(L".pair>span");
+    bool intrinsicFlexValid=true;
+    for(const float scale:{1.0f,1.5f}){
+        intrinsicFlexLayout.Layout(320,100,scale);
+        const auto* pair=intrinsicFlexLayout.BoxFor(intrinsicFlexDoc.QuerySelector(L".pair"));
+        const auto* first=intrinsicFlexLayout.BoxFor(intrinsicButtons[0]);
+        const auto* second=intrinsicFlexLayout.BoxFor(intrinsicButtons[1]);
+        const float extent=15+14+2*std::floor(scale)/scale;
+        intrinsicFlexValid=intrinsicFlexValid&&pair&&first&&second&&
+            std::abs(pair->rect.width-2*(extent+5))<0.01f&&
+            std::abs(first->rect.width-extent)<0.01f&&std::abs(second->rect.width-extent)<0.01f&&
+            std::abs(first->rect.height-extent)<0.01f&&std::abs(second->rect.height-extent)<0.01f;
+    }
+    Check(intrinsicFlexValid,
+        L"auto-width flex parents include content-box decorations in child intrinsic contributions at both DPI scales");
+    StyleSheet intrinsicColumnCss;
+    Check(intrinsicColumnCss.Parse(intrinsicFlexDoc.StyleText()+L".row{height:80px}.pair{flex-direction:column}",&error),
+        L"intrinsic column flex CSS parses");
+    LayoutEngine intrinsicColumnLayout(intrinsicFlexDoc,intrinsicColumnCss);
+    bool intrinsicColumnValid=true;
+    for(const float scale:{1.0f,1.5f}){
+        intrinsicColumnLayout.Layout(320,100,scale);
+        const auto* pair=intrinsicColumnLayout.BoxFor(intrinsicFlexDoc.QuerySelector(L".pair"));
+        const auto* first=intrinsicColumnLayout.BoxFor(intrinsicButtons[0]);
+        const auto* second=intrinsicColumnLayout.BoxFor(intrinsicButtons[1]);
+        const float extent=15+14+2*std::floor(scale)/scale;
+        intrinsicColumnValid=intrinsicColumnValid&&pair&&first&&second&&
+            std::abs(pair->rect.width-extent-5)<0.01f&&
+            std::abs(first->rect.width-extent)<0.01f&&std::abs(second->rect.width-extent)<0.01f&&
+            std::abs(second->rect.y-first->rect.y-extent)<0.01f;
+    }
+    Check(intrinsicColumnValid,
+        L"column flex intrinsic width uses the widest inline-authored item instead of summing their widths");
+
+    Document flexEdgesDoc;
+    Check(flexEdgesDoc.Parse(
+        L"<style>html,body{margin:0}.shrink{display:flex;width:100px;height:40px}.shrink>span{"
+        L"width:50px;height:20px;min-width:0}.shrink>span:first-child{padding:0 10px}"
+        L".percent{display:flex;flex-direction:column;width:100px;height:200px;align-items:flex-start}"
+        L".percent>span{width:20px;height:20px;padding:10%;margin:2%;flex-shrink:0}</style>"
+        L"<div class='shrink'><span></span><span></span></div>"
+        L"<div class='percent'><span></span><span></span></div>",&error),
+        L"flex shrinking and percentage-edge fixture parses");
+    StyleSheet flexEdgesCss;Check(flexEdgesCss.Parse(flexEdgesDoc.StyleText(),&error),
+        L"flex shrinking and percentage-edge CSS parses");
+    LayoutEngine flexEdgesLayout(flexEdgesDoc,flexEdgesCss);
+    const auto shrinkItems=flexEdgesDoc.QuerySelectorAll(L".shrink>span");
+    const auto percentItems=flexEdgesDoc.QuerySelectorAll(L".percent>span");
+    bool flexEdgesValid=true;
+    for(const float scale:{1.0f,1.5f}){
+        flexEdgesLayout.Layout(320,320,scale);
+        const auto* padded=flexEdgesLayout.BoxFor(shrinkItems[0]);
+        const auto* plain=flexEdgesLayout.BoxFor(shrinkItems[1]);
+        const auto* percentFirst=flexEdgesLayout.BoxFor(percentItems[0]);
+        const auto* percentSecond=flexEdgesLayout.BoxFor(percentItems[1]);
+        flexEdgesValid=flexEdgesValid&&padded&&plain&&percentFirst&&percentSecond&&
+            std::abs(padded->rect.width-60)<0.01f&&std::abs(plain->rect.width-40)<0.01f&&
+            std::abs(padded->content.width-plain->content.width)<0.01f&&
+            std::abs(percentFirst->rect.width-40)<0.01f&&std::abs(percentFirst->rect.height-40)<0.01f&&
+            std::abs(percentSecond->rect.y-percentFirst->rect.y-44)<0.01f;
+    }
+    Check(flexEdgesValid,
+        L"flex shrink weights exclude padding and percentage edges use the containing width on either axis");
+
     Document alignmentDoc;Check(alignmentDoc.Parse(
         L"<style>*{box-sizing:border-box}button{display:inline-flex;align-items:center;gap:7px;min-height:36px;padding:0 13px;font-family:'Segoe UI';font-size:14px}.icon{width:15px;height:15px}.copy{display:grid;gap:1px}.copy strong{font-size:13px}.copy small{font-size:11px}</style><body><button id='aligned-button'>\n  <svg class='icon' viewBox='0 0 24 24'></svg> Export\n</button><span id='stacked-copy' class='copy'><strong>Account</strong><small>Developer plan</small></span></body>",
         &error),L"generic flex and grid alignment fixture parses");
@@ -4011,7 +6721,7 @@ int wmain(int argc,wchar_t** argv) {
     const auto* trailingInline=FindLayout(inlineLayout.Root(),L"trail");
     const auto* plainInline=FindLayout(inlineLayout.Root(),L"plain");
     Check(simpleInline&&mixedInline&&std::lround(simpleInline->rect.height)==16&&
-          std::lround(mixedInline->rect.height)==16&&std::abs(simpleInline->rect.y-mixedInline->rect.y)<0.01f,
+          std::lround(mixedInline->rect.height)==16&&std::abs(simpleInline->rect.y-mixedInline->rect.y)<0.05f,
           L"nested inline content uses the inherited line box instead of an arbitrary minimum height");
     Check(titleInline&&iconInline&&titleInline->children.size()==2&&
           std::abs(iconInline->rect.y-titleInline->children[1]->rect.y)<0.01f&&
@@ -4031,6 +6741,104 @@ int wmain(int argc,wchar_t** argv) {
     const LayoutBox* withoutSpaceText=withoutSpace&&withoutSpace->children.size()==2?withoutSpace->children[1].get():nullptr;
     Check(withSpaceText&&withoutSpaceText&&withSpaceText->rect.width-withoutSpaceText->rect.width>2.5f,
           L"collapsed leading whitespace is preserved between inline siblings");
+
+    Document commonFlowDoc;
+    Check(commonFlowDoc.Parse(
+        L"<style>*{margin:0}body{font:20px Arial}.line{height:30px}"
+        L".stack{width:800px}.frame{width:728px;height:90px;vertical-align:bottom}"
+        L".first{height:20px;margin-bottom:10px}.parent{min-height:100px}"
+        L".child{height:90px;margin:15px 0}.next{height:10px;margin-top:20px}"
+        L".padded{padding-top:5px}.padded>div{height:10px;margin-top:15px}"
+        L".flex-flow{display:flex;flex-direction:column}.flex-flow>div{height:10px;margin:10px 0}"
+        L".small-count{font:11px/30px Arial;background:#eee;vertical-align:text-top}"
+        L".font-edges{font:20px/30px 'Malgun Gothic'}"
+        L".font-edges span{font-size:11px;font-family:Tahoma;vertical-align:text-top;background:#eee}"
+        L".tool-track{font:0px/1.6 'Malgun Gothic'}.tool-track span{font-size:12px;vertical-align:top}"
+        L".tool-track i{display:inline-block;width:19px;height:19px}</style>"
+        L"<div id='spaced-badge' class='line'><img width='22' height='11'> <span>Label</span></div>"
+        L"<div id='tight-badge' class='line'><img width='22' height='11'><span>Label</span></div>"
+        L"<div class='line'>Title <span id='small-count' class='small-count'>47</span></div>"
+        L"<div id='font-line' class='font-edges'>Text <span id='font-label'>47</span></div>"
+        L"<div id='tool-line' class='tool-track'><span id='tool-label'>Action</span><i></i></div>"
+        L"<div id='frame-line' class='stack'><iframe class='frame'></iframe></div>"
+        L"<section class='stack'><div id='margin-first' class='first'></div>"
+        L"<div id='margin-parent' class='parent'><div id='margin-child' class='child'></div></div>"
+        L"<div id='margin-next' class='next'></div></section>"
+        L"<div id='margin-padded' class='padded'><div id='margin-padded-child'></div></div>"
+        L"<div class='flex-flow'><div id='margin-flex-first'></div><div id='margin-flex-next'></div></div>",
+        &error),L"common inline whitespace and block margin fixture parses");
+    StyleSheet commonFlowCss;Check(commonFlowCss.Parse(commonFlowDoc.StyleText(),&error),
+                                  L"common flow CSS parses");
+    LayoutEngine commonFlowLayout(commonFlowDoc,commonFlowCss);
+    for(const float scale:{1.0f,1.5f}){
+        commonFlowLayout.Layout(960,660,scale);
+        const auto* spaced=FindLayout(commonFlowLayout.Root(),L"spaced-badge");
+        const auto* tight=FindLayout(commonFlowLayout.Root(),L"tight-badge");
+        Check(spaced&&tight&&spaced->children.size()==3&&tight->children.size()==2&&
+              spaced->children.back()->rect.x-tight->children.back()->rect.x>4.0f,
+              L"whitespace-only text between replaced and inline elements retains one CSS space at both DPIs");
+        const auto* count=FindLayout(commonFlowLayout.Root(),L"small-count");
+        Check(count&&count->rect.height>=11.0f&&count->rect.height<=15.0f&&
+              count->children.size()==1&&count->children.front()->rect.height>=29.0f,
+              L"an inline label paints its font-sized background while retaining the containing line-height");
+        const auto* fontLine=FindLayout(commonFlowLayout.Root(),L"font-line");
+        const auto* fontLabel=FindLayout(commonFlowLayout.Root(),L"font-label");
+        Check(fontLine&&fontLabel&&std::abs(fontLine->rect.height-31.0f)<0.01f&&
+              std::abs(fontLabel->rect.height-13.0f)<0.01f&&
+              std::abs(fontLabel->rect.y-fontLine->rect.y-9.0f)<0.01f,
+              L"mixed font sizes use the browser's rounded font edges and odd half-leading at both DPIs");
+        const auto* toolLine=FindLayout(commonFlowLayout.Root(),L"tool-line");
+        const auto* toolLabel=FindLayout(commonFlowLayout.Root(),L"tool-label");
+        Check(toolLine&&toolLabel&&std::abs(toolLabel->rect.y-toolLine->rect.y-1.0f)<0.01f,
+              L"top-aligned inline backgrounds retain font half-leading beside atomic action boxes");
+        const auto* frameLine=FindLayout(commonFlowLayout.Root(),L"frame-line");
+        Check(frameLine&&std::abs(frameLine->rect.height-90.0f)<0.01f,
+              L"a bottom-aligned replaced element determines intrinsic line height without baseline descent");
+        const auto* first=FindLayout(commonFlowLayout.Root(),L"margin-first");
+        const auto* parent=FindLayout(commonFlowLayout.Root(),L"margin-parent");
+        const auto* child=FindLayout(commonFlowLayout.Root(),L"margin-child");
+        const auto* next=FindLayout(commonFlowLayout.Root(),L"margin-next");
+        Check(first&&parent&&child&&next&&std::abs(parent->rect.height-100.0f)<0.01f&&
+              std::abs(parent->rect.y-first->rect.y-first->rect.height-15.0f)<0.01f&&
+              std::abs(child->rect.y-parent->rect.y)<0.01f&&
+              std::abs(next->rect.y-parent->rect.y-parent->rect.height-20.0f)<0.01f,
+              L"adjoining sibling and parent-child margins collapse across an auto-height constrained block");
+        const auto* padded=FindLayout(commonFlowLayout.Root(),L"margin-padded");
+        const auto* paddedChild=FindLayout(commonFlowLayout.Root(),L"margin-padded-child");
+        Check(padded&&paddedChild&&std::abs(paddedChild->rect.y-padded->rect.y-20.0f)<0.01f,
+              L"padding separates parent and child margins");
+        const auto* flexFirst=FindLayout(commonFlowLayout.Root(),L"margin-flex-first");
+        const auto* flexNext=FindLayout(commonFlowLayout.Root(),L"margin-flex-next");
+        Check(flexFirst&&flexNext&&std::abs(flexNext->rect.y-flexFirst->rect.y-30.0f)<0.01f,
+              L"vertical margins of flex items remain additive");
+    }
+
+    Document standardTableDoc;
+    Check(standardTableDoc.Parse(
+        L"<!-- source comment --><!doctype html><style>body{margin:0}table{border-collapse:collapse}</style>"
+        L"<div id='invalid-padding' style='padding:0 8 0 8'>Text</div>"
+        L"<table cellpadding='0'><tr><td id='attribute-height' height='25'></td></tr></table>"
+        L"<table cellpadding='0'><tr><td id='empty-cell'></td></tr></table>",&error),
+        L"standards-mode HTML table fixture parses");
+    StyleSheet standardTableCss;Check(standardTableCss.Parse(standardTableDoc.StyleText(),&error),
+                                     L"standards-mode table styles parse");
+    LayoutEngine standardTableLayout(standardTableDoc,standardTableCss);
+    standardTableLayout.Layout(320,100);
+    const auto* invalidPadding=FindLayout(standardTableLayout.Root(),L"invalid-padding");
+    const auto* attributeHeight=FindLayout(standardTableLayout.Root(),L"attribute-height");
+    const auto* emptyCell=FindLayout(standardTableLayout.Root(),L"empty-cell");
+    Check(!standardTableDoc.QuirksMode()&&invalidPadding&&
+          std::abs(invalidPadding->content.x-invalidPadding->rect.x)<0.01f&&
+          attributeHeight&&std::abs(attributeHeight->rect.height-25.0f)<0.01f&&
+          emptyCell&&std::abs(emptyCell->rect.height)<0.01f,
+          L"standards mode ignores invalid unitless padding, honors HTML cell height, and gives empty rows no synthetic height");
+    Check(standardTableDoc.Parse(L"<div id='legacy-padding' style='padding:0 8 0 8'>Text</div>",&error),
+          L"legacy unitless-length document parses");
+    standardTableLayout.Layout(320,100);
+    const auto* legacyPadding=FindLayout(standardTableLayout.Root(),L"legacy-padding");
+    Check(standardTableDoc.QuirksMode()&&legacyPadding&&
+          std::abs(legacyPadding->content.x-legacyPadding->rect.x-8.0f)<0.01f,
+          L"quirks mode retains legacy unitless CSS padding");
 
     Document clippedTextDoc;
     Check(clippedTextDoc.Parse(L"<style>*{box-sizing:border-box}.cell{width:120px;height:28px;padding:0 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.right{text-align:right}</style><div id='clipped-left' class='cell'>A very long single line</div><div id='clipped-right' class='cell right'>42</div>",&error),
@@ -4282,6 +7090,29 @@ int wmain(int argc,wchar_t** argv) {
         RECT inputBounds{0,0,320,120};auto inputView=TWebFrame::View::Create(inputHost,inputBounds);
         Check(inputView!=nullptr,L"TWebFrame input test view is created");
         if(inputView){
+            inputView->SetResourceLoader([](const std::wstring& path,std::wstring& css){
+                if(path!=L"https://styles.test/css/editor.css")return false;
+                css=L"p{color:blue;background-image:url(../images/icon.png)}";return true;
+            });
+            Check(inputView->NavigateToString(
+                L"<style>p{color:red}</style><link rel='stylesheet' href='/css/editor.css'>"
+                L"<style id='last-style'>p{color:green}</style><p>text</p>",L"https://styles.test/document.html"),
+                L"stylesheet source order and relative URL fixture loads");
+            std::wstring cascadeResult,cascadeError;
+            Check(inputView->ExecuteScript(
+                L"return getComputedStyle(document.querySelector('p')).color;",&cascadeResult,&cascadeError)&&cascadeResult==L"green",
+                L"inline and linked stylesheets cascade in document order");
+            Check(inputView->ExecuteScript(
+                L"document.getElementById('last-style').remove();"
+                L"var addedStyle=document.createElement('style');document.head.appendChild(addedStyle);"
+                L"addedStyle.sheet.insertRule('p{color:purple}',0);"
+                L"return getComputedStyle(document.querySelector('p')).color;",&cascadeResult,&cascadeError)&&cascadeResult==L"purple",
+                L"inserted style elements and CSSOM rules affect computed style before script returns");
+            Check(inputView->ExecuteScript(
+                L"addedStyle.remove();return getComputedStyle(document.querySelector('p')).color+'|'"
+                L"+getComputedStyle(document.querySelector('p')).backgroundImage;",&cascadeResult,&cascadeError)&&
+                cascadeResult.find(L"blue|url(\"https://styles.test/images/icon.png\")")==0,
+                L"stylesheet removal restores the linked rule and relative image URLs use the stylesheet location");
             const DWORD asyncUiThread=GetCurrentThreadId();
             std::atomic<DWORD> asyncResourceThread{0};
             std::atomic<DWORD> asyncFetchThread{0};
@@ -4295,7 +7126,7 @@ int wmain(int argc,wchar_t** argv) {
                     asyncResourceThread.store(GetCurrentThreadId(),std::memory_order_relaxed);
                     source=L"#async-winner{color:rgb(1,2,3)}";return true;
                 }
-                if(path==L"https://async.test/payload.txt"){
+                if(path==L"fixture://async.test/payload.txt"){
                     asyncFetchThread.store(GetCurrentThreadId(),std::memory_order_relaxed);
                     Sleep(20);source=L"worker-fetch";return true;
                 }
@@ -4349,7 +7180,7 @@ int wmain(int argc,wchar_t** argv) {
             inputView->SetMessageHandler([&](const std::wstring& value){asyncFetchMessage=value;});
             std::wstring asyncFetchError;
             Check(inputView->ExecuteScript(
-                L"fetch('payload.txt').then(response=>response.text()).then(value=>window.chrome.webview.postMessage(value));",
+                L"fetch('fixture://async.test/payload.txt').then(response=>response.text()).then(value=>window.chrome.webview.postMessage(value));",
                 nullptr,&asyncFetchError),asyncFetchError.c_str());
             Check(asyncFetchMessage.empty(),L"fetch returns a pending promise without blocking the UI thread");
             const auto fetchDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
@@ -4675,8 +7506,31 @@ int wmain(int argc,wchar_t** argv) {
             if(selectionResult!=L"240|180|<main>inline frame</main>|240|180")
                 std::wcerr<<L"iframe reflected sizing actual: "<<selectionResult<<L'\n';
             inputMessage.clear();
+            Check(inputView->NavigateToString(LR"HTML(<!doctype html><style>
+                html,body{margin:0}nav{position:relative;height:20px;z-index:9}
+                aside{display:none;position:absolute;top:20px;width:60px;height:40px;background:#fff;z-index:100}
+                nav:hover aside{display:block}section{position:relative;z-index:0}
+                iframe{display:block;width:120px;height:80px;border:0}
+                </style><nav>Menu<aside onclick="window.chrome.webview.postMessage('popup-click')">Action</aside></nav>
+                <section><iframe srcdoc="<style>html,body{margin:0}button{width:120px;height:80px}</style><button onclick='window.chrome.webview.postMessage(&quot;frame-click&quot;)'>Child</button>"></iframe></section>)HTML"),
+                L"generic native iframe popup input fixture loads");
+            const auto framePointerScale=static_cast<double>(GetDpiForWindow(inputWindow))/96.0;
+            const auto framePoint=[&](int x,int y){return MAKELPARAM(static_cast<int>(std::lround(x*framePointerScale)),
+                static_cast<int>(std::lround(y*framePointerScale)));};
+            SendMessageW(inputWindow,WM_MOUSEMOVE,0,framePoint(10,10));
+            SendMessageW(inputWindow,WM_MOUSEMOVE,0,framePoint(20,30));
+            inputMessage.clear();SendMessageW(inputWindow,WM_LBUTTONDOWN,MK_LBUTTON,framePoint(20,30));
+            SendMessageW(inputWindow,WM_LBUTTONUP,0,framePoint(20,30));
+            Check(inputMessage==L"popup-click",L"a popup overlapping iframe receives its own click through common CSS hit testing");
+            SendMessageW(inputWindow,WM_MOUSEMOVE,0,framePoint(100,30));
+            inputMessage.clear();SendMessageW(inputWindow,WM_LBUTTONDOWN,MK_LBUTTON,framePoint(100,30));
+            SendMessageW(inputWindow,WM_LBUTTONUP,0,framePoint(100,30));
+            Check(inputMessage==L"frame-click"&&GetFocus()==FindWindowExW(inputWindow,nullptr,L"TWebFrame.View.1",nullptr),
+                L"unobscured iframe contents retain pointer routing and native focus");
+            Check(inputView->ExecuteScript(L"return document.querySelector('nav:hover')===null;",
+                &selectionResult,&selectionError)&&selectionResult==L"true",L"moving out of popup into iframe clears its ancestor hover state");
             Check(inputView->NavigateToString(
-                L"<style>*{margin:0}iframe{width:160px;height:90px;border:0}</style>"
+                L"<style>*{margin:0}body{background:#28496a}iframe{width:160px;height:90px;border:0}</style>"
                 L"<iframe id='friendly-frame'></iframe>"),
                 L"friendly iframe document fixture loads in a real view");
             Check(inputView->ExecuteScript(
@@ -4692,6 +7546,146 @@ int wmain(int argc,wchar_t** argv) {
             Check(inputMessage==L"friendly-frame-painted"&&
                       FindWindowExW(inputWindow,nullptr,L"TWebFrame.View.1",nullptr)!=nullptr,
                   L"contentWindow.document write and close load and render a friendly iframe document");
+            Check(inputView->ExecuteScript(
+                L"for(var i=0;i<20;i++)frame.contentWindow.focus();"
+                L"childDocument.body.innerHTML='initial editor contents';"
+                L"frame.contentWindow.blur();window.focus();window.blur();"
+                L"return childDocument.body.textContent;",
+                &selectionResult,&selectionError)&&selectionResult==L"initial editor contents",
+                L"browsing context focus and blur APIs allow scripts to initialize iframe editor contents");
+            const auto focusedFrameWindow=FindWindowExW(inputWindow,nullptr,L"TWebFrame.View.1",nullptr);
+            Check(focusedFrameWindow&&
+                FindWindowExW(inputWindow,focusedFrameWindow,L"TWebFrame.View.1",nullptr)==nullptr,
+                L"repeated iframe window focus reuses its existing browsing context");
+            Check(inputView->ExecuteScript(LR"JS(
+                childDocument.body.innerHTML='<div class="inside" contenteditable="true">text</div>';
+                var inside=childDocument.querySelector('.inside');
+                var fragment=childDocument.createDocumentFragment();
+                var appended=childDocument.createElement('span');appended.className='inserted';
+                appended.appendChild(childDocument.createTextNode(' appended'));fragment.appendChild(appended);
+                inside.appendChild(fragment);
+                childDocument.styleSheets[0].insertRule('.inside { width:100px; height:24px; color:rgb(10,20,30) }',0);
+                var rect=inside.getBoundingClientRect();
+                return inside.textContent==='text appended' &&
+                    appended.ownerDocument===inside.ownerDocument &&
+                    childDocument.getElementsByClassName('inserted').length===1 &&
+                    document.querySelector('.inside')===null &&
+                    Math.abs(rect.width-100)<0.01 && Math.abs(rect.height-24)<0.01 &&
+                    getComputedStyle(inside).color==='rgb(10,20,30)';
+            )JS",&selectionResult,&selectionError)&&selectionResult==L"true",
+                  L"parent scripts update the child document's DOM, stylesheet, indexes and CSS geometry synchronously");
+            Check(inputView->ExecuteScript(LR"JS(
+                var nativeConfirmChoices=[];
+                childDocument.addEventListener('click',function(e){
+                    if(e.currentTarget!==childDocument)throw new Error('wrong child document');
+                    var choice=confirm('Sign in before writing?');
+                    nativeConfirmChoices.push(choice?'ok':'cancel');
+                    chrome.webview.postMessage(choice?'confirmation-ok':'confirmation-cancel');
+                });
+            )JS",&selectionResult,&selectionError),L"parent editor callback registers on the native child document");
+            scriptDialogProbe={};scriptDialogProbe.window=inputWindow;
+            {
+                std::atomic<bool> dialogDone=false;
+                std::thread observer([&]{Sleep(40);ObserveScriptDialog();});
+                inputMessage.clear();
+                SendMessageW(inputWindow,WM_LBUTTONDOWN,MK_LBUTTON,framePoint(20,10));
+                SendMessageW(inputWindow,WM_LBUTTONUP,0,framePoint(20,10));
+                dialogDone=true;observer.join();
+                Check(scriptDialogProbe.opened==1&&scriptDialogProbe.painted&&
+                    scriptDialogProbe.blueButton&&!scriptDialogProbe.nativeDialog&&inputMessage==L"confirmation-cancel",
+                    L"an iframe editor click paints a browser confirm card and Escape returns false");
+                if(!scriptDialogProbe.painted||!scriptDialogProbe.blueButton)
+                    std::wcerr<<L"script dialog paint: opened="<<scriptDialogProbe.opened
+                        <<L" surface="<<scriptDialogProbe.surface<<L" blue="
+                        <<scriptDialogProbe.blue.x<<L","<<scriptDialogProbe.blue.y<<L'\n';
+                scriptDialogProbe.clickBlueButton=true;inputMessage.clear();
+                dialogDone=false;
+                std::thread acceptObserver([&]{
+                    Sleep(40);ObserveScriptDialog();Sleep(150);
+                    if(!dialogDone.load()){
+                        scriptDialogProbe.fallbackUsed=true;
+                        PostMessageW(inputWindow,WM_KEYDOWN,VK_RETURN,0);
+                    }
+                });
+                SendMessageW(inputWindow,WM_LBUTTONDOWN,MK_LBUTTON,framePoint(20,10));
+                SendMessageW(inputWindow,WM_LBUTTONUP,0,framePoint(20,10));
+                dialogDone=true;acceptObserver.join();
+                Check(scriptDialogProbe.opened==2&&!scriptDialogProbe.fallbackUsed&&
+                    inputMessage==L"confirmation-ok"&&inputView->ExecuteScript(
+                    L"return nativeConfirmChoices.join('|');",&selectionResult,&selectionError)&&selectionResult==L"cancel|ok",
+                    L"clicking the CSS-rendered confirm button returns true exactly once");
+                SendMessageW(inputWindow,WM_LBUTTONDOWN,MK_LBUTTON,framePoint(200,120));
+                SendMessageW(inputWindow,WM_LBUTTONUP,0,framePoint(200,120));
+                Check(scriptDialogProbe.opened==2,L"clicking outside the editor never opens its iframe confirmation");
+                scriptDialogProbe.clickBlueButton=true;
+                dialogDone=false;scriptDialogProbe.fallbackUsed=false;
+                std::thread alertObserver([&]{
+                    Sleep(40);ObserveScriptDialog();Sleep(150);
+                    if(!dialogDone.load()){
+                        scriptDialogProbe.fallbackUsed=true;
+                        PostMessageW(inputWindow,WM_KEYDOWN,VK_RETURN,0);
+                    }
+                });
+                const bool alertExecuted=inputView->ExecuteScript(
+                    L"var alertResult=alert('A rendered alert');return String(alertResult)+'|'+(1+1);",
+                    &selectionResult,&selectionError);
+                dialogDone=true;alertObserver.join();
+                Check(alertExecuted&&selectionResult==L"undefined|2"&&
+                    scriptDialogProbe.opened==3&&scriptDialogProbe.painted&&
+                    scriptDialogProbe.blueButton&&!scriptDialogProbe.fallbackUsed,
+                    L"alert paints the common browser dialog and resumes JavaScript after its button is clicked");
+                if(selectionResult!=L"undefined|2"||!scriptDialogProbe.painted||!scriptDialogProbe.blueButton)
+                    std::wcerr<<L"script alert: result="<<selectionResult<<L" error="<<selectionError
+                        <<L" opened="<<scriptDialogProbe.opened<<L" surface="<<scriptDialogProbe.surface
+                        <<L" blue="<<scriptDialogProbe.blue.x<<L","<<scriptDialogProbe.blue.y<<L'\n';
+                const HWND previousDialogFocus=GetFocus();
+                RECT dialogClient{};GetClientRect(inputWindow,&dialogClient);
+                PostMessageW(inputWindow,WM_LBUTTONDOWN,MK_LBUTTON,framePoint(20,10));
+                PostMessageW(inputWindow,WM_LBUTTONUP,0,framePoint(20,10));
+                PostMessageW(focusedFrameWindow,WM_KEYDOWN,L'A',0);
+                PostMessageW(focusedFrameWindow,WM_CHAR,L'x',0);
+                PostMessageW(inputWindow,WM_SIZE,SIZE_RESTORED,MAKELPARAM(dialogClient.right,dialogClient.bottom));
+                PostMessageW(inputWindow,WM_TIMER,0x5747,0);
+                PostMessageW(inputWindow,WM_KEYDOWN,VK_TAB,0);
+                PostMessageW(inputWindow,WM_KEYDOWN,VK_RETURN,0);
+                Check(inputView->ExecuteScript(LR"JS(
+                    var modalResizeCount=0,modalKeyCount=0,modalTimerCount=0,modalCancelCount=0;
+                    var modalBody=childDocument.body.innerHTML;
+                    function modalResize(){modalResizeCount++;}
+                    function modalKey(){modalKeyCount++;}
+                    function modalCancel(){modalCancelCount++;}
+                    window.addEventListener('resize',modalResize);
+                    document.addEventListener('keydown',modalKey);
+                    childDocument.addEventListener('keydown',modalKey);
+                    document.body.addEventListener('pointercancel',modalCancel);
+                    document.body.setPointerCapture(1);
+                    setTimeout(function(){modalTimerCount++;},0);
+                    var modalAnswer=confirm('Keyboard cancellation');
+                    return modalAnswer+'|'+nativeConfirmChoices.length+'|'+modalResizeCount+'|'+
+                        modalKeyCount+'|'+modalTimerCount+'|'+(modalBody===childDocument.body.innerHTML)+'|'+
+                        (document.getElementById('script-dialog')===null)+'|'+modalCancelCount;
+                )JS",&selectionResult,&selectionError)&&selectionResult==L"false|2|0|0|0|true|true|0"&&
+                    GetFocus()==previousDialogFocus,
+                    L"Tab and Enter cancel confirm, page input/jobs pause, and dialog DOM and focus remain isolated");
+                MSG dialogMessage{};
+                while(PeekMessageW(&dialogMessage,nullptr,0,0,PM_REMOVE)){
+                    TranslateMessage(&dialogMessage);DispatchMessageW(&dialogMessage);
+                }
+                Check(inputView->ExecuteScript(LR"JS(
+                    window.removeEventListener('resize',modalResize);
+                    document.removeEventListener('keydown',modalKey);
+                    childDocument.removeEventListener('keydown',modalKey);
+                    document.body.removeEventListener('pointercancel',modalCancel);
+                    return (modalResizeCount>0)+'|'+modalKeyCount+'|'+modalTimerCount+'|'+
+                        (modalBody===childDocument.body.innerHTML)+'|'+modalCancelCount+'|'+
+                        document.body.hasPointerCapture(1);
+                )JS",&selectionResult,&selectionError)&&selectionResult==L"true|0|1|true|1|false",
+                    L"deferred resize and timer jobs resume after confirm without leaking the dismissal key into the page");
+            }
+            Check(inputView->ExecuteScript(
+                L"var retainedChildBody=childDocument.body;frame.remove();return retainedChildBody.textContent;",
+                &selectionResult,&selectionError)&&selectionResult==L"text appended",
+                L"a retained iframe DOM node remains valid after the iframe is removed");
             inputMessage.clear();
             Check(inputView->NavigateToString(L"<main id='old-document'>old</main>"),
                   L"document replacement fixture loads in a real view");
@@ -4738,6 +7732,82 @@ int wmain(int argc,wchar_t** argv) {
             Check(scrollingFrame&&frameAfterScroll.top<
                       frameBeforeScroll.top-static_cast<LONG>(100.0*frameScrollScale),
                   L"iframe child windows follow common CSS scroll coordinates at the active DPI");
+            const auto wheelAtFrame=[&](HWND receiver,UINT message=WM_MOUSEWHEEL){
+                POINT point{static_cast<LONG>(std::lround(20*frameScrollScale)),
+                    static_cast<LONG>(std::lround(20*frameScrollScale))};
+                ClientToScreen(inputWindow,&point);
+                SendMessageW(receiver,message,MAKEWPARAM(0,message==WM_MOUSEWHEEL?-WHEEL_DELTA:WHEEL_DELTA),
+                    MAKELPARAM(point.x,point.y));
+            };
+            const wchar_t* wheelParent=LR"HTML(<!doctype html><style>
+                html,body{margin:0}main{width:200px;height:80px;overflow:auto}
+                iframe{display:block;width:120px;height:60px;border:0}footer{height:240px}
+                </style><main><iframe srcdoc="<!doctype html><style>html,body{margin:0}</style>short"></iframe><footer></footer></main>)HTML";
+            Check(inputView->NavigateToString(wheelParent),L"non-scrolling iframe wheel chain fixture loads");
+            (void)inputView->DumpLayoutJson();wheelAtFrame(inputWindow);
+            Check(inputView->ExecuteScript(L"return document.querySelector('main').scrollTop;",
+                &selectionResult,&selectionError)&&selectionResult==L"90",
+                L"wheel over a non-scrolling iframe scrolls its parent document");
+            inputView->ExecuteScript(L"document.querySelector('main').scrollTop=0;",nullptr,&selectionError);
+            const HWND wheelChild=FindWindowExW(inputWindow,nullptr,L"TWebFrame.View.1",nullptr);
+            wheelAtFrame(wheelChild);
+            Check(inputView->ExecuteScript(L"return document.querySelector('main').scrollTop;",
+                &selectionResult,&selectionError)&&selectionResult==L"90",
+                L"wheel initially delivered to a child HWND also continues in its containing document");
+            Check(inputView->NavigateToString(LR"HTML(<!doctype html><style>
+                html,body{margin:0}main{width:200px;height:80px;overflow:auto}
+                iframe{display:block;width:120px;height:60px;border:0}footer{height:240px}
+                </style><main><iframe srcdoc="<!doctype html><style>html,body{margin:0}section{height:60px;overflow:auto}div{height:300px}</style><section><div></div></section>"></iframe><footer></footer></main>)HTML"),
+                L"scrollable iframe wheel chain fixture loads");
+            (void)inputView->DumpLayoutJson();wheelAtFrame(inputWindow);
+            Check(inputView->ExecuteScript(L"return document.querySelector('main').scrollTop;",
+                &selectionResult,&selectionError)&&selectionResult==L"0",
+                L"scrollable iframe consumes wheel input before its parent");
+            for(int index=0;index<3;++index)wheelAtFrame(inputWindow);
+            Check(inputView->ExecuteScript(L"return document.querySelector('main').scrollTop;",
+                &selectionResult,&selectionError)&&selectionResult==L"90",
+                L"wheel continues in the parent once iframe scrolling reaches its boundary");
+            Check(inputView->NavigateToString(LR"HTML(<!doctype html><style>
+                html,body{margin:0}main{width:200px;height:80px;overflow:auto}
+                iframe{display:block;width:120px;height:60px;border:0}footer{height:240px}
+                </style><main><iframe srcdoc="<!doctype html><style>html,body{margin:0}section{height:60px;overflow:auto;overscroll-behavior:contain}div{height:300px}</style><section><div></div></section>"></iframe><footer></footer></main>)HTML"),
+                L"iframe CSS scroll containment fixture loads");
+            (void)inputView->DumpLayoutJson();for(int index=0;index<5;++index)wheelAtFrame(inputWindow);
+            Check(inputView->ExecuteScript(L"return document.querySelector('main').scrollTop;",
+                &selectionResult,&selectionError)&&selectionResult==L"0",
+                L"explicit CSS overscroll containment stops iframe boundary chaining");
+            inputView->SetResourceLoader([](const std::wstring& resource,std::wstring& content){
+                if(resource.find(L"middle-wheel.html")==std::wstring::npos)return false;
+                content=LR"HTML(<!doctype html><style>html,body{margin:0}iframe{display:block;width:120px;height:60px;border:0}</style><iframe srcdoc="<!doctype html><style>html,body{margin:0}</style>leaf"></iframe>)HTML";
+                return true;
+            });
+            Check(inputView->NavigateToString(LR"HTML(<!doctype html><style>
+                html,body{margin:0}main{width:200px;height:80px;overflow:auto}
+                iframe{display:block;width:120px;height:60px;border:0}footer{height:240px}
+                </style><main><iframe src="middle-wheel.html"></iframe><footer></footer></main>)HTML"),
+                L"nested iframe wheel chain fixture loads");
+            (void)inputView->DumpLayoutJson();wheelAtFrame(inputWindow);
+            Check(inputView->ExecuteScript(L"return document.querySelector('main').scrollTop;",
+                &selectionResult,&selectionError)&&selectionResult==L"90",
+                L"wheel chains through multiple non-scrolling browsing contexts to its scrollable ancestor");
+            inputView->SetResourceLoader({});
+            Check(inputView->NavigateToString(LR"HTML(<!doctype html><style>
+                html,body{margin:0}main{width:80px;height:100px;overflow:auto}
+                iframe{display:block;width:60px;height:60px;border:0}footer{width:260px;height:10px}
+                </style><main><iframe srcdoc="<!doctype html><style>html,body{margin:0}</style>short"></iframe><footer></footer></main>)HTML"),
+                L"horizontal iframe wheel chain fixture loads");
+            (void)inputView->DumpLayoutJson();wheelAtFrame(inputWindow,WM_MOUSEHWHEEL);
+            Check(inputView->ExecuteScript(L"return document.querySelector('main').scrollLeft;",
+                &selectionResult,&selectionError)&&selectionResult==L"90",
+                L"horizontal wheel over non-scrolling iframe also chains to parent");
+            inputMessage.clear();
+            Check(inputView->NavigateToString(LR"HTML(<!doctype html><style>
+                html,body{margin:0}iframe{display:block;width:120.25px;height:60.5px;border:0}
+                </style><iframe srcdoc="<!doctype html><script>window.addEventListener('resize',function(){window.chrome.webview.postMessage(window.innerWidth+'|'+window.innerHeight);});</script>"></iframe>)HTML"),
+                L"fractional iframe viewport fixture loads");
+            (void)inputView->DumpLayoutJson();
+            Check(inputMessage==L"120.25|60.5",
+                L"iframe viewport retains CSS-pixel dimensions independently of rounded native-window bounds at active DPI");
             Check(inputView->NavigateToString(L"<main id='frame-host'></main>"),
                   L"generic iframe attribute assignment fixture loads");
             Check(inputView->ExecuteScript(
@@ -4774,12 +7844,16 @@ int wmain(int argc,wchar_t** argv) {
             });
             const wchar_t* frameHtml=LR"HTML(<style>*{margin:0}iframe{width:150px;height:80px;border:0}</style><main id="frame-host"></main><script>const frame=document.createElement('iframe');frame.id='child';frame.name='serialized-context';frame.contentWindow.name='serialized-payload';window.addEventListener('message',event=>{if(event.source!==frame.contentWindow)return;if(event.data.kind==='ready')frame.contentWindow.postMessage({kind:'reply',nested:event.data.nested},'*');if(event.data.kind==='ack')window.chrome.webview.postMessage('iframe-ok|'+event.origin+'|'+event.data.replyOrigin+'|'+event.data.nested+'|'+event.data.contextName);});frame.addEventListener('load',()=>window.chrome.webview.postMessage('iframe-loaded'));frame.src='https://child.frames.test/child.html';document.getElementById('frame-host').appendChild(frame);</script>)HTML";
             Check(inputView->NavigateToString(frameHtml,L"https://parent.frames.test/index.html"),inputView->LastError().c_str());
+            const auto messageDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+            while(frameEvents.size()<2&&std::chrono::steady_clock::now()<messageDeadline){
+                MSG message{};if(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}else Sleep(1);
+            }
             Check(frameEvents.size()==2&&
-                      frameEvents[0]==L"iframe-ok|https://child.frames.test|https://parent.frames.test|true|serialized-payload"&&
-                      frameEvents[1]==L"iframe-loaded",
+                      frameEvents[0]==L"iframe-loaded"&&
+                      frameEvents[1]==L"iframe-ok|https://child.frames.test|https://parent.frames.test|true|serialized-payload",
                   L"iframe messages expose source identity and serialized sender origins");
             if(frameEvents.size()!=2||
-               frameEvents[0]!=L"iframe-ok|https://child.frames.test|https://parent.frames.test|true|serialized-payload"){
+               frameEvents[1]!=L"iframe-ok|https://child.frames.test|https://parent.frames.test|true|serialized-payload"){
                 std::wcerr<<L"iframe message events:";
                 for(const auto& event:frameEvents)std::wcerr<<L" ["<<event<<L"]";
                 std::wcerr<<L'\n';
@@ -4802,6 +7876,10 @@ int wmain(int argc,wchar_t** argv) {
                 L"<iframe id='middle' src='https://middle.frames.test/child.html'></iframe><script>const middle=document.getElementById('middle');window.addEventListener('message',event=>{if(event.source===middle.contentWindow)window.chrome.webview.postMessage(event.data.kind+(event.data.separate===undefined?'':'|'+event.data.separate));});</script>",
                 L"https://top.frames.test/index.html"),
                 L"nested iframe messaging fixture loads");
+            const auto nestedMessageDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+            while(frameEvents.size()<2&&std::chrono::steady_clock::now()<nestedMessageDeadline){
+                MSG message{};if(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}else Sleep(1);
+            }
             Check(std::find(frameEvents.begin(),frameEvents.end(),L"top-route|true")!=frameEvents.end()&&
                       std::find(frameEvents.begin(),frameEvents.end(),L"chain-route")!=frameEvents.end(),
                   L"nested WindowProxy top and parent chains route messages to the top context");

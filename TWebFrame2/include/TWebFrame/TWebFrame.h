@@ -20,8 +20,9 @@ public:
     using MessageHandler = std::function<void(const std::wstring&)>;
     using LoadHandler = std::function<void(bool, const std::wstring&)>;
     // Resolves page-relative text resources such as stylesheets, scripts, and
-    // data requested by fetch() or XMLHttpRequest. Return false when a resource
-    // is unavailable.
+    // non-HTTP data requested by fetch() or XMLHttpRequest. Script HTTP requests
+    // use the engine transport to preserve response metadata and CORS. Return
+    // false when a resource is unavailable.
     using ResourceLoader = std::function<bool(const std::wstring&, std::wstring&)>;
     // Resolves byte resources without a text transcoding step. Image hosts use
     // this callback so JPEG/PNG/GIF bytes, including archive-backed resources,
@@ -31,6 +32,14 @@ public:
     // Called for non-fragment link and script navigation. A browser host can
     // load the target, update its address bar, and maintain history.
     using NavigationHandler = std::function<void(const std::wstring&, bool newWindow)>;
+    // Reports push/replaceState and same-document traversal without reloading.
+    // A nonzero delta identifies a traversal; zero identifies push/replace.
+    using HistoryChangedHandler = std::function<void(const std::wstring&,bool replace,int delta)>;
+    using HistoryTraversalHandler = std::function<void(int)>;
+    // Optional owner-thread callback in addition to the View's built-in native
+    // chrome/render safepoint. Document jobs wait for the active script to end.
+    // Do not call View methods here. Return false to interrupt the current job.
+    using ExecutionYieldHandler = std::function<bool()>;
 
     static std::unique_ptr<View> Create(HWND parent, const RECT& bounds);
     ~View();
@@ -46,6 +55,14 @@ public:
     void SetResourceLoader(ResourceLoader loader);
     void SetBinaryResourceLoader(BinaryResourceLoader loader);
     void SetNavigationHandler(NavigationHandler handler);
+    void SetHistoryChangedHandler(HistoryChangedHandler handler);
+    void SetHistoryTraversalHandler(HistoryTraversalHandler handler);
+    bool CanTraverseHistory(int delta) const;
+    bool TraverseHistory(int delta);
+    void SetExecutionYieldHandler(ExecutionYieldHandler handler);
+    // Paint and CSS timeline messages can be serviced at a script instruction
+    // boundary without dispatching another page script or rebuilding the DOM.
+    bool ServiceRenderingMessage(const MSG& message);
     // Load text/binary resources, parse asynchronous documents and CSS, and
     // decode raster resources on a bounded worker pool. Host loaders used with
     // this mode must be safe to call concurrently from worker threads.
@@ -83,6 +100,7 @@ public:
 
     // Test/diagnostic helpers. Layout JSON contains stable integer pixel bounds.
     std::wstring DumpLayoutJson() const;
+    std::wstring DumpLayoutJson(bool includeChildFrames) const;
     // Accessibility JSON exposes the same stable automation ids used by the
     // UI Automation provider. Prefer an explicit data-automation-id or id;
     // otherwise TWebFrame emits a deterministic DOM path.

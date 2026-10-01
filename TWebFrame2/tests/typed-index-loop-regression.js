@@ -1,0 +1,14 @@
+var data=new Int32Array(8192);for(var i=0;i<data.length;i++)data[i]=i-4096;
+data.note='expando';var start=Date.now(),sum=0;
+for(var iteration=0;iteration<500000;iteration++)sum+=data[iteration&8191];
+var elapsed=Date.now()-start,expected=0;
+for(var index=0;index<8192;index++)expected+=(index-4096)*61;
+for(var rest=0;rest<288;rest++)expected+=rest-4096;
+if(sum!==expected)throw new Error('Typed index loop result differs');
+var buffer=new ArrayBuffer(16),ints=new Int32Array(buffer),bytes=new Uint8Array(buffer),view=new DataView(buffer);
+ints[1]=0x12345678;if(bytes[4]!==0x78 || bytes[5]!==0x56)throw new Error('Typed reads do not reflect the backing store');
+view.setInt32(4,-101,true);if(ints[1]!==-101)throw new Error('DataView writes are stale in typed index reads');
+if(ints[-0]!==0 || ints[-1]!==undefined || ints[1.5]!==undefined || ints[4]!==undefined)throw new Error('Numeric index boundary semantics differ');
+var proxy=new Proxy(ints,{get:function(target,key){return key==='1'?137:target[key];}});
+if(proxy[1]!==137)throw new Error('Proxy integer reads skip the trap');
+return 'PASS|typed-index-loop|sum='+sum+'|elapsed='+elapsed;

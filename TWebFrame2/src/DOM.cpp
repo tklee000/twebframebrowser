@@ -7,6 +7,13 @@
 #include <sstream>
 #include <string_view>
 #include <unordered_set>
+#include <windows.h>
+#include <objbase.h>
+#include <xmllite.h>
+#include <shlwapi.h>
+#include <wrl/client.h>
+#pragma comment(lib, "xmllite.lib")
+#pragma comment(lib, "shlwapi.lib")
 
 namespace TWebFrame::Internal {
 
@@ -206,7 +213,8 @@ void ParseStyleAttribute(const std::wstring& source,
         const auto part = source.substr(start, end - start);
         const size_t colon = part.find(L':');
         if (colon != std::wstring::npos) {
-            auto name = ToLower(Trim(part.substr(0, colon)));
+            auto name = Trim(part.substr(0, colon));
+            if (name.rfind(L"--", 0) != 0) name = ToLower(name);
             auto value = Trim(part.substr(colon + 1));
             const auto lowerValue = ToLower(value);
             constexpr auto important = L"!important";
@@ -599,7 +607,7 @@ bool MatchesQuerySelector(const std::shared_ptr<Node>& node,
 }
 
 void AppendInnerText(const Node& node, std::wstring& output) {
-    if (node.type == NodeType::Text) { output += node.text; return; }
+    if (node.type == NodeType::Text || node.type == NodeType::CData) { output += node.text; return; }
     if (node.type == NodeType::Comment) return;
     if (node.tag == L"br") { output += L'\n'; return; }
     for (const auto& child : node.children) AppendInnerText(*child, output);
@@ -607,7 +615,9 @@ void AppendInnerText(const Node& node, std::wstring& output) {
 
 class HtmlParser {
 public:
-    explicit HtmlParser(const std::wstring& html) : html_(html) {}
+    explicit HtmlParser(const std::wstring& html,bool scriptingEnabled) : html_(html),scriptingEnabled_(scriptingEnabled) {}
+    bool QuirksMode() const {return quirksMode_;}
+    bool LimitedQuirksMode() const {return limitedQuirksMode_;}
 
     std::shared_ptr<Node> Parse(bool fragment, std::wstring* error) {
         auto root = std::make_shared<Node>();
@@ -621,6 +631,7 @@ public:
                 auto text = DecodeEntities(html_.substr(position_, end - position_));
                 position_ = end == std::wstring::npos ? html_.size() : end;
                 if (!text.empty()) {
+                    if(std::any_of(text.begin(),text.end(),[](wchar_t c){return !IsSpace(c)&&c!=0xfeff;}))initial_=false;
                     auto node = std::make_shared<Node>();
                     node->type = NodeType::Text;
                     node->tag = L"#text";
@@ -644,6 +655,38 @@ public:
             }
             if (Starts(L"<!") || Starts(L"<?")) {
                 const size_t end = html_.find(L'>', position_ + 2);
+                if(initial_&&!fragment&&ToLower(html_.substr(position_,9))==L"<!doctype"){
+                    const auto declaration=ToLower(Trim(html_.substr(position_+9,
+                        (end==std::wstring::npos?html_.size():end)-position_-9)));
+                    quirksMode_=declaration.rfind(L"html",0)!=0||
+                        (declaration.size()>4&&!IsSpace(declaration[4]));
+                    if(!quirksMode_){
+                        size_t token=4;
+                        while(token<declaration.size()&&IsSpace(declaration[token]))++token;
+                        if(declaration.compare(token,6,L"public")==0&&
+                           token+6<declaration.size()&&IsSpace(declaration[token+6])){
+                            token+=6;
+                            const auto quotedIdentifier=[&](){
+                                while(token<declaration.size()&&IsSpace(declaration[token]))++token;
+                                if(token>=declaration.size()||
+                                   (declaration[token]!=L'\''&&declaration[token]!=L'"'))return std::wstring{};
+                                const wchar_t quote=declaration[token++];const size_t begin=token;
+                                const size_t finish=declaration.find(quote,token);
+                                token=finish==std::wstring::npos?declaration.size():finish+1;
+                                return declaration.substr(begin,token-begin-(finish==std::wstring::npos?0:1));
+                            };
+                            const auto publicId=quotedIdentifier();
+                            const auto systemId=quotedIdentifier();
+                            const bool xhtmlLegacy=publicId.rfind(L"-//w3c//dtd xhtml 1.0 transitional//",0)==0||
+                                publicId.rfind(L"-//w3c//dtd xhtml 1.0 frameset//",0)==0;
+                            const bool htmlLegacy=publicId.rfind(L"-//w3c//dtd html 4.01 transitional//",0)==0||
+                                publicId.rfind(L"-//w3c//dtd html 4.01 frameset//",0)==0;
+                            limitedQuirksMode_=xhtmlLegacy||(htmlLegacy&&!systemId.empty());
+                            if(htmlLegacy&&systemId.empty())quirksMode_=true;
+                        }
+                    }
+                    initial_=false;
+                }
                 position_ = end == std::wstring::npos ? html_.size() : end + 1;
                 continue;
             }
@@ -659,6 +702,7 @@ public:
             ++position_;
             const auto tag = ReadName();
             if (tag.empty()) { ++position_; continue; }
+            initial_=false;
             // HTML permits the </p> end tag to be omitted. Starting another
             // paragraph or a block element implicitly closes the open one.
             if (ClosesOpenParagraph(tag)) CloseOpenElement(stack, L"p");
@@ -695,6 +739,7 @@ public:
             }
             if (position_ < html_.size() && html_[position_] == L'>') ++position_;
             node->checked = node->attributes.count(L"checked") != 0;
+            node->cryptographicNonce = node->Attribute(L"nonce");
             node->disabled = node->attributes.count(L"disabled") != 0;
             const auto style = node->Attribute(L"style");
             if (!style.empty()) ParseStyleAttribute(style, node->inlineStyle,
@@ -702,7 +747,7 @@ public:
             node->parent = stack.back();
             stack.back()->children.push_back(node);
 
-            if ((tag == L"script" || tag == L"style") && !selfClosing) {
+            if ((tag == L"script" || tag == L"style" || (tag == L"noscript" && scriptingEnabled_)) && !selfClosing) {
                 const std::wstring closing = L"</" + tag;
                 const size_t end = ToLower(html_).find(closing, position_);
                 auto textNode = std::make_shared<Node>();
@@ -742,7 +787,9 @@ private:
         return ToLower(html_.substr(begin, position_ - begin));
     }
     const std::wstring& html_;
+    bool scriptingEnabled_;
     size_t position_ = 0;
+    bool quirksMode_ = true, limitedQuirksMode_ = false, initial_ = true;
 };
 
 } // namespace
@@ -790,6 +837,7 @@ std::wstring Node::Attribute(const std::wstring& name) const {
     // every lookup and only normalize genuinely mixed-case input.
     const auto direct = attributes.find(name);
     if (direct != attributes.end()) return direct->second;
+    if (xml) return L"";
     if (std::none_of(name.begin(), name.end(), [](wchar_t character) {
             return std::iswupper(character) != 0;
         })) return L"";
@@ -798,10 +846,11 @@ std::wstring Node::Attribute(const std::wstring& name) const {
 }
 
 void Node::SetAttribute(const std::wstring& name, const std::wstring& value) {
-    const auto key = ToLower(name);
+    const auto key = xml ? name : ToLower(name);
     const auto oldClass = key == L"class" ? Attribute(L"class") : L"";
     const auto oldName = key == L"name" ? Attribute(L"name") : L"";
     attributes[key] = value;
+    if (key == L"nonce") cryptographicNonce = value;
     if (key == L"checked") checked = true;
     if (key == L"disabled") disabled = true;
     if (key == L"style") {
@@ -815,10 +864,11 @@ void Node::SetAttribute(const std::wstring& name, const std::wstring& value) {
 }
 
 void Node::RemoveAttribute(const std::wstring& name) {
-    const auto key = ToLower(name);
+    const auto key = xml ? name : ToLower(name);
     const auto oldClass = key == L"class" ? Attribute(L"class") : L"";
     const auto oldName = key == L"name" ? Attribute(L"name") : L"";
     attributes.erase(key);
+    if (key == L"nonce") cryptographicNonce.clear();
     if (key == L"checked") checked = false;
     if (key == L"disabled") disabled = false;
     if (key == L"style") { inlineStyle.clear(); inlineStylePriority.clear(); }
@@ -931,6 +981,10 @@ void Document::AdoptParsed(Document& source) {
     ownedNodes_.clear();ids_.clear();idCounts_.clear();nameCounts_.clear();
     tags_.clear();classes_.clear();
     root_ = std::move(source.root_);
+    quirksMode_ = source.quirksMode_;
+    limitedQuirksMode_ = source.limitedQuirksMode_;
+    xml_ = source.xml_;
+    scriptingEnabled_ = source.scriptingEnabled_;
     if (!root_) {
         root_ = std::make_shared<Node>();
         root_->type = NodeType::Document;root_->tag = L"#document";
@@ -939,15 +993,61 @@ void Document::AdoptParsed(Document& source) {
 }
 
 bool Document::Parse(const std::wstring& html, std::wstring* error) {
-    HtmlParser parser(html);
+    xml_ = false;
+    HtmlParser parser(html,scriptingEnabled_);
     root_ = parser.Parse(false, error);
+    quirksMode_ = parser.QuirksMode();
+    limitedQuirksMode_ = parser.LimitedQuirksMode();
     Reindex();
     return root_ != nullptr;
 }
 
+bool Document::ParseXml(const std::wstring& xml, std::wstring* error) {
+    using Microsoft::WRL::ComPtr;
+    ComPtr<IXmlReader> reader;
+    // Input has already been decoded by the resource loader. Feed UTF-16 to
+    // XmlLite explicitly, independent of the original declaration's encoding.
+    ComPtr<IStream> stream;
+    stream.Attach(SHCreateMemStream(reinterpret_cast<const BYTE*>(xml.data()),
+                                   static_cast<UINT>(xml.size()*sizeof(wchar_t))));
+    ComPtr<IXmlReaderInput> input;
+    HRESULT status=CreateXmlReader(__uuidof(IXmlReader),&reader,nullptr);
+    if(SUCCEEDED(status))status=CreateXmlReaderInputWithEncodingName(stream.Get(),nullptr,L"utf-16",FALSE,nullptr,&input);
+    if(SUCCEEDED(status))status=reader->SetInput(input.Get());
+    auto root=std::make_shared<Node>();root->type=NodeType::Document;root->tag=L"#document";root->xml=true;
+    std::vector<std::shared_ptr<Node>> stack{root};
+    XmlNodeType type{};
+    while(SUCCEEDED(status)&&(status=reader->Read(&type))==S_OK){
+        if(type==XmlNodeType_EndElement){if(stack.size()>1)stack.pop_back();continue;}
+        if(type==XmlNodeType_XmlDeclaration||type==XmlNodeType_ProcessingInstruction)continue;
+        auto node=std::make_shared<Node>();node->xml=true;
+        const wchar_t* value=nullptr;UINT count=0;
+        if(type==XmlNodeType_Element){
+            node->type=NodeType::Element;reader->GetQualifiedName(&value,&count);node->tag.assign(value,count);
+            if(reader->MoveToFirstAttribute()==S_OK){
+                do{const wchar_t* name=nullptr;UINT length=0;reader->GetQualifiedName(&name,&length);
+                    const std::wstring key(name,length);reader->GetValue(&value,&count);node->attributes[key]=std::wstring(value,count);
+                }while(reader->MoveToNextAttribute()==S_OK);
+                reader->MoveToElement();
+            }
+            node->cryptographicNonce=node->Attribute(L"nonce");
+        }else if(type==XmlNodeType_CDATA||type==XmlNodeType_Text||type==XmlNodeType_Whitespace||type==XmlNodeType_Comment){
+            node->type=type==XmlNodeType_CDATA?NodeType::CData:type==XmlNodeType_Comment?NodeType::Comment:NodeType::Text;
+            node->tag=type==XmlNodeType_CDATA?L"#cdata-section":type==XmlNodeType_Comment?L"#comment":L"#text";
+            reader->GetValue(&value,&count);node->text.assign(value,count);
+        }else continue;
+        node->parent=stack.back();stack.back()->children.push_back(node);
+        if(type==XmlNodeType_Element&&!reader->IsEmptyElement())stack.push_back(node);
+    }
+    const bool hasRoot=std::any_of(root->children.begin(),root->children.end(),[](const auto& node){return node->type==NodeType::Element;});
+    if(FAILED(status)||stack.size()!=1||!hasRoot){if(error)*error=L"Malformed XML document";return false;}
+    root_=std::move(root);xml_=true;quirksMode_=false;limitedQuirksMode_=false;Reindex();
+    if(error)error->clear();return true;
+}
+
 std::vector<std::shared_ptr<Node>> Document::ParseFragment(const std::wstring& html,
                                                             std::wstring* error) {
-    HtmlParser parser(html);
+    HtmlParser parser(html,scriptingEnabled_);
     auto fragment = parser.Parse(true, error);
     return fragment ? fragment->children : std::vector<std::shared_ptr<Node>>{};
 }
@@ -974,9 +1074,9 @@ std::vector<std::shared_ptr<Node>> Document::GetElementsByName(const std::wstrin
 std::vector<std::shared_ptr<Node>> Document::GetElementsByTagName(
     const std::wstring& requestedTag, const std::shared_ptr<Node>& scope,
     bool includeScope) const {
-    const auto tag = ToLower(requestedTag);
+    const auto tag = xml_ ? requestedTag : ToLower(requestedTag);
     std::vector<std::shared_ptr<Node>> result;
-    if (tag != L"*") {
+    if (tag != L"*" && (!scope || IsWithinScope(scope,root_))) {
         const auto found = tags_.find(tag);
         if (found == tags_.end()) return result;
         // For the small buckets used by repeated library lookups, visiting the
@@ -1008,7 +1108,7 @@ std::vector<std::shared_ptr<Node>> Document::GetElementsByClassName(
     std::vector<std::shared_ptr<Node>> result;
     if (names.empty()) return result;
     const NodeIndexBucket* smallest = nullptr;
-    for (const auto& name : names) {
+    if(!scope || IsWithinScope(scope,root_))for (const auto& name : names) {
         const auto found = classes_.find(name);
         if (found == classes_.end()) return result;
         if (!smallest || found->second.size() < smallest->size()) smallest = &found->second;
@@ -1018,7 +1118,7 @@ std::vector<std::shared_ptr<Node>> Document::GetElementsByClassName(
         return std::all_of(names.begin(), names.end(),
                            [&](const auto& name) { return node->HasClass(name); });
     };
-    if (smallest->size() <= kDirectIndexLimit) {
+    if (smallest && smallest->size() <= kDirectIndexLimit) {
         std::vector<std::shared_ptr<Node>> indexed;
         indexed.reserve(smallest->size());
         for (const auto& entry : *smallest)
@@ -1080,7 +1180,7 @@ std::shared_ptr<Node> Document::QuerySelector(const std::wstring& selector,
                                                const std::shared_ptr<Node>& scope) const {
     const auto selectors = CompileQuerySelectors(selector, scope != nullptr);
     std::unordered_set<const Node*> candidates;
-    bool filterCandidates = !selectors.empty();
+    bool filterCandidates = !selectors.empty() && (!scope || IsWithinScope(scope,root_));
     for (const auto& item : selectors) {
         if (item.scopeMode == CompiledQuerySelector::ScopeMode::ScopeOnly) {
             if (scope) candidates.insert(scope.get());
@@ -1138,7 +1238,7 @@ std::vector<std::shared_ptr<Node>> Document::QuerySelectorAll(
     // Parse selector groups once instead of once for every visited node.
     const auto selectors = CompileQuerySelectors(selector, scope != nullptr);
     std::unordered_set<const Node*> candidates;
-    bool filterCandidates = !selectors.empty();
+    bool filterCandidates = !selectors.empty() && (!scope || IsWithinScope(scope,root_));
     for (const auto& item : selectors) {
         if (item.scopeMode == CompiledQuerySelector::ScopeMode::ScopeOnly) {
             if (scope) candidates.insert(scope.get());
@@ -1190,7 +1290,7 @@ std::vector<std::shared_ptr<Node>> Document::QuerySelectorAll(
 
 std::shared_ptr<Node> Document::CreateElement(const std::wstring& tag) const {
     auto node = std::make_shared<Node>();
-    node->type = NodeType::Element; node->tag = ToLower(tag);
+    node->type = NodeType::Element; node->tag = xml_?tag:ToLower(tag);node->xml=xml_;
     return node;
 }
 
@@ -1252,6 +1352,14 @@ void Document::Reindex() {
     Walk(root_, [&](const auto& node) {
         node->ownerDocument = this;
         ownedNodes_[node.get()] = node;
+        if(node->shadowRoot){
+            std::function<void(const std::shared_ptr<Node>&)> bindShadow=[&](const auto& current){
+                current->ownerDocument=this;ownedNodes_[current.get()]=current;
+                for(const auto& child:current->children)bindShadow(child);
+                if(current->shadowRoot)bindShadow(current->shadowRoot);
+            };
+            bindShadow(node->shadowRoot);
+        }
         if (node->type == NodeType::Element) {
             tags_[node->tag][node.get()] = node;
             const auto classes = node->attributes.find(L"class");
@@ -1326,7 +1434,14 @@ void Document::UpdateElementName(const std::shared_ptr<Node>& node,
 bool Document::IndexSubtree(const std::shared_ptr<Node>& node) {
     if(!node)return true;
     auto root=node;while(auto parent=root->parent.lock())root=std::move(parent);
-    if(root!=root_)return true;
+    if(root!=root_){
+        std::function<void(const std::shared_ptr<Node>&)> bind=[&](const auto& current){
+            current->ownerDocument=this;ownedNodes_[current.get()]=current;
+            for(const auto& child:current->children)bind(child);
+            if(current->shadowRoot)bind(current->shadowRoot);
+        };
+        bind(node);return true;
+    }
     std::vector<std::pair<std::wstring,std::shared_ptr<Node>>> entries;
     FastMap<std::wstring,size_t> pending;
     Walk(node,[&](const auto& current){

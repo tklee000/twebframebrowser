@@ -1,0 +1,41 @@
+function check(value, message) { if (!value) throw new Error(message); }
+var formatter = new Intl.RelativeTimeFormat('en-US');
+check(formatter instanceof Intl.RelativeTimeFormat && Object.getPrototypeOf(formatter) === Intl.RelativeTimeFormat.prototype, 'relative-time intrinsic prototype');
+check(Object.prototype.toString.call(formatter) === '[object Intl.RelativeTimeFormat]', 'relative-time object tag');
+check(formatter.format === Intl.RelativeTimeFormat.prototype.format && !formatter.hasOwnProperty('format') && Object.keys(formatter).length === 0, 'stable non-enumerable prototype method and internal state');
+var first = formatter.resolvedOptions(), second = formatter.resolvedOptions();
+check(first !== second && first.locale === 'en-US' && first.style === 'long' && first.numeric === 'always' && first.numberingSystem === 'latn', 'fresh actual resolved options');
+first.numeric = 'auto'; check(formatter.resolvedOptions().numeric === 'always', 'resolved options cannot alter formatter');
+check(formatter.format(-2, 'hour') === '2 hours ago' && formatter.format(2, 'hours') === 'in 2 hours', 'locale numeric patterns and plural units');
+var natural = new Intl.RelativeTimeFormat('en-US', {numeric:'auto'});
+check(natural.format(-1, 'day') === 'yesterday' && natural.format(0, 'day') === 'today' && natural.format(1, 'day') === 'tomorrow', 'ICU natural relative dates');
+check(new Intl.RelativeTimeFormat('ko-KR', {numeric:'auto'}).format(-1, 'day') === '어제', 'actual Korean locale data');
+check(new Intl.RelativeTimeFormat('fr-FR', {numeric:'auto'}).format(-1, 'day') === 'hier', 'locale data beyond English and Korean');
+check(new Intl.RelativeTimeFormat('en-US', {style:'short'}).resolvedOptions().style === 'short', 'requested style is retained');
+check(new Intl.RelativeTimeFormat('ar', {numberingSystem:'arab'}).resolvedOptions().numberingSystem === 'arab', 'actual numbering system');
+check(formatter.format(-0, 'day') === '0 days ago' && formatter.format(0, 'day') === 'in 0 days', 'signed zero determines direction');
+function rejects(callback, type, message) { var caught=false; try {callback();} catch (error) {caught=error instanceof type;} check(caught, message); }
+rejects(function(){Intl.RelativeTimeFormat();}, TypeError, 'constructor requires new');
+rejects(function(){Intl.RelativeTimeFormat.prototype.resolvedOptions.call({});}, TypeError, 'resolvedOptions checks receiver');
+rejects(function(){Intl.RelativeTimeFormat.prototype.format.call({}, 1, 'day');}, TypeError, 'format checks receiver');
+rejects(function(){new Intl.RelativeTimeFormat('en-US', null);}, TypeError, 'null options rejected');
+rejects(function(){new Intl.RelativeTimeFormat('en-US', {numeric:'bad'});}, RangeError, 'invalid numeric option rejected');
+rejects(function(){new Intl.RelativeTimeFormat('en-US', {style:'bad'});}, RangeError, 'invalid style option rejected');
+rejects(function(){new Intl.RelativeTimeFormat('en-US', {numberingSystem:'x'});}, RangeError, 'invalid numbering identifier rejected');
+rejects(function(){new Intl.RelativeTimeFormat('en-US', {numberingSystem:''});}, RangeError, 'empty numbering identifier rejected');
+rejects(function(){formatter.format(Infinity, 'day');}, RangeError, 'nonfinite value rejected');
+rejects(function(){formatter.format(1, 'Day');}, RangeError, 'unit conversion remains case sensitive');
+rejects(function(){formatter.format(1, 'century');}, RangeError, 'unsupported unit rejected');
+rejects(function(){formatter.format(Symbol(), 'day');}, TypeError, 'number conversion rejects Symbols');
+var order=[], options={};
+Object.defineProperty(options, 'style', {get:function(){order.push('style');return 'short';}});
+Object.defineProperty(options, 'numeric', {get:function(){order.push('numeric');return 'auto';}});
+new Intl.RelativeTimeFormat('en-US', options);
+check(order.join(',') === 'style,numeric', 'option getters run once in order');
+var original={error:true}, throwing={};
+Object.defineProperty(throwing, 'numeric', {get:function(){throw original;}});
+var retained=false;try {new Intl.RelativeTimeFormat('en-US', throwing);} catch(error){retained=error===original;}
+check(retained, 'original option getter exception');
+order=[];
+check(formatter.format({valueOf:function(){order.push('value');return -2;}}, {toString:function(){order.push('unit');return 'hour';}}) === '2 hours ago' && order.join(',') === 'value,unit', 'argument conversion order and receiver');
+return 'PASS|relative-time formatter and resolved options';

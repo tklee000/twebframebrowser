@@ -1,0 +1,163 @@
+#include "../../Browser/HttpClient.h"
+#include <TWebFrame/TWebFrame.h>
+#include <objbase.h>
+#include <chrono>
+#include <iostream>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <thread>
+
+bool SaveViewPixels(HWND window,const wchar_t* filename){
+    RECT bounds{};if(!GetClientRect(window,&bounds))return false;
+    HDC dc=CreateCompatibleDC(nullptr);BITMAPINFO info{};
+    info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=bounds.right;
+    info.bmiHeader.biHeight=-bounds.bottom;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;
+    void* pixels=nullptr;HBITMAP bitmap=CreateDIBSection(dc,&info,DIB_RGB_COLORS,&pixels,nullptr,0);
+    if(!bitmap){DeleteDC(dc);return false;}const auto previous=SelectObject(dc,bitmap);
+    SendMessageW(window,WM_PRINTCLIENT,reinterpret_cast<WPARAM>(dc),PRF_CLIENT|PRF_CHILDREN);
+    BITMAPFILEHEADER file{};file.bfType=0x4d42;file.bfOffBits=sizeof(file)+sizeof(info.bmiHeader);
+    const auto bytes=static_cast<DWORD>(bounds.right*bounds.bottom*4);file.bfSize=file.bfOffBits+bytes;
+    std::ofstream output(std::filesystem::path(filename),std::ios::binary);
+    output.write(reinterpret_cast<const char*>(&file),sizeof(file));
+    output.write(reinterpret_cast<const char*>(&info.bmiHeader),sizeof(info.bmiHeader));
+    output.write(static_cast<const char*>(pixels),bytes);const bool saved=static_cast<bool>(output);
+    SelectObject(dc,previous);DeleteObject(bitmap);DeleteDC(dc);return saved;
+}
+
+void SaveTextSnapshot(const std::wstring& text,const std::filesystem::path& filename){
+    const int length=WideCharToMultiByte(CP_UTF8,0,text.data(),static_cast<int>(text.size()),nullptr,0,nullptr,nullptr);
+    std::string utf8(static_cast<size_t>(length),'\0');
+    WideCharToMultiByte(CP_UTF8,0,text.data(),static_cast<int>(text.size()),utf8.data(),length,nullptr,nullptr);
+    std::ofstream output(filename,std::ios::binary);output.write(utf8.data(),utf8.size());
+}
+void SaveLayoutSnapshot(TWebFrame::View& view,const std::filesystem::path& filename){
+    SaveTextSnapshot(view.DumpLayoutJson(true),filename);
+}
+
+int wmain(int argc,wchar_t** argv){
+    if(argc<2||argc>5){std::wcerr<<L"Usage: PageScriptProbe https://host/path [observation-seconds] [output-directory] [--visible]\n";return 2;}
+    const bool visible=argc==5&&std::wstring(argv[4])==L"--visible";
+    const auto observationSeconds=argc>=3?std::max(1,std::min(600,_wtoi(argv[2]))):60;
+    const auto outputDirectory=argc>=4?std::filesystem::path(argv[3]):std::filesystem::path(L"TWebFrame2/tests/artifacts");
+    std::filesystem::create_directories(outputDirectory);
+    std::wcout<<std::unitbuf;
+    std::wcout<<L"PROCESS "<<GetCurrentProcessId()<<L'\n';
+    const auto observationStart=std::chrono::steady_clock::now();
+    const auto elapsed=[&]{return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now()-observationStart).count();};
+    HttpClient client;const std::wstring url=argv[1];
+    const auto page=client.Get(url);
+    std::wcout<<L"PAGE "<<page.status<<L" bytes="<<page.body.size()<<L'\n';
+    if(!page.Ok())return 1;
+    const auto com=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
+    HWND host=CreateWindowExW(WS_EX_TOOLWINDOW,L"STATIC",L"TWebFrame page diagnostic",visible?WS_OVERLAPPEDWINDOW:WS_POPUP,
+                             0,0,1000,760,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    RECT bounds{0,0,1000,760};auto view=TWebFrame::View::Create(host,bounds);
+    if(!view){DestroyWindow(host);return 1;}
+    if(visible){ShowWindow(host,SW_SHOWNORMAL);SetForegroundWindow(host);SetFocus(view->Window());}
+    std::mutex outputMutex;
+    unsigned messageSnapshot=0;
+    unsigned savedMessageSnapshot=0;
+    view->SetPageScriptsEnabled(true);view->SetParallelResourceLoading(true);
+    view->SetMessageHandler([&](const std::wstring& message){
+        {
+            std::lock_guard<std::mutex> lock(outputMutex);std::wcout<<L"SCRIPT_MESSAGE ms="<<elapsed()<<L' '<<message<<L"|error="<<view->LastError()<<L'\n';
+        }
+        // The bridge callback runs inside JavaScript. Layout snapshots can
+        // flush observers, so collect them only after the current job returns.
+        if(messageSnapshot<16)++messageSnapshot;
+    });
+    view->SetLoadHandler([&](bool ok,const std::wstring& error){
+        {
+            std::lock_guard<std::mutex> lock(outputMutex);
+            std::wcout<<L"LOAD "<<ok<<L" error="<<error<<L'\n';
+        }
+        if(ok)view->ExecuteScript(LR"JS(
+            window.addEventListener('message',function(event){
+                var data=event.data;
+                window.chrome.webview.postMessage('origin='+event.origin+'|trusted='+event.isTrusted+'|event='+(data&&data.event)+'|source='+(data&&data.source)+'|mode='+(data&&data.mode)+'|widget='+(data&&data.widgetId)+'|code='+(data&&data.code));
+            });
+        )JS");
+    });
+    view->SetResourceLoader([&](const std::wstring& target,std::wstring& text){
+        const auto response=client.Get(target,page.url);
+        if(response.Ok())text=HttpClient::DecodeText(response);
+        std::lock_guard<std::mutex> lock(outputMutex);
+        if(response.contentType.find(L"text/html")!=std::wstring::npos){
+            const auto cache=outputDirectory/
+                (L"frame-resource-"+std::to_wstring(std::hash<std::wstring>{}(target))+L".html");
+            std::ofstream output(cache,std::ios::binary);
+            output.write(reinterpret_cast<const char*>(response.body.data()),response.body.size());
+            std::wcout<<L"CACHE "<<cache.filename().wstring()<<L'\n';
+        }
+        // Keep URL query values out of diagnostic logs.
+        auto printableError=response.error;for(auto& character:printableError)if(character>127)character=L'?';
+        std::wcout<<L"TEXT "<<response.status<<L" chars="<<text.size()<<L" error="<<printableError<<L' '
+                  <<target.substr(0,target.find_first_of(L"?#"))<<L'\n';
+        return response.Ok();
+    });
+    view->SetBinaryResourceLoader([&](const std::wstring& target,std::vector<unsigned char>& data){
+        const auto response=client.Get(target,page.url);if(response.Ok())data=response.body;
+        return response.Ok();
+    });
+    auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(observationSeconds);
+    bool executionTimeLimit=false;
+    view->SetExecutionYieldHandler([&]{
+        if(std::chrono::steady_clock::now()<deadline)return true;
+        executionTimeLimit=true;return false;
+    });
+    const bool started=view->NavigateToStringAsync(HttpClient::DecodeText(page),page.url);
+    auto nextSnapshot=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+    bool settling=false;
+    while(started&&std::chrono::steady_clock::now()<deadline){
+        MSG message{};while(std::chrono::steady_clock::now()<deadline&&PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){
+            TranslateMessage(&message);DispatchMessageW(&message);
+            if(savedMessageSnapshot!=messageSnapshot){
+                savedMessageSnapshot=messageSnapshot;
+                SaveLayoutSnapshot(*view,outputDirectory/
+                    (L"page-script-message-"+std::to_wstring(savedMessageSnapshot)+L".json"));
+            }
+            if(std::chrono::steady_clock::now()>=nextSnapshot){
+                SaveLayoutSnapshot(*view,outputDirectory/L"page-script-progress.json");
+                SaveViewPixels(view->Window(),(outputDirectory/L"page-script-progress.bmp").c_str());
+                std::wcout<<L"OBSERVE ms="<<elapsed()<<L" error="<<view->LastError()<<L'\n';
+                nextSnapshot=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+            }
+        }
+        // A long script job may finish after the initial observation period.
+        // Allow its ordinary queued frame messages to reach the parent view.
+        if(!settling&&std::chrono::steady_clock::now()>=deadline){
+            deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);settling=true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    std::wcout<<L"RUNTIME_ERROR "<<view->LastError()<<L'\n';
+    std::wcout<<L"EXECUTION_TIME_LIMIT "<<executionTimeLimit<<L'\n';
+    SaveLayoutSnapshot(*view,outputDirectory/L"page-script-layout.json");
+    SaveViewPixels(view->Window(),(outputDirectory/L"page-script-render.bmp").c_str());
+    view->SetExecutionYieldHandler({});
+    std::wstring result;
+    const bool inspected=view->ExecuteScript(LR"JS(
+        var descriptions=[];
+        for(var i=0;i<window.length;i++){
+            try {var doc=window.frames[i].document;
+                descriptions.push(doc.title+'|body='+(doc.body?doc.body.innerHTML.length:-1)+'|nodes='+doc.querySelectorAll('*').length);
+            }catch(error){descriptions.push(String(error));}
+        }
+        return 'ready='+document.readyState+'|frames='+window.length+'|'+descriptions.join('\n');
+    )JS",&result);
+    std::wcout<<L"INSPECT "<<inspected<<L' '<<result<<L'\n';
+    const bool textInspected=view->ExecuteScript(LR"JS(
+        var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT),node,parts=[];
+        while(node=walker.nextNode()){
+            var parent=node.parentNode;
+            if(parent && parent.closest('script,style,noscript,template'))continue;
+            parts.push(node.textContent);
+        }
+        return parts.join('\n').slice(0,16000);
+    )JS",&result);
+    SaveTextSnapshot(result,outputDirectory/L"page-script-text.txt");
+    std::wcout<<L"BODY_TEXT "<<textInspected<<L" chars="<<result.size()<<L'\n';
+    view.reset();DestroyWindow(host);if(SUCCEEDED(com))CoUninitialize();return started?0:1;
+}

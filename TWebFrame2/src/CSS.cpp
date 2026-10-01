@@ -270,7 +270,7 @@ void SetDefault(const std::shared_ptr<Node>& node, ComputedStyle& style) {
              node->tag == L"bdi" || node->tag == L"bdo" || node->tag == L"br" ||
              node->tag == L"cite" || node->tag == L"code" || node->tag == L"data" ||
              node->tag == L"del" || node->tag == L"dfn" || node->tag == L"em" ||
-             node->tag == L"i" || node->tag == L"ins" || node->tag == L"kbd" ||
+             node->tag == L"i" || node->tag == L"ins" || node->tag == L"kbd" || node->tag == L"font" ||
              node->tag == L"label" || node->tag == L"mark" ||
              node->tag == L"q" || node->tag == L"s" || node->tag == L"samp" ||
              node->tag == L"small" || node->tag == L"span" || node->tag == L"strong" ||
@@ -288,7 +288,7 @@ void SetDefault(const std::shared_ptr<Node>& node, ComputedStyle& style) {
     else if (node->tag == L"tr") display = L"table-row";
     else if (node->tag == L"td" || node->tag == L"th") display = L"table-cell";
     else if (node->tag == L"li") display = L"list-item";
-    else if (node->tag == L"head" || node->tag == L"style" || node->tag == L"script" || node->tag == L"meta" || node->tag == L"title" || node->tag == L"col" || node->tag == L"colgroup" || node->tag == L"option" || node->tag == L"datalist" || node->tag == L"template" || (node->tag == L"dialog" && !node->attributes.count(L"open")) || node->attributes.count(L"hidden")) display = L"none";
+    else if (node->tag == L"head" || node->tag == L"style" || node->tag == L"script" || node->tag == L"meta" || node->tag == L"title" || node->tag == L"col" || node->tag == L"colgroup" || node->tag == L"option" || node->tag == L"datalist" || node->tag == L"template" || (node->tag == L"noscript" && node->ownerDocument && node->ownerDocument->ScriptingEnabled()) || (node->tag == L"dialog" && !node->attributes.count(L"open")) || node->attributes.count(L"hidden")) display = L"none";
     set(L"display", display.c_str());
     if (node && node->tag == L"dialog" && node->attributes.count(L"open")) {
         (*style.values)[L"position"] = L"fixed";
@@ -341,7 +341,13 @@ void SetDefault(const std::shared_ptr<Node>& node, ComputedStyle& style) {
         (*style.values)[L"font-family"] = L"Arial";
         (*style.values)[L"font-size"] = L"13.3333px";
         (*style.values)[L"font-weight"] = L"400";
+        (*style.values)[L"line-height"] = L"normal";
     }
+    if(node&&(node->tag==L"button"||node->tag==L"select"||
+       (node->tag==L"input"&&(node->Attribute(L"type")==L"button"||node->Attribute(L"type")==L"submit"||node->Attribute(L"type")==L"reset"))))
+        (*style.values)[L"box-sizing"]=L"border-box";
+    if(node&&node->tag==L"input"&&(node->Attribute(L"type")==L"button"||node->Attribute(L"type")==L"submit"||node->Attribute(L"type")==L"reset"))
+        (*style.values)[L"text-align"]=L"center";
     if (node && node->tag == L"button") {
         set(L"padding", L"2px 6px"); set(L"border", L"1px solid #767676");
         set(L"background", L"#f0f0f0");
@@ -363,6 +369,41 @@ void SetDefault(const std::shared_ptr<Node>& node, ComputedStyle& style) {
         set(L"margin", L"3px 3px 3px 4px");
     }
     if (node && node->tag == L"th") (*style.values)[L"font-weight"] = L"700";
+    if(node&&(node->tag==L"td"||node->tag==L"th")){
+        std::wstring cellPadding=L"1px";
+        for(auto ancestor=node->parent.lock();ancestor;ancestor=ancestor->parent.lock())
+            if(ancestor->tag==L"table"){
+                const auto authored=Trim(ancestor->Attribute(L"cellpadding"));
+                if(!authored.empty())cellPadding=authored;
+                break;
+            }
+        set(L"padding",cellPadding.c_str());
+    }
+    if(node&&(node->tag==L"thead"||node->tag==L"tbody"||node->tag==L"tfoot"||
+       node->tag==L"tr"||node->tag==L"td"||node->tag==L"th")){
+        const auto parent=node->parent.lock();
+        const bool rowGroup=node->tag==L"thead"||node->tag==L"tbody"||node->tag==L"tfoot";
+        const auto valign=ToLower(Trim(node->Attribute(L"valign")));
+        if(valign==L"top"||valign==L"middle"||valign==L"bottom"||valign==L"baseline")
+            (*style.values)[L"vertical-align"]=valign;
+        else set(L"vertical-align",rowGroup||(node->tag==L"tr"&&parent&&parent->tag==L"table")?
+            L"middle":L"inherit");
+    }
+    if(node&&(node->tag==L"div"||node->tag==L"center"||node->tag==L"thead"||
+       node->tag==L"tbody"||node->tag==L"tfoot"||node->tag==L"tr"||node->tag==L"td"||node->tag==L"th")){
+        auto align=ToLower(Trim(node->Attribute(L"align")));
+        if(node->tag==L"center"||align==L"middle")align=L"center";
+        // Legacy HTML alignment also aligns narrower descendant blocks.
+        // Keep that distinct from ordinary CSS text-align; author CSS can
+        // replace this presentational hint through the normal cascade.
+        if(align==L"left"||align==L"center"||align==L"right")
+            (*style.values)[L"text-align"]=L"-webkit-"+align;
+        else if(align==L"justify")(*style.values)[L"text-align"]=align;
+    }
+    if(node&&(node->tag==L"table"||node->tag==L"tr"||node->tag==L"td"||node->tag==L"th")){
+        const auto height=Trim(node->Attribute(L"height"));
+        if(!height.empty())set(L"height",height.c_str());
+    }
     if (node && node->tag == L"input" && node->Attribute(L"type") != L"checkbox" &&
         node->Attribute(L"type") != L"radio") {
         set(L"border", L"1px solid #767676"); set(L"background", L"white");
@@ -376,7 +417,7 @@ std::wstring ComputedStyle::Get(const std::wstring& name, const std::wstring& fa
         return std::iswupper(character)!=0;
     });
     auto it=values->end();
-    if(alreadyLower)it=values->find(name);
+    if(alreadyLower||name.rfind(L"--",0)==0)it=values->find(name);
     else{const auto lowered=ToLower(name);it=values->find(lowered);}
     return it == values->end() ? fallback : it->second;
 }
@@ -409,6 +450,7 @@ SelectPopupPalette ResolveSelectPopupPalette(const ComputedStyle& style,
 bool StyleSheet::Parse(const std::wstring& source, std::wstring* error) {
     ++version_;
     rules_.clear(); ruleIndex_.clear(); universalRuleIndexes_.clear();
+    keyframes_.clear();shadowStyles_.clear();
     selectorAttributes_.clear(); nthChildSubjects_.clear();hasUniversalNthChild_=false;
     rootVariables_.clear(); pseudoRules_.clear(); hoverRuleIndexes_.clear();
     hoverRequiresBroadInvalidation_=false; mutationRequiresBroadInvalidation_=false;
@@ -425,9 +467,8 @@ bool StyleSheet::Parse(const std::wstring& source, std::wstring* error) {
         }
         return depth==0;
     };
-    std::function<bool(const std::wstring&,float,float,float,float,bool)> parseBlock;
-    parseBlock=[&](const std::wstring& text,float mediaMinWidth,float mediaMaxWidth,
-                   float mediaMinHeight,float mediaMaxHeight,bool mediaEnabled){
+    std::function<bool(const std::wstring&,const std::vector<std::wstring>&)> parseBlock;
+    parseBlock=[&](const std::wstring& text,const std::vector<std::wstring>& mediaQueries){
         size_t position=0;
         while(position<text.size()){
             while(position<text.size()&&std::iswspace(text[position]))++position;
@@ -439,32 +480,36 @@ bool StyleSheet::Parse(const std::wstring& source, std::wstring* error) {
                 size_t end=0;if(!ruleEnd(text,brace,end)){if(error)*error=L"Unclosed CSS at-rule";return false;}
                 const auto prelude=ToLower(Trim(text.substr(position,brace-position)));
                 if(prelude.rfind(L"@media",0)==0){
-                    float nestedMin=mediaMinWidth,nestedMax=mediaMaxWidth;
-                    float nestedMinHeight=mediaMinHeight,nestedMaxHeight=mediaMaxHeight;
-                    bool nestedEnabled=mediaEnabled;
-                    auto mediaValue=[&](const wchar_t* feature,float fallback){
-                        const auto found=prelude.find(feature);if(found==std::wstring::npos)return fallback;
-                        const auto colon=prelude.find(L':',found);if(colon==std::wstring::npos)return fallback;
-                        const auto close=prelude.find(L')',colon);const auto raw=Trim(prelude.substr(colon+1,(close==std::wstring::npos?prelude.size():close)-colon-1));
-                        return Length(raw,0,0,fallback);
-                    };
-                    nestedMin=std::max(nestedMin,mediaValue(L"min-width",nestedMin));
-                    nestedMax=std::min(nestedMax,mediaValue(L"max-width",nestedMax));
-                    nestedMinHeight=std::max(nestedMinHeight,mediaValue(L"min-height",nestedMinHeight));
-                    nestedMaxHeight=std::min(nestedMaxHeight,mediaValue(L"max-height",nestedMaxHeight));
-                    // This embedded view has one CSS-pixel viewport rather than a
-                    // separate physical-screen layout surface. Device dimensions
-                    // therefore share that viewport and remain independent of the
-                    // Direct2D raster scale used for 100/150 percent DPI.
-                    nestedMin=std::max(nestedMin,mediaValue(L"min-device-width",nestedMin));
-                    nestedMax=std::min(nestedMax,mediaValue(L"max-device-width",nestedMax));
-                    nestedMinHeight=std::max(nestedMinHeight,mediaValue(L"min-device-height",nestedMinHeight));
-                    nestedMaxHeight=std::min(nestedMaxHeight,mediaValue(L"max-device-height",nestedMaxHeight));
-                    if(prelude.find(L"prefers-reduced-motion:reduce")!=std::wstring::npos||
-                       prelude.find(L"prefers-reduced-motion: reduce")!=std::wstring::npos)
-                        nestedEnabled=false;
-                    if(!parseBlock(text.substr(brace+1,end-brace-2),nestedMin,nestedMax,
-                                   nestedMinHeight,nestedMaxHeight,nestedEnabled))return false;
+                    auto nestedQueries=mediaQueries;nestedQueries.push_back(Trim(prelude.substr(6)));
+                    if(!parseBlock(text.substr(brace+1,end-brace-2),nestedQueries))return false;
+                }else if(prelude.rfind(L"@keyframes ",0)==0||prelude.rfind(L"@-webkit-keyframes ",0)==0){
+                    CssKeyframes animation;animation.mediaQueries=mediaQueries;
+                    const auto rawPrelude=Trim(text.substr(position,brace-position));
+                    animation.name=Trim(rawPrelude.substr(rawPrelude.find_first_of(L" \t\r\n")));
+                    const auto body=text.substr(brace+1,end-brace-2);size_t framePosition=0;
+                    while(framePosition<body.size()){
+                        const auto frameBrace=body.find(L'{',framePosition);if(frameBrace==std::wstring::npos)break;
+                        size_t frameEnd=0;if(!ruleEnd(body,frameBrace,frameEnd))break;
+                        std::vector<CssDeclaration> declarations;
+                        for(const auto& part:Split(body.substr(frameBrace+1,frameEnd-frameBrace-2),L';')){
+                            const auto colon=part.find(L':');if(colon==std::wstring::npos)continue;
+                            CssDeclaration declaration;declaration.name=Trim(part.substr(0,colon));
+                            if(declaration.name.rfind(L"--",0)!=0)declaration.name=ToLower(declaration.name);
+                            declaration.value=Trim(part.substr(colon+1));
+                            if(declaration.value.find(L"!important")==std::wstring::npos&&!declaration.name.empty())declarations.push_back(std::move(declaration));
+                        }
+                        for(auto selector:Split(body.substr(framePosition,frameBrace-framePosition),L',')){
+                            selector=ToLower(Trim(selector));float offset=0;size_t consumed=0;
+                            if(selector==L"from")offset=0;
+                            else if(selector==L"to")offset=1;
+                            else if(TryParseFloat(selector,offset,&consumed)&&selector.substr(consumed)==L"%"&&offset>=0&&offset<=100)offset/=100;
+                            else continue;
+                            animation.frames.push_back({offset,declarations});
+                        }
+                        framePosition=frameEnd;
+                    }
+                    std::stable_sort(animation.frames.begin(),animation.frames.end(),[](const CssKeyframe& a,const CssKeyframe& b){return a.offset<b.offset;});
+                    if(!animation.name.empty()&&!animation.frames.empty())keyframes_.push_back(std::move(animation));
                 }
                 position=end;continue;
             }
@@ -474,7 +519,9 @@ bool StyleSheet::Parse(const std::wstring& source, std::wstring* error) {
             const auto body=text.substr(brace+1,end-brace-2);std::vector<CssDeclaration> declarations;
             for(const auto& part:Split(body,L';')){
                 const size_t colon=part.find(L':');if(colon==std::wstring::npos)continue;
-                CssDeclaration declaration;declaration.name=ToLower(Trim(part.substr(0,colon)));declaration.value=Trim(part.substr(colon+1));
+                CssDeclaration declaration;declaration.name=Trim(part.substr(0,colon));
+                if(declaration.name.rfind(L"--",0)!=0)declaration.name=ToLower(declaration.name);
+                declaration.value=Trim(part.substr(colon+1));
                 const auto important=declaration.value.rfind(L"!important");
                 if(important!=std::wstring::npos&&Trim(declaration.value.substr(important))==L"!important"){
                     declaration.important=true;declaration.value=Trim(declaration.value.substr(0,important));
@@ -493,14 +540,18 @@ bool StyleSheet::Parse(const std::wstring& source, std::wstring* error) {
                 rule.declarations=declarations;
                 rule.specificity=Specificity(selector);
                 rule.order=order++;
-                rule.minViewportWidth=mediaMinWidth;
-                rule.maxViewportWidth=mediaMaxWidth;
-                rule.minViewportHeight=mediaMinHeight;
-                rule.maxViewportHeight=mediaMaxHeight;
-                rule.mediaEnabled=mediaEnabled;
-                const auto pseudoSuffix=selector.rfind(L"::");
+                rule.mediaQueries=mediaQueries;
+                auto pseudoSuffix=selector.rfind(L"::");size_t pseudoSeparator=2;
+                if(pseudoSuffix==std::wstring::npos){
+                    const auto colon=selector.rfind(L':');
+                    const auto suffix=colon==std::wstring::npos?L"":ToLower(Trim(selector.substr(colon+1)));
+                    if(suffix==L"before"||suffix==L"after"||suffix==L"first-line"||suffix==L"first-letter"){
+                        pseudoSuffix=colon;pseudoSeparator=1;
+                    }
+                }
                 if(pseudoSuffix!=std::wstring::npos)
-                    rule.pseudo=ToLower(Trim(selector.substr(pseudoSuffix+2)));
+                    rule.pseudo=ToLower(Trim(selector.substr(pseudoSuffix+pseudoSeparator)));
+                if(pseudoSuffix!=std::wstring::npos)rule.specificity=Specificity(selector.substr(0,pseudoSuffix))+1;
                 rule.selectorParts=Document::CompileSelector(
                     pseudoSuffix==std::wstring::npos?selector:selector.substr(0,pseudoSuffix));
                 CollectSelectorAttributes(selector,selectorAttributes_);
@@ -533,20 +584,19 @@ bool StyleSheet::Parse(const std::wstring& source, std::wstring* error) {
                 if(subjectKey.empty())universalRuleIndexes_.push_back(ruleIndex);
                 else ruleIndex_[subjectKey].push_back(ruleIndex);
                 if(selector.find(L":nth-child(")!=std::wstring::npos)usesNthChild_=true;
-                if(const auto suffix=selector.rfind(L"::");suffix!=std::wstring::npos){
-                    const auto pseudo=ToLower(Trim(selector.substr(suffix+2)));
+                if(!rules_.back().pseudo.empty()){
+                    const auto& pseudo=rules_.back().pseudo;
                     if(std::find(pseudoRules_.begin(),pseudoRules_.end(),pseudo)==pseudoRules_.end())
                         pseudoRules_.push_back(pseudo);
                 }
-                if(mediaMinWidth<=0&&std::isinf(mediaMaxWidth)&&Trim(selector)==L":root")for(const auto& declaration:declarations)
+                if(mediaQueries.empty()&&Trim(selector)==L":root")for(const auto& declaration:declarations)
                     if(declaration.name.rfind(L"--",0)==0)rootVariables_[declaration.name]=declaration.value;
             }
             position=end;
         }
         return true;
     };
-    if(!parseBlock(css,0,std::numeric_limits<float>::infinity(),0,
-                   std::numeric_limits<float>::infinity(),true))return false;
+    if(!parseBlock(css,{}))return false;
     if (error) error->clear();
     return true;
 }
@@ -611,9 +661,7 @@ bool StyleSheet::HasPseudoRules(std::wstring_view pseudo) const {
 bool StyleSheet::HasPseudoRulesFor(const std::shared_ptr<Node>& node,std::wstring_view pseudo) const {
     if(!node||node->type!=NodeType::Element||!HasPseudoRules(pseudo))return false;
     for(const auto* rule:CandidateRules(node))
-        if(rule->pseudo==pseudo&&rule->mediaEnabled&&
-           viewportWidth_>=rule->minViewportWidth&&viewportWidth_<=rule->maxViewportWidth&&
-           viewportHeight_>=rule->minViewportHeight&&viewportHeight_<=rule->maxViewportHeight&&
+        if(rule->pseudo==pseudo&&RuleApplies(*rule,viewportWidth_,viewportHeight_)&&
            Document::MatchesSelector(node,rule->selectorParts))return true;
     return false;
 }
@@ -624,9 +672,7 @@ bool StyleSheet::HoverStateAffects(const std::shared_ptr<Node>& node) const {
     for(const auto index:hoverRuleIndexes_){
         if(index>=rules_.size())continue;
         const auto& rule=rules_[index];
-        if(!rule.mediaEnabled||viewportWidth_<rule.minViewportWidth||
-           viewportWidth_>rule.maxViewportWidth||viewportHeight_<rule.minViewportHeight||
-           viewportHeight_>rule.maxViewportHeight)continue;
+        if(!RuleApplies(rule,viewportWidth_,viewportHeight_))continue;
         for(const auto& part:rule.selectorParts){
             if(part.find(L":hover")==std::wstring::npos)continue;
             node->hovered=false;
@@ -641,6 +687,108 @@ bool StyleSheet::HoverStateAffects(const std::shared_ptr<Node>& node) const {
     return false;
 }
 
+bool StyleSheet::MediaQueryMatches(const std::wstring& source,double viewportWidth,double viewportHeight,
+                                  double displayWidth,double displayHeight,double devicePixelRatio){
+    if(displayWidth<=0)displayWidth=viewportWidth;
+    if(displayHeight<=0)displayHeight=viewportHeight;
+    const auto MediaLength=[](std::wstring value,double widthReference,double heightReference)->double{
+        value=ToLower(Trim(value));size_t used=0;float number=0;
+        if(!TryParseFloat(value,number,&used))return std::numeric_limits<double>::quiet_NaN();
+        const auto unit=Trim(value.substr(used));
+        if(unit.empty()||unit==L"px")return number;
+        if(unit==L"em"||unit==L"rem")return number*16.0;
+        if(unit==L"vw")return number*widthReference/100.0;
+        if(unit==L"vh")return number*heightReference/100.0;
+        return std::numeric_limits<double>::quiet_NaN();
+    };
+    const auto EvaluateMediaFeature=[&](std::wstring expression){
+        expression=ToLower(Trim(expression));
+        const auto colon=expression.find(L':');
+        auto name=Trim(expression.substr(0,colon));
+        const auto value=colon==std::wstring::npos?L"":Trim(expression.substr(colon+1));
+        auto compareLength=[&](const std::wstring& base,double actual){
+            const double expected=MediaLength(value,viewportWidth,viewportHeight);
+            if(!std::isfinite(expected))return false;
+            if(name==L"min-"+base)return actual+0.001>=expected;
+            if(name==L"max-"+base)return actual<=expected+0.001;
+            return name==base&&std::abs(actual-expected)<0.001;
+        };
+        if(name==L"width"||name==L"min-width"||name==L"max-width"||
+           name==L"device-width"||name==L"min-device-width"||name==L"max-device-width"){
+            const std::wstring base=name.find(L"device-")!=std::wstring::npos?L"device-width":L"width";
+            return compareLength(base,base==L"device-width"?displayWidth:viewportWidth);
+        }
+        if(name==L"height"||name==L"min-height"||name==L"max-height"||
+           name==L"device-height"||name==L"min-device-height"||name==L"max-device-height"){
+            const std::wstring base=name.find(L"device-")!=std::wstring::npos?L"device-height":L"height";
+            return compareLength(base,base==L"device-height"?displayHeight:viewportHeight);
+        }
+        if(name==L"orientation")return value==(viewportWidth>=viewportHeight?L"landscape":L"portrait");
+        if(name==L"prefers-reduced-motion")return value.empty()||value==L"no-preference";
+        if(name==L"prefers-color-scheme")return value.empty()||value==L"light";
+        if(name==L"hover")return value.empty()||value==L"hover";
+        if(name==L"any-hover")return value.empty()||value==L"hover";
+        if(name==L"pointer"||name==L"any-pointer")return value.empty()||value==L"fine";
+        if(name==L"color")return value.empty()||value==L"8";
+        if(name==L"resolution"||name==L"min-resolution"||name==L"max-resolution"){
+            size_t used=0;float number=0;if(!TryParseFloat(value,number,&used))return false;
+            const auto unit=Trim(ToLower(value.substr(used)));
+            const double expected=unit==L"dpi"?number/96.0:unit==L"dpcm"?number*2.54/96.0:
+                (unit==L"dppx"||unit==L"x"||unit.empty()?number:std::numeric_limits<double>::quiet_NaN());
+            if(!std::isfinite(expected))return false;
+            if(name==L"min-resolution")return devicePixelRatio+0.0001>=expected;
+            if(name==L"max-resolution")return devicePixelRatio<=expected+0.0001;
+            return std::abs(devicePixelRatio-expected)<0.0001;
+        }
+        if(name==L"-webkit-min-device-pixel-ratio"||name==L"-webkit-max-device-pixel-ratio"){
+            size_t used=0;float expected=0;if(!TryParseFloat(value,expected,&used))return false;
+            return name.find(L"min-")!=std::wstring::npos?
+                devicePixelRatio+0.0001>=expected:devicePixelRatio<=expected+0.0001;
+        }
+        return false;
+    };
+
+        size_t clauseStart=0;int nesting=0;
+        for(size_t index=0;index<=source.size();++index){
+            const wchar_t character=index<source.size()?source[index]:L',';
+            if(character==L'(')++nesting;else if(character==L')')--nesting;
+            if(character!=L','||nesting!=0)continue;
+            auto clause=ToLower(Trim(source.substr(clauseStart,index-clauseStart)));clauseStart=index+1;
+            bool negate=false;
+            if(clause.rfind(L"not ",0)==0){negate=true;clause=Trim(clause.substr(4));}
+            if(clause.rfind(L"only ",0)==0)clause=Trim(clause.substr(5));
+            const auto firstFeature=clause.find(L'(');
+            auto mediaType=Trim(clause.substr(0,firstFeature));
+            while(mediaType.size()>=3&&mediaType.rfind(L"and")==mediaType.size()-3)
+                mediaType=Trim(mediaType.substr(0,mediaType.size()-3));
+            bool matches=mediaType.empty()||mediaType==L"all"||mediaType==L"screen";
+            size_t position=firstFeature;
+            while(matches&&position!=std::wstring::npos&&position<clause.size()){
+                int depth=1;size_t end=position+1;
+                for(;end<clause.size()&&depth;++end){if(clause[end]==L'(')++depth;else if(clause[end]==L')')--depth;}
+                if(depth!=0){matches=false;break;}
+                matches=EvaluateMediaFeature(clause.substr(position+1,end-position-2));
+                position=clause.find(L'(',end);
+            }
+            if(negate)matches=!matches;
+            if(matches)return true;
+        }
+        return false;
+    }
+
+bool StyleSheet::RuleApplies(const CssRule& rule,float width,float height) const {
+    if(!rule.mediaEnabled)return false;
+    for(const auto& query:rule.mediaQueries)
+        if(!MediaQueryMatches(query,width,height,displayWidth_,displayHeight_,displayScale_))return false;
+    return true;
+}
+
+void StyleSheet::SetDisplay(float width,float height,float scale) noexcept {
+    if(std::abs(width-displayWidth_)<0.001f&&std::abs(height-displayHeight_)<0.001f&&
+       std::abs(scale-displayScale_)<0.001f)return;
+    displayWidth_=width;displayHeight_=height;displayScale_=scale;++version_;
+}
+
 void StyleSheet::SetViewport(float width,float height) noexcept {
     width=std::max(0.0f,width);height=std::max(0.0f,height);
     if(std::abs(width-viewportWidth_)<0.001f&&std::abs(height-viewportHeight_)<0.001f)return;
@@ -649,12 +797,8 @@ void StyleSheet::SetViewport(float width,float height) noexcept {
     // viewport-relative font size must be rebuilt when the viewport changes.
     bool mediaActivationChanged=false;
     for(const auto& rule:rules_){
-        const bool wasActive=rule.mediaEnabled&&viewportWidth_>=rule.minViewportWidth&&
-            viewportWidth_<=rule.maxViewportWidth&&viewportHeight_>=rule.minViewportHeight&&
-            viewportHeight_<=rule.maxViewportHeight;
-        const bool isActive=rule.mediaEnabled&&width>=rule.minViewportWidth&&
-            width<=rule.maxViewportWidth&&height>=rule.minViewportHeight&&
-            height<=rule.maxViewportHeight;
+        const bool wasActive=RuleApplies(rule,viewportWidth_,viewportHeight_);
+        const bool isActive=RuleApplies(rule,width,height);
         if(wasActive!=isActive){mediaActivationChanged=true;break;}
     }
     viewportWidth_=width;viewportHeight_=height;
@@ -682,14 +826,58 @@ std::wstring StyleSheet::ResolveVariables(const std::wstring& input,
     return value;
 }
 
+std::shared_ptr<StyleSheet> StyleSheet::ShadowStyles(const std::shared_ptr<Node>& node) const {
+    if(node&&!shadowScope_){
+        auto root=node;while(const auto ancestor=root->parent.lock())root=ancestor;
+        if(!root->shadowHost.expired()){
+            std::wstring css;
+            std::function<void(const std::shared_ptr<Node>&)> collect=[&](const auto& current){
+                if(current->tag==L"style")css+=current->InnerText()+L"\n";
+                for(const auto& child:current->children)collect(child);
+            };
+            collect(root);
+            shadowStyles_.erase(std::remove_if(shadowStyles_.begin(),shadowStyles_.end(),[](const ShadowStyleCache& entry){return entry.root.expired();}),shadowStyles_.end());
+            auto cached=std::find_if(shadowStyles_.begin(),shadowStyles_.end(),[&](const ShadowStyleCache& entry){return entry.root.lock()==root;});
+            if(cached==shadowStyles_.end()){
+                shadowStyles_.push_back({root,{},std::make_shared<StyleSheet>()});cached=shadowStyles_.end()-1;
+                cached->sheet->shadowScope_=true;
+            }
+            if(cached->css!=css||cached->sheet->Version()==0){cached->css=css;cached->sheet->Parse(css);}
+            cached->sheet->SetViewport(viewportWidth_,viewportHeight_);
+            cached->sheet->SetDisplay(displayWidth_,displayHeight_,displayScale_);
+            return cached->sheet;
+        }
+    }
+    return {};
+}
+
+const CssKeyframes* StyleSheet::FindKeyframes(const std::shared_ptr<Node>& node,const std::wstring& name) const {
+    if(const auto scoped=ShadowStyles(node))return scoped->FindKeyframes(node,name);
+    for(auto frame=keyframes_.rbegin();frame!=keyframes_.rend();++frame){
+        if(frame->name!=name)continue;
+        bool applies=true;
+        for(const auto& query:frame->mediaQueries)
+            if(!MediaQueryMatches(query,viewportWidth_,viewportHeight_,displayWidth_,displayHeight_,displayScale_)){applies=false;break;}
+        if(applies)return &*frame;
+    }
+    return nullptr;
+}
+
 ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const ComputedStyle* parent,
                                   const std::wstring& pseudo) const {
+    if(const auto scoped=ShadowStyles(node))return scoped->Compute(node,parent,pseudo);
     ComputedStyle result;
-    if (parent) for (const auto* inherited : {L"color", L"color-scheme", L"font-family", L"font-size", L"font-style", L"font-weight", L"letter-spacing", L"line-height", L"list-style-image", L"list-style-position", L"list-style-type", L"tab-size", L"text-align", L"text-decoration", L"text-decoration-line", L"white-space", L"pointer-events", L"visibility", L"fill", L"fill-opacity", L"fill-rule", L"stroke", L"stroke-opacity", L"stroke-width", L"stroke-linecap", L"stroke-linejoin"}) {
+    if (parent) for (const auto* inherited : {L"color", L"color-scheme", L"font-family", L"font-size", L"font-style", L"font-weight", L"letter-spacing", L"line-height", L"list-style-image", L"list-style-position", L"list-style-type", L"tab-size", L"text-align", L"text-decoration", L"text-decoration-line", L"white-space", L"pointer-events", L"visibility", L"fill", L"fill-opacity", L"fill-rule", L"stroke", L"stroke-opacity", L"stroke-width", L"stroke-linecap", L"stroke-linejoin", L"stroke-miterlimit", L"stroke-dasharray", L"stroke-dashoffset"}) {
         const auto value = parent->Get(inherited);
         if (!value.empty()) (*result.values)[inherited] = value;
     }
-    if(pseudo.empty())SetDefault(node,result);
+    if(pseudo.empty()){
+        SetDefault(node,result);
+        // Rows and cells inherit vertical alignment through their UA rule,
+        // rather than treating every cell as independently middle-aligned.
+        if(result.Is(L"vertical-align",L"inherit"))
+            (*result.values)[L"vertical-align"]=parent?parent->Get(L"vertical-align",L"middle"):L"middle";
+    }
     else{
         auto generated=std::make_shared<Node>();generated->tag=L"span";SetDefault(generated,result);
         // Form-control placeholder text has a user-agent color even when the
@@ -714,9 +902,7 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
              (candidate.specificity > current.specificity ||
               (candidate.specificity == current.specificity && candidate.order >= current.order)));
     };
-    const auto ruleApplies=[&](const CssRule& rule){return rule.mediaEnabled&&
-        viewportWidth_>=rule.minViewportWidth&&viewportWidth_<=rule.maxViewportWidth&&
-        viewportHeight_>=rule.minViewportHeight&&viewportHeight_<=rule.maxViewportHeight;};
+    const auto ruleApplies=[&](const CssRule& rule){return RuleApplies(rule,viewportWidth_,viewportHeight_);};
     auto variables=rootVariables_;
     if(parent){
         for(const auto& pair:*parent->values)
@@ -764,7 +950,8 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
     // properties are known; otherwise values such as fill="var(--surface)"
     // reach the painter unresolved and fall back to the current text color.
     if(pseudo.empty()&&node)for(const auto* presentation:{L"fill",L"fill-opacity",L"fill-rule",
-        L"stroke",L"stroke-opacity",L"stroke-width",L"stroke-linecap",L"stroke-linejoin"}){
+        L"stroke",L"stroke-opacity",L"stroke-width",L"stroke-linecap",L"stroke-linejoin",
+        L"stroke-miterlimit",L"stroke-dasharray",L"stroke-dashoffset"}){
         const auto value=node->Attribute(presentation);
         if(!value.empty())(*result.values)[presentation]=ResolveVariables(value,variables);
     }
@@ -799,6 +986,15 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
     };
     auto applyDeclaration = [&](const std::wstring& name, const std::wstring& value,
                                 const Winner& candidate) {
+        if(name==L"margin"||name==L"padding"||name.rfind(L"margin-",0)==0||name.rfind(L"padding-",0)==0){
+            const bool padding=name.rfind(L"padding",0)==0;
+            const bool unitless=node&&node->ownerDocument&&node->ownerDocument->QuirksMode();
+            for(const auto& token:SplitWhitespace(ResolveVariables(value,variables))){
+                float number=0;size_t used=0;
+                if(TryParseFloat(token,number,&used)&&
+                   ((padding&&number<0)||(!unitless&&used==token.size()&&number!=0)))return;
+            }
+        }
         // Keep the authored property for script/debug inspection and also write
         // the longhands consumed by layout. Longhand winners are compared
         // independently, matching CSS shorthand reset and cascade behavior.
@@ -989,6 +1185,15 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
     if(pseudo.empty()&&node&&node->tag==L"input"&&
        ToLower(Trim(node->Attribute(L"type")))==L"hidden")
         (*result.values)[L"display"]=L"none";
+    // Percentages and font-relative lengths compute against this element's
+    // font, then descendants inherit the resulting length. Unitless numbers
+    // stay numbers and are multiplied by each descendant's own font size.
+    const auto lineHeight=ToLower(Trim(result.Get(L"line-height")));
+    float number=0;size_t consumed=0;
+    if(TryParseFloat(lineHeight,number,&consumed)&&consumed<lineHeight.size()){
+        const float fontSize=Length(result.Get(L"font-size",L"16px"),16,viewportWidth_,16,16);
+        (*result.values)[L"line-height"]=std::to_wstring(Length(lineHeight,fontSize,viewportWidth_,fontSize,fontSize))+L"px";
+    }
     return result;
 }
 
@@ -1046,6 +1251,12 @@ float StyleSheet::Length(const std::wstring& raw, float reference, float viewpor
     if(unit==L"vh"||unit==L"vw")return viewport*number/100.0f;
     if(unit==L"em")return fontSize*number;
     if(unit==L"rem")return 16.0f*number;
+    if(unit==L"pt")return number*(96.0f/72.0f);
+    if(unit==L"pc")return number*16.0f;
+    if(unit==L"in")return number*96.0f;
+    if(unit==L"cm")return number*(96.0f/2.54f);
+    if(unit==L"mm")return number*(96.0f/25.4f);
+    if(unit==L"q")return number*(96.0f/101.6f);
     return unit.empty()||unit==L"px"?number:fallback;
 }
 

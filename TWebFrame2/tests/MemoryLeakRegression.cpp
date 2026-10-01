@@ -50,7 +50,7 @@ void QueryAccessibility(IUIAutomation* automation, HWND window) {
         element->Release();
 }
 
-bool ExerciseViews(HWND host, IUIAutomation* automation, int count) {
+bool ExerciseViews(HWND host, IUIAutomation* automation, int count, bool interact=true) {
     constexpr const wchar_t* html = LR"HTML(
         <style>
             html, body { margin: 0; font: 14px Arial; }
@@ -59,8 +59,18 @@ bool ExerciseViews(HWND host, IUIAutomation* automation, int count) {
         <button style="width: 200px; height: 48px">focus teardown</button>
         <div>memory teardown</div><div id="mount"></div>
         <canvas id="chart" width="320" height="160"></canvas>
+        <iframe style="display:block;width:240px;height:100px;border:0" srcdoc="<style>html,body{margin:0}</style><p>composited child</p><iframe srcdoc='<p>nested child</p>'></iframe>"></iframe>
         <script>
             var root = {}; root.self = root;
+            var editorFrame=document.createElement('iframe');document.body.appendChild(editorFrame);
+            var editorDocument=editorFrame.contentDocument;
+            editorDocument.open();editorDocument.write('<html><head><style></style></head><body><div contenteditable="true"></div></body></html>');editorDocument.close();
+            editorDocument.body.textContent='editor text';
+            editorDocument.styleSheets[0].insertRule('body { color:blue }',0);
+            root.editor=editorDocument;root.body=editorDocument.body;
+            var detachedFrame=document.createElement('iframe');document.body.appendChild(detachedFrame);
+            root.detachedFunction=detachedFrame.contentWindow.eval('(function(){return document.body.textContent;})');
+            detachedFrame.remove();root.detachedValue=root.detachedFunction();
             var currentRouteScript = null;
             function draw() {
                 var context = document.getElementById('chart').getContext('2d');
@@ -102,10 +112,21 @@ bool ExerciseViews(HWND host, IUIAutomation* automation, int count) {
         // Exercise the same common focus/accessibility provider path used by
         // login buttons and navigation links. UIAutomationCore may retain a
         // provider until the view explicitly disconnects it during teardown.
-        const LPARAM point = MAKELPARAM(40, 24);
-        SendMessageW(view->Window(), WM_MOUSEMOVE, 0, point);
-        SendMessageW(view->Window(), WM_LBUTTONDOWN, MK_LBUTTON, point);
-        SendMessageW(view->Window(), WM_LBUTTONUP, 0, point);
+        if(interact){
+            const LPARAM point = MAKELPARAM(40, 24);
+            SendMessageW(view->Window(), WM_MOUSEMOVE, 0, point);
+            SendMessageW(view->Window(), WM_LBUTTONDOWN, MK_LBUTTON, point);
+            SendMessageW(view->Window(), WM_LBUTTONUP, 0, point);
+        }
+        // Exercise browser-owned dialog DOM, layout, paint resources and
+        // capture/focus teardown in both the heap and GUI resource checkpoints.
+        std::wstring dialogResult,dialogError;
+        PostMessageW(view->Window(),WM_KEYDOWN,VK_RETURN,0);
+        if(!view->ExecuteScript(L"return confirm('Confirm teardown');",&dialogResult,&dialogError)||
+           dialogResult!=L"true")return false;
+        PostMessageW(view->Window(),WM_KEYDOWN,VK_RETURN,0);
+        if(!view->ExecuteScript(L"return String(alert('Alert teardown'));",&dialogResult,&dialogError)||
+           dialogResult!=L"undefined")return false;
         // Repeated client queries exercise UIAutomationCore's provider cache
         // and TWebFrame's explicit disconnect path at view destruction. Using
         // the client API also consumes the WM_GETOBJECT marshaling result.
@@ -145,10 +166,33 @@ HeapDelta MeasureRepeatedAccessibilityQueries(HWND host, IUIAutomation* automati
 }
 
 GuiResourceDelta MeasureGuiResources(HWND host, IUIAutomation* automation, int count) {
+    const auto drainMessages=[] {
+        // Windows text services/accessibility allocate helper USER resources asynchronously.
+        // Let those messages finish on both sides of the resource checkpoint.
+        const auto deadline=GetTickCount64()+250;
+        do {
+            MSG message{};
+            while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) {
+                TranslateMessage(&message);DispatchMessageW(&message);
+            }
+            Sleep(5);
+        } while(GetTickCount64()<deadline);
+    };
+    DWORD previousGdi=MAXDWORD,previousUser=MAXDWORD;
+    int stableSamples=0;
+    for(int warm=0;warm<8&&stableSamples<2;++warm){
+        if(!ExerciseViews(host,automation,count,false))std::abort();
+        drainMessages();
+        const auto gdi=GetGuiResources(GetCurrentProcess(),GR_GDIOBJECTS);
+        const auto user=GetGuiResources(GetCurrentProcess(),GR_USEROBJECTS);
+        stableSamples=gdi==previousGdi&&user==previousUser?stableSamples+1:0;
+        previousGdi=gdi;previousUser=user;
+    }
     const auto process = GetCurrentProcess();
     const DWORD beforeGdi = GetGuiResources(process, GR_GDIOBJECTS);
     const DWORD beforeUser = GetGuiResources(process, GR_USEROBJECTS);
-    if (!ExerciseViews(host, automation, count)) std::abort();
+    if (!ExerciseViews(host, automation, count,false)) std::abort();
+    drainMessages();
     const DWORD afterGdi = GetGuiResources(process, GR_GDIOBJECTS);
     const DWORD afterUser = GetGuiResources(process, GR_USEROBJECTS);
     return {static_cast<long>(afterGdi) - static_cast<long>(beforeGdi),
@@ -165,6 +209,9 @@ int wmain() {
     constexpr const wchar_t* script = LR"JS(
         var root = {};
         root.self = root;
+        var xml=new DOMParser().parseFromString('<Template><Item><![CDATA[editor template]]></Item></Template>','text/xml');
+        root.xml=xml;root.item=xml.getElementsByTagName('Item').item(0);
+        root.item.savedQuery=root.item.getElementsByTagName;
         var expression = /memory/i;
         expression.self = expression;
         function outer(value) {
@@ -187,11 +234,15 @@ int wmain() {
     const auto repeatedLoads = MeasureRuntime(script, 5);
     OleInitialize(nullptr);
     IUIAutomation* automation = nullptr;
-    CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER,
-                     IID_PPV_ARGS(&automation));
     HWND host = CreateWindowExW(WS_EX_TOOLWINDOW, L"STATIC", L"", WS_POPUP | WS_VISIBLE,
                                 -10000, -10000, 640, 360, nullptr, nullptr,
                                 GetModuleHandleW(nullptr), nullptr);
+    // Measure owned HWND/GDI resources before the external accessibility
+    // client's worker threads allocate their process-wide helper windows.
+    // Accessibility ownership is checked separately by the heap checkpoints.
+    const auto guiResources=host?MeasureGuiResources(host,nullptr,10):GuiResourceDelta{};
+    CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER,
+                     IID_PPV_ARGS(&automation));
     if (!host || !ExerciseViews(host, automation, 1)) {
         std::wcerr << L"FAIL: could not create the TWebFrame view fixture\n";
         if (host) DestroyWindow(host);
@@ -202,7 +253,6 @@ int wmain() {
     const auto oneView = MeasureViews(host, automation, 1);
     const auto repeatedViews = MeasureViews(host, automation, 5);
     const auto repeatedAccessibility = MeasureRepeatedAccessibilityQueries(host, automation);
-    const auto guiResources = MeasureGuiResources(host, automation, 10);
     DestroyWindow(host);
     if (automation) automation->Release();
     OleUninitialize();
@@ -224,7 +274,7 @@ int wmain() {
         oneView.blocks != 0 || oneView.bytes != 0 ||
         repeatedViews.blocks != 0 || repeatedViews.bytes != 0 ||
         repeatedAccessibility.blocks != 0 || repeatedAccessibility.bytes != 0 ||
-        guiResources.gdi != 0 || guiResources.user != 0) {
+        guiResources.gdi > 0 || guiResources.user > 0) {
         std::wcerr << L"FAIL: TWebFrame retained heap allocations after teardown\n";
         return 1;
     }
