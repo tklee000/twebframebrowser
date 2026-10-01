@@ -115,11 +115,14 @@ public:
                                                              const std::wstring&)>;
 
     explicit JavaScriptRuntime(Document& document);
+    void SetBrowserContext(std::shared_ptr<TWebFrame::BrowserContext> context,std::uint64_t session=0);
+    std::wstring SiteForCookies(const std::wstring& documentUrl=L"") const;
     ~JavaScriptRuntime();
     JavaScriptRuntime(const JavaScriptRuntime&) = delete;
     JavaScriptRuntime& operator=(const JavaScriptRuntime&) = delete;
 
     void SetMessageSink(MessageSink sink);
+    void SetCompatibilityBridgeEnabled(bool enabled);
     void SetMutationSink(MutationSink sink);
     void SetFrameScheduler(FrameScheduler scheduler);
     void SetTimerScheduler(TimerScheduler scheduler);

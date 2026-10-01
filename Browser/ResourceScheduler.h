@@ -27,7 +27,9 @@ public:
 
     void Fetch(const std::wstring& url, const std::wstring& referer,
                ResourcePriority priority, Callback callback,
-               CancellationToken cancellation = {});
+               CancellationToken cancellation = {},bool navigation=false);
+    void Fetch(const TWebFrame::NetworkRequest& request,ResourcePriority priority,
+               Callback callback,CancellationToken cancellation={});
     void Prefetch(const std::wstring& url, const std::wstring& referer,
                   ResourcePriority priority = ResourcePriority::Low,
                   CancellationToken cancellation = {});
@@ -36,9 +38,11 @@ public:
     // Prefetched resources return immediately; an unexpected dynamic request
     // waits on a network worker rather than performing I/O in this caller.
     Response Get(const std::wstring& url, const std::wstring& referer = L"");
+    Response Get(const TWebFrame::NetworkRequest& request);
     Response TryGet(const std::wstring& url, const std::wstring& referer = L"");
 
     std::size_t WorkerCount() const noexcept;
+    std::shared_ptr<TWebFrame::BrowserContext> Context() const;
 
 private:
     struct Impl;

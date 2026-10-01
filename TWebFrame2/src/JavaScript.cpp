@@ -440,6 +440,7 @@ struct Value {
     std::shared_ptr<const BigInteger> bigint;
     RuntimeCore* realm = nullptr;
     std::shared_ptr<JavaScriptRuntime> realmOwner;
+    std::weak_ptr<void> realmLifetime;
 
     Value()=default;
     Value(Value&&) noexcept=default;
@@ -447,7 +448,7 @@ struct Value {
     // Only one payload is active for a JavaScript value. Avoid copying the
     // empty string and every inactive shared_ptr on numeric and object reads.
     Value(const Value& source):type(source.type),boolean(source.boolean),abrupt(source.abrupt),
-        number(source.number),realm(source.realm),realmOwner(source.realmOwner){
+        number(source.number),realm(source.realm),realmOwner(source.realmOwner),realmLifetime(source.realmLifetime){
         switch(type){
         case Type::String:if(source.largeString)largeString=source.largeString;else smallString=source.smallString;break;
         case Type::Object:object=source.object;break;
@@ -468,7 +469,7 @@ struct Value {
         // Numeric loop variables otherwise construct and destroy an entire
         // temporary Value, including all of its inactive ownership fields.
         boolean=source.boolean;abrupt=source.abrupt;number=source.number;
-        realm=source.realm;realmOwner=source.realmOwner;
+        realm=source.realm;realmOwner=source.realmOwner;realmLifetime=source.realmLifetime;
         switch(type){
         case Type::String:
             if(source.largeString){largeString=source.largeString;smallString.clear();}
@@ -516,6 +517,7 @@ enum class PromiseState { Pending, Fulfilled, Rejected };
 enum class ObjectKind { Plain, FunctionPrototype, Array, Map, Set, Proxy, RegExp, Window, FrameWindow, FrameDocument, Document, Node, NamedNodeMap, Attr, Range, Selection, TreeWalker, ClassList, Style, Dataset, Event, WebView, Performance, PerformanceObserver, PerformanceEntryList, Math, Json, ObjectConstructor, ArrayConstructor, StringConstructor, NumberConstructor, DateConstructor, Date, PromiseConstructor, ErrorConstructor, Url, UrlSearchParams, Storage, MediaQuery, Headers, Response, ReadableStream, ReadableStreamReader, TextEncoder, TextDecoder, XmlHttpRequest, MutationObserver, IntersectionObserver, ResizeObserver, Promise, Error, Location, History, File, FileReader, Clipboard, DataTransfer, DataTransferItem, CanvasContext2D, CanvasGradient, SubtleCrypto, Crypto, Navigator, Screen, RelativeTimeFormat };
 
 struct Object {
+    std::weak_ptr<void> messageRuntimeLifetime;
     ObjectKind kind = ObjectKind::Plain;
     FastMap<std::wstring, Value> props;
     std::vector<Value> items;
@@ -2506,8 +2508,14 @@ struct RuntimeCore {
         ~MutationBatch(){runtime.EndMutationBatch();}
     };
     Document& document;
+    std::shared_ptr<TWebFrame::BrowserContext> browserContext=std::make_shared<TWebFrame::BrowserContext>();
+    std::uint64_t storageSession=browserContext->NewBrowsingContext();
+    std::uint64_t storageSource=browserContext->NewBrowsingContext();
+    struct StorageBinding {std::shared_ptr<StorageArea> area;std::uint64_t subscription=0;};
+    std::vector<StorageBinding> storageBindings;
     EditingCommandExecutor editingCommands;
     JavaScriptRuntime::MessageSink messageSink;
+    bool compatibilityBridgeEnabled=true;
     JavaScriptRuntime::MutationSink mutationSink;
     JavaScriptRuntime::GeometryProvider geometryProvider;
     JavaScriptRuntime::GeometryProvider svgGeometryProvider;
@@ -2530,10 +2538,12 @@ struct RuntimeCore {
     JavaScriptRuntime::FrameMessageSink frameMessageSink;
     JavaScriptRuntime::FrameDocumentSink frameDocumentSink;
     JavaScriptRuntime::FrameDocumentProvider frameDocumentProvider;
+    std::function<std::pair<RuntimeCore*,std::shared_ptr<JavaScriptRuntime>>(const std::shared_ptr<Node>&)> frameMessageTargetProvider;
     std::function<Value(const std::shared_ptr<Node>&,const std::wstring&)> frameGlobalProvider;
     std::function<void(const std::shared_ptr<Node>&,const std::wstring&,const Value&)> frameGlobalSetter;
     struct ForeignWindowAlias {std::weak_ptr<Object> window;std::weak_ptr<Node> frame;};
     std::unordered_map<RuntimeCore*,ForeignWindowAlias> foreignWindowAliases;
+    std::unordered_map<RuntimeCore*,std::weak_ptr<Object>> messageWindowProxies;
     std::weak_ptr<EventRuntimeLifetime> embeddingParent;
     std::weak_ptr<Node> embeddingFrame;
     JavaScriptRuntime::FrameSelectionProvider frameSelectionProvider;
@@ -2788,6 +2798,7 @@ struct RuntimeCore {
         EventRuntimes().push_back(eventRuntimeLifetime);
     }
     ~RuntimeCore(){
+        for(auto& binding:storageBindings)binding.area->Unsubscribe(binding.subscription);
         for(const auto& worker:workerRealms){worker->stopped.store(true);worker->changed.notify_all();}
         for(const auto& worker:workerRealms)if(worker->thread.joinable())worker->thread.join();
         workerRealms.clear();
@@ -2830,6 +2841,7 @@ struct RuntimeCore {
         PruneExpiredManagedEntries(canvasContexts);
         PruneExpiredManagedEntries(frameWindows);
         PruneExpiredManagedEntries(frameDocuments);
+        PruneExpiredManagedEntries(messageWindowProxies);
         // Event listeners belong to their target node.  Keeping the callback
         // in a raw-pointer keyed map after a detached target has died turns the
         // listener into an unintended runtime root and leaves a dangling key.
@@ -2926,6 +2938,7 @@ struct RuntimeCore {
         managedSweepInterval=256;
     }
     void ResetExecutionState(bool notifyTimerScheduler){
+        for(auto& binding:storageBindings)binding.area->Unsubscribe(binding.subscription);storageBindings.clear();
         if(notifyTimerScheduler&&timerScheduler)timerScheduler(0);
         for(const auto& worker:workerRealms){worker->stopped.store(true);worker->changed.notify_all();}
         for(const auto& worker:workerRealms)if(worker->thread.joinable())worker->thread.join();
@@ -2997,16 +3010,26 @@ struct RuntimeCore {
         return cached->second.MayMatch(input);
     }
 
+    void ValidateRealm(const Value& value){
+        if(!value.realm||value.realm==this)return;
+        const auto lifetime=value.realmLifetime.lock();
+        if(!lifetime||std::static_pointer_cast<EventRuntimeLifetime>(lifetime)->core!=value.realm)
+            throw JavaScriptException{ErrorValue(L"InvalidStateError",L"The source browsing context is closed")};
+        if(value.realm->CurrentOrigin()!=CurrentOrigin())
+            throw JavaScriptException{ErrorValue(L"SecurityError",L"Blocked access to a realm that navigated across origins")};
+    }
     Value LocalRealmValue(Value value){
-        if(value.realm==this){value.realm=nullptr;value.realmOwner.reset();}
+        ValidateRealm(value);
+        if(value.realm==this){value.realm=nullptr;value.realmOwner.reset();value.realmLifetime.reset();}
         return value;
     }
     Value ForeignRealmValue(Value value,RuntimeCore* realm,const std::shared_ptr<JavaScriptRuntime>& owner){
         if(value.object&&value.object==realm->GlobalWindowObject()){
-            const auto alias=foreignWindowAliases.find(realm);
-            if(alias!=foreignWindowAliases.end())if(const auto frame=alias->second.frame.lock())return FrameWindowValue(frame);
+            return WindowProxyFor(realm);
         }
-        if(!value.realm&&(value.object||value.function||value.native)){value.realm=realm;value.realmOwner=owner;}
+        if(!value.realm&&(value.object||value.function||value.native)){
+            value.realm=realm;value.realmOwner=owner;value.realmLifetime=realm->eventRuntimeLifetime;
+        }
         return LocalRealmValue(std::move(value));
     }
     Value ForeignRealmArgument(const Value& value,RuntimeCore* realm){
@@ -3021,6 +3044,8 @@ struct RuntimeCore {
         if(ref.callPrepared)return LocalRealmValue(ref.callValue);
         if(ref.kind==Reference::Kind::Variable||ref.kind==Reference::Kind::Super){
             auto* value=ref.env?ref.env->FindValue(ref.name):nullptr;
+            if(value&&value->object&&value->object->kind==ObjectKind::Storage&&CurrentOrigin()==L"null")
+                throw JavaScriptException{ErrorValue(L"SecurityError",L"Storage is unavailable for an opaque origin")};
             if(value)return LocalRealmValue(*value);
             // Browser scripts use the Window object as their global object. A
             // library export written through window.name must therefore be
@@ -3116,6 +3141,7 @@ struct RuntimeCore {
     std::int32_t Int32(const Value& value){return static_cast<std::int32_t>(Uint32(value));}
     bool OwnPropertyIsEnumerable(const Value& input,const std::wstring& key){
         const auto value=Deref(input);
+        if(value.object&&value.object->kind==ObjectKind::Storage){std::wstring stored;return StorageFor(value.object)->Get(key,stored);}
         if(value.type==Value::Type::String){
             size_t index=0;return TryParseDecimalIndex(key,index)&&index<value.StringText().size();
         }
@@ -3150,6 +3176,7 @@ struct RuntimeCore {
     }
     bool HasOwnStoredProperty(const Value& input,const std::wstring& key){
         auto value=Deref(input);
+        if(value.object&&value.object->kind==ObjectKind::Storage){std::wstring stored;return StorageFor(value.object)->Get(key,stored);}
         if(value.type==Value::Type::Object&&value.object&&value.object->kind==ObjectKind::Array){
             size_t index=0;
             if(key==L"length")return true;
@@ -3513,6 +3540,7 @@ struct RuntimeCore {
         return Value::Number(static_cast<double>(raw));
     }
     std::uint64_t ReadBufferBits(const std::shared_ptr<Object>& object,size_t offset,unsigned width){
+        if(DetachedBuffer(object))throw JavaScriptException{ErrorValue(L"TypeError",L"Cannot read a detached buffer")};
         auto source=object;if(const auto backing=object->byteSource.lock())source=backing;
         const auto sourceBits=source->props.count(L"$typedArrayBits")?static_cast<unsigned>(Number(source->props[L"$typedArrayBits"])):8u;
         const auto sourceWidth=sourceBits/8;std::uint64_t raw=0;
@@ -3521,6 +3549,7 @@ struct RuntimeCore {
         return raw;
     }
     void WriteBufferBits(const std::shared_ptr<Object>& object,size_t offset,unsigned width,std::uint64_t raw){
+        if(DetachedBuffer(object))throw JavaScriptException{ErrorValue(L"TypeError",L"Cannot write a detached buffer")};
         auto source=object;if(const auto backing=object->byteSource.lock())source=backing;
         const auto sourceBits=source->props.count(L"$typedArrayBits")?static_cast<unsigned>(Number(source->props[L"$typedArrayBits"])):8u;
         const auto sourceWidth=sourceBits/8;
@@ -3537,6 +3566,7 @@ struct RuntimeCore {
         }
     }
     Value TypedElementRead(const std::shared_ptr<Object>& object,size_t index){
+        if(DetachedBuffer(object))return Value::Undefined();
         if(object->byteSource.expired())return object->items[index];
         const auto bits=static_cast<unsigned>(Number(object->props[L"$typedArrayBits"]));
         return StorageBitsValue(ReadBufferBits(object,index*(bits/8),bits/8),bits,
@@ -3550,7 +3580,7 @@ struct RuntimeCore {
         index=Number(Value::String(key));return NumberString(index)==key;
     }
     static bool ValidTypedIndex(const std::shared_ptr<Object>& object,double index){
-        return std::isfinite(index)&&index>=0&&!(index==0&&std::signbit(index))&&
+        return !DetachedBuffer(object)&&std::isfinite(index)&&index>=0&&!(index==0&&std::signbit(index))&&
             std::floor(index)==index&&index<static_cast<double>(object->items.size());
     }
     void WriteTypedElement(const std::shared_ptr<Object>& object,double index,const Value& input){
@@ -3570,6 +3600,7 @@ struct RuntimeCore {
     }
     bool SnapshotBufferSource(const Value& input,std::vector<unsigned char>& bytes){
         const auto value=Deref(input);const auto object=value.object;
+        if(DetachedBuffer(object))throw JavaScriptException{ErrorValue(L"TypeError",L"Cannot use a detached buffer")};
         if(!object||(!object->props.count(L"$typedArrayBits")&&!object->props.count(L"$arrayBuffer")&&!object->props.count(L"$dataView")))return false;
         auto source=object;if(const auto backing=source->byteSource.lock())source=backing;
         const auto bits=source->props.count(L"$typedArrayBits")?static_cast<unsigned>(Number(source->props[L"$typedArrayBits"])):8u;
@@ -3582,15 +3613,58 @@ struct RuntimeCore {
         return true;
     }
     std::wstring CurrentOrigin(){
+        if(location.empty()||location==L"about:blank"||location==L"about:srcdoc"){
+            const auto parent=embeddingParent.lock();if(parent&&parent->core)return parent->core->CurrentOrigin();
+        }
+        const auto httpOrigin=BrowserContext::Origin(location);
+        if(httpOrigin!=L"null")return httpOrigin;
         const auto parsed=UrlValue(location,location);
         if(parsed.type!=Value::Type::Object||!parsed.object)return L"null";
         const auto found=parsed.object->props.find(L"origin");
         return found==parsed.object->props.end()?L"null":String(found->second);
     }
+    std::shared_ptr<StorageArea> StorageFor(const std::shared_ptr<Object>& object){
+        const auto area=browserContext->Storage(CurrentOrigin(),object->props.count(L"$sessionStorage")?storageSession:0);
+        if(!area)throw JavaScriptException{ErrorValue(L"SecurityError",L"Storage is unavailable for an opaque origin")};
+        if(std::none_of(storageBindings.begin(),storageBindings.end(),[&](const auto& binding){return binding.area==area;})){
+            const auto weak=std::weak_ptr<EventRuntimeLifetime>(eventRuntimeLifetime);
+            const auto weakArea=std::weak_ptr<StorageArea>(area);const auto origin=CurrentOrigin();
+            const bool session=object->props.count(L"$sessionStorage")!=0;
+            const auto subscription=area->Subscribe([weak,weakArea,origin,session](const StorageChange& change){
+                const auto lifetime=weak.lock();if(!lifetime||!lifetime->core)return;auto& runtime=*lifetime->core;
+                if(change.source==runtime.storageSource||runtime.CurrentOrigin()!=origin)return;
+                runtime.EnqueueTask([weak,weakArea,origin,session,change]{
+                    const auto life=weak.lock();if(!life||!life->core)return;auto& r=*life->core;
+                    if(r.CurrentOrigin()!=origin||weakArea.expired())return;
+                    const auto storage=r.global->values[session?L"sessionStorage":L"localStorage"];
+                    auto event=r.CreateObject(ObjectKind::Event);event->props[L"type"]=Value::String(L"storage");
+                    event->prototype=r.global->values[L"StorageEvent"].native->props[L"prototype"].object;
+                    event->props[L"key"]=change.clear?Value::Null():Value::String(change.key);
+                    event->props[L"oldValue"]=change.hadOld?Value::String(change.oldValue):Value::Null();
+                    event->props[L"newValue"]=change.hasNew?Value::String(change.newValue):Value::Null();
+                    event->props[L"url"]=Value::String(change.url);event->props[L"storageArea"]=storage;
+                    event->props[L"isTrusted"]=Value::Bool(true);event->props[L"bubbles"]=Value::Bool(false);event->props[L"cancelable"]=Value::Bool(false);
+                    r.DispatchWindowEventObject(event);r.DrainMicrotasks();
+                });
+            });
+            storageBindings.push_back({area,subscription});
+        }
+        return area;
+    }
+    std::wstring SiteForCookies(const std::wstring& documentUrl=L""){
+        auto result=documentUrl.empty()||documentUrl==L"about:blank"||documentUrl==L"about:srcdoc"?CurrentOrigin():BrowserContext::Origin(documentUrl);
+        const auto site=BrowserContext::Site(result);bool sameSite=!site.empty();
+        for(auto parent=embeddingParent.lock();parent&&parent->core;parent=parent->core->embeddingParent.lock()){
+            if(BrowserContext::Site(parent->core->CurrentOrigin())!=site)sameSite=false;
+            result=parent->core->CurrentOrigin();
+        }
+        return sameSite?result:L"null";
+    }
     ScriptRequest RequestData(const std::wstring& url,const std::wstring& method,const Value& body,bool credentials=false){
         ScriptRequest request;request.url=UrlValue(url,location).object->props[L"href"].StringText();
         request.method=method;std::transform(request.method.begin(),request.method.end(),request.method.begin(),towupper);
         request.origin=CurrentOrigin();request.referrer=location;request.includeCredentials=credentials;
+        request.siteForCookies=SiteForCookies();
         const auto value=Deref(body);std::wstring bodyKind=L"empty";
         if(request.method!=L"GET"&&request.method!=L"HEAD"&&value.type!=Value::Type::Null&&value.type!=Value::Type::Undefined){
             if(SnapshotBufferSource(value,request.body)){
@@ -4223,6 +4297,28 @@ struct RuntimeCore {
             node->frameWindowName:node->Attribute(L"name"));
         frameWindows[node.get()]=object;return Value::FromObject(object);
     }
+    RuntimeCore* MessageTarget(const std::shared_ptr<Object>& object){
+        if(const auto lifetime=object->messageRuntimeLifetime.lock()){
+            const auto address=std::static_pointer_cast<EventRuntimeLifetime>(lifetime);return address->core;
+        }
+        const std::weak_ptr<void> empty;
+        if(object->messageRuntimeLifetime.owner_before(empty)||empty.owner_before(object->messageRuntimeLifetime))return nullptr;
+        if(object->node&&frameMessageTargetProvider)return frameMessageTargetProvider(object->node).first;
+        const auto parent=embeddingParent.lock();if(!parent||!parent->core)return nullptr;
+        auto* target=parent->core;
+        if(object->props.count(L"$topProxy"))for(auto ancestor=target->embeddingParent.lock();ancestor&&ancestor->core;ancestor=target->embeddingParent.lock())target=ancestor->core;
+        return target;
+    }
+    Value WindowProxyFor(RuntimeCore* target){
+        if(!target)return Value::Null();
+        if(target==this)return global->values[L"window"];
+        if(const auto parent=target->embeddingParent.lock();parent&&parent->core==this)return FrameWindowValue(target->embeddingFrame.lock());
+        if(const auto parent=embeddingParent.lock();parent&&parent->core==target)return global->values[L"parent"];
+        if(const auto found=messageWindowProxies.find(target);found!=messageWindowProxies.end())
+            if(const auto cached=found->second.lock();cached&&MessageTarget(cached)==target)return Value::FromObject(cached);
+        auto proxy=CreateObject(ObjectKind::FrameWindow);proxy->messageRuntimeLifetime=target->eventRuntimeLifetime;
+        messageWindowProxies[target]=proxy;return Value::FromObject(proxy);
+    }
     Value FrameDocumentValue(const std::shared_ptr<Node>& node){
         if(!node)return Value::Null();
         auto found=frameDocuments.find(node.get());
@@ -4336,6 +4432,32 @@ struct RuntimeCore {
             values.object->items.push_back(GetProperty(step,L"value"));
         }
     }
+    static bool DetachedBuffer(const std::shared_ptr<Object>& object){
+        if(!object)return false;
+        if(object->props.count(L"$detached"))return true;
+        const auto buffer=object->props.find(L"buffer");
+        if(buffer!=object->props.end()&&buffer->second.object&&buffer->second.object->props.count(L"$detached"))return true;
+        const auto source=object->byteSource.lock();return source&&source->props.count(L"$detached");
+    }
+    void ValidateTransfers(const Value& input,std::vector<std::shared_ptr<Object>>& buffers){
+        if(input.type==Value::Type::Undefined)return;
+        const auto list=CollectIterable(input);if(list.abrupt)throw JavaScriptException{list};
+        for(const auto& entry:list.object->items){
+            const auto value=Deref(entry);
+            if(!value.object||!value.object->props.count(L"$arrayBuffer")||DetachedBuffer(value.object))
+                throw JavaScriptException{ErrorValue(L"DataCloneError",L"Transfer list contains a nontransferable or detached value")};
+            if(std::find(buffers.begin(),buffers.end(),value.object)!=buffers.end())
+                throw JavaScriptException{ErrorValue(L"DataCloneError",L"Duplicate transfer entry")};
+            buffers.push_back(value.object);
+        }
+    }
+    static void DetachTransfers(const std::vector<std::shared_ptr<Object>>& buffers){
+        for(const auto& buffer:buffers){
+            buffer->props[L"$detached"]=Value::Bool(true);buffer->props[L"byteLength"]=Value::Number(0);
+            if(const auto source=buffer->byteSource.lock()){source->props[L"$detached"]=Value::Bool(true);source->items.clear();}
+            buffer->items.clear();
+        }
+    }
     Value CloneValue(const Value& input){
         std::unordered_map<const Object*,Value> copies;
         std::function<Value(const Value&,unsigned)> clone=[&](const Value& source,unsigned depth)->Value{
@@ -4353,6 +4475,33 @@ struct RuntimeCore {
                 throw JavaScriptException{ErrorValue(L"DataCloneError",L"Host object cannot be structured cloned")};
             auto result=ObjectValue(object->kind);copies.emplace(object.get(),result);
             result.object->byteOffset=object->byteOffset;
+            if(DetachedBuffer(object))throw JavaScriptException{ErrorValue(L"DataCloneError",L"Detached buffer cannot be cloned")};
+            if(object->props.count(L"$arrayBuffer")){
+                result.object->props[L"$arrayBuffer"]=Value::Bool(true);
+                result.object->prototype=global->values[L"ArrayBuffer"].native->props[L"prototype"].object;
+                std::vector<unsigned char> bytes;
+                if(!SnapshotBufferSource(value,bytes))throw JavaScriptException{ErrorValue(L"DataCloneError",L"Invalid buffer")};
+                for(const auto byte:bytes)result.object->items.push_back(Value::Number(byte));
+                result.object->props[L"byteLength"]=Value::Number(static_cast<double>(bytes.size()));
+                return result;
+            }
+            if(object->props.count(L"$dataView")||object->props.count(L"$typedArrayBits")){
+                const auto buffer=clone(object->props[L"buffer"],depth+1);
+                result.object->props[L"buffer"]=buffer;result.object->byteSource=buffer.object;
+                for(const auto* name:{L"$dataView",L"$typedArrayBits",L"$typedArrayClamped",L"$typedArrayFloating",L"$typedArrayName",L"$typedArraySigned",L"byteLength",L"byteOffset",L"BYTES_PER_ELEMENT"})
+                    if(const auto found=object->props.find(name);found!=object->props.end())result.object->props[name]=found->second;
+                if(object->kind==ObjectKind::Array){
+                    result.object->items.resize(object->items.size(),Value::Number(0));
+                    result.object->prototype=global->values[String(object->props[L"$typedArrayName"])].native->props[L"prototype"].object;
+                }else result.object->prototype=global->values[L"DataView"].native->props[L"prototype"].object;
+                return result;
+            }
+            if(object->props.count(L"$blob")){
+                result.object->props[L"$blob"]=Value::Bool(true);result.object->blobBytes=object->blobBytes;
+                for(const auto* name:{L"type",L"size",L"name",L"lastModified"})
+                    if(const auto found=object->props.find(name);found!=object->props.end())result.object->props[name]=found->second;
+                return result;
+            }
             if(object->kind==ObjectKind::Date){result.object->props[L"$time"]=object->props[L"$time"];return result;}
             if(object->kind==ObjectKind::RegExp){result.object->props[L"$pattern"]=object->props[L"$pattern"];result.object->props[L"$flags"]=object->props[L"$flags"];return result;}
             if(object->kind==ObjectKind::Array){
@@ -4385,6 +4534,57 @@ struct RuntimeCore {
             return result;
         };
         return clone(input,0);
+    }
+    Value SendWindowMessage(const std::shared_ptr<Object>& proxy,const std::vector<Value>& arguments){
+        if(arguments.empty())return Value::Thrown(ErrorValue(L"TypeError",L"postMessage requires a message"));
+        auto targetOrigin=CurrentOrigin();
+        if(arguments.size()>1){
+            const auto option=Deref(arguments[1]);
+            const auto supplied=option.object?GetProperty(option,L"targetOrigin"):option;
+            if(supplied.type!=Value::Type::Undefined){
+                const auto converted=StringArgument(supplied);if(converted.abrupt)return converted;
+                targetOrigin=converted.StringText();
+                if(targetOrigin==L"/")targetOrigin=CurrentOrigin();
+                else if(targetOrigin!=L"*"){
+                    targetOrigin=BrowserContext::Origin(targetOrigin);
+                    if(targetOrigin==L"null")return Value::Thrown(ErrorValue(L"SyntaxError",L"Invalid postMessage target origin"));
+                }
+            }
+        }
+        std::vector<std::shared_ptr<Object>> transfers;
+        if(arguments.size()>2)ValidateTransfers(arguments[2],transfers);
+        else if(arguments.size()>1&&Deref(arguments[1]).object)ValidateTransfers(GetProperty(arguments[1],L"transfer"),transfers);
+        auto snapshot=CloneValue(arguments[0]);
+        RuntimeCore* target=this;std::shared_ptr<JavaScriptRuntime> owner;
+        if(proxy&&proxy->kind==ObjectKind::FrameWindow){
+            const std::weak_ptr<void> empty;
+            if(proxy->messageRuntimeLifetime.owner_before(empty)||empty.owner_before(proxy->messageRuntimeLifetime))target=MessageTarget(proxy);
+            else if(proxy->node){
+                const auto resolved=frameMessageTargetProvider?frameMessageTargetProvider(proxy->node):std::pair<RuntimeCore*,std::shared_ptr<JavaScriptRuntime>>{};
+                target=resolved.first;owner=resolved.second;if(!target)return Value::Undefined();
+            }else{
+                const auto parent=embeddingParent.lock();if(!parent||!parent->core)return Value::Undefined();target=parent->core;
+                if(proxy->props.count(L"$topProxy"))for(auto ancestor=target->embeddingParent.lock();ancestor&&ancestor->core;ancestor=target->embeddingParent.lock())target=ancestor->core;
+            }
+        }
+        if(!target)return Value::Undefined();
+        // Construct the receiver's graph now; queued data is independent of
+        // subsequent sender mutations, collection, document replacement or close.
+        const auto data=target->CloneValue(snapshot);DetachTransfers(transfers);
+        const auto sourceLifetime=std::weak_ptr<EventRuntimeLifetime>(eventRuntimeLifetime);
+        const auto targetLifetime=std::weak_ptr<EventRuntimeLifetime>(target->eventRuntimeLifetime);
+        const auto origin=CurrentOrigin();
+        target->EnqueueTask([data,origin,targetOrigin,sourceLifetime,targetLifetime]{
+            const auto destination=targetLifetime.lock();if(!destination||!destination->core)return;
+            auto& receiver=*destination->core;
+            if(targetOrigin!=L"*"&&targetOrigin!=receiver.CurrentOrigin())return;
+            Value source=Value::Null();
+            if(const auto sender=sourceLifetime.lock();sender&&sender->core){
+                source=receiver.WindowProxyFor(sender->core);
+            }
+            receiver.DispatchWindowMessageValue(data,source,origin);
+        });
+        return Value::Undefined();
     }
     static double CurrentTimeMilliseconds(){
         using namespace std::chrono;return static_cast<double>(duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count());
@@ -5845,6 +6045,7 @@ struct RuntimeCore {
         const auto& base=resolved?*resolved:input;
         const auto& receiver=inheritedReceiver?*inheritedReceiver:base;
         if(base.realm&&base.realm!=this){
+            ValidateRealm(base);
             auto target=base;target.realm=nullptr;target.realmOwner.reset();
             std::optional<Value> forwardedReceiver;
             if(inheritedReceiver)forwardedReceiver.emplace(ForeignRealmArgument(receiver,base.realm));
@@ -6269,6 +6470,27 @@ struct RuntimeCore {
         }
         if(base.type!=Value::Type::Object||!base.object)return Value::Undefined();
         auto object=base.object;
+        if(object->kind==ObjectKind::Window&&(key==L"localStorage"||key==L"sessionStorage")&&CurrentOrigin()==L"null")
+            throw JavaScriptException{ErrorValue(L"SecurityError",L"Storage is unavailable for an opaque origin")};
+        if(DetachedBuffer(object)){
+            if(key==L"byteLength"||key==L"byteOffset"||key==L"length")return Value::Number(0);
+            double index=0;if(TypedPropertyIndex(base,key,index))return Value::Undefined();
+        }
+        if(object->kind==ObjectKind::FrameWindow){
+            auto* target=MessageTarget(object);
+            if(key==L"window"||key==L"self"||key==L"frames")return Value::FromObject(object);
+            if(key==L"parent"&&target){const auto parent=target->embeddingParent.lock();return WindowProxyFor(parent&&parent->core?parent->core:target);}
+            if(key==L"top"&&target){for(auto parent=target->embeddingParent.lock();parent&&parent->core;parent=target->embeddingParent.lock())target=parent->core;return WindowProxyFor(target);}
+            if(key==L"length"&&target)return Value::Number(static_cast<double>(target->WindowFrameNodes().size()));
+            size_t index=0;if(target&&TryParseDecimalIndex(key,index)){
+                const auto nodes=target->WindowFrameNodes();
+                if(index<nodes.size()&&target->frameMessageTargetProvider)return WindowProxyFor(target->frameMessageTargetProvider(nodes[index]).first);
+            }
+            if(target&&target->CurrentOrigin()!=CurrentOrigin()&&key!=L"postMessage"&&key!=L"focus"&&key!=L"blur"&&key!=L"close")
+                throw JavaScriptException{ErrorValue(L"SecurityError",L"Blocked cross-origin window property access")};
+            if(target&&!object->node&&key!=L"postMessage"&&key!=L"focus"&&key!=L"blur"&&key!=L"close")
+                return ForeignRealmValue(target->GetProperty(target->global->values[L"window"],key),target,{});
+        }
         if(object->kind==ObjectKind::Proxy){
             const auto target=object->props.find(L"$target"),handler=object->props.find(L"$handler");
             if(target==object->props.end())return Value::Undefined();
@@ -6823,6 +7045,13 @@ struct RuntimeCore {
             if(key==L"entries"||key==L"values"||key==L"keys")return Native([key](RuntimeCore& r,const Value&,const std::vector<Value>& a){
                 std::vector<Value> result;if(a.empty())return r.ArrayValue(result);
                 auto source=r.Deref(a[0]);const FastMap<std::wstring,Value>* properties=nullptr;
+                if(source.object&&source.object->kind==ObjectKind::Storage){
+                    const auto area=r.StorageFor(source.object);
+                    for(size_t index=0;index<area->Length();++index){std::wstring name,text;if(!area->Key(index,name)||!area->Get(name,text))continue;
+                        const auto nameValue=Value::String(name),value=Value::String(text);
+                        result.push_back(key==L"keys"?nameValue:key==L"values"?value:r.ArrayValue({nameValue,value}));
+                    }return r.ArrayValue(result);
+                }
                 if(source.type==Value::Type::Object&&source.object){
                     if(source.object->kind==ObjectKind::Array)
                         for(size_t index=0;index<source.object->items.size();++index){
@@ -7226,6 +7455,7 @@ struct RuntimeCore {
             });
         }
         if(object->kind==ObjectKind::Document){
+            if(key==L"cookie")return Value::String(object->isolatedDocument&&object->isolatedDocument.get()!=&document?L"":browserContext->DocumentCookie(location,SiteForCookies()));
             if(key==L"forms"||key==L"images"||key==L"links"||key==L"scripts")return LiveDocumentCollection(object,key);
             auto& accessedDocument=object->isolatedDocument?*object->isolatedDocument:document;
             if(key==L"nodeType")return Value::Number(9);
@@ -7703,7 +7933,11 @@ struct RuntimeCore {
                     r.BoundDocumentValue(root->isolatedDocument.lock()):r.NodeValue(root);
             });
             if(key==L"contentWindow"&&node->tag==L"iframe")return FrameWindowValue(node);
-            if(key==L"contentDocument"&&node->tag==L"iframe")return FrameDocumentValue(node);
+            if(key==L"contentDocument"&&node->tag==L"iframe"){
+                const auto target=frameMessageTargetProvider?frameMessageTargetProvider(node).first:nullptr;
+                if(target&&target->CurrentOrigin()!=CurrentOrigin())return Value::Null();
+                return FrameDocumentValue(node);
+            }
             if(node->tag==L"img"&&(key==L"naturalWidth"||key==L"naturalHeight"))
                 return Value::Number(node->image?
                     (key==L"naturalWidth"?node->image->width:node->image->height):0);
@@ -8555,19 +8789,11 @@ struct RuntimeCore {
             if(const auto frame=WindowFrameNode(key))return FrameWindowValue(frame);
         }
         if(object->kind==ObjectKind::FrameWindow&&key==L"postMessage")return ObjectNodeNative(object,object->node,[object,node=object->node](RuntimeCore& r,const Value&,const std::vector<Value>& a){
-            if(!a.empty()){
-                const auto data=r.Json(a[0]);
-                const auto origin=r.CurrentOrigin();
-                r.EnqueueTask([&r,node,object,data,origin]{
-                    if(node){if(r.frameMessageSink)r.frameMessageSink(node,data,origin);}
-                    else if(object->props.count(L"$topProxy")){if(r.topMessageSink)r.topMessageSink(data,origin);}
-                    else if(r.parentMessageSink)r.parentMessageSink(data,origin);
-                });
-            }
-            return Value::Undefined();
+            return r.SendWindowMessage(object,a);
         });
-        if(object->kind==ObjectKind::FrameWindow&&key==L"document")
+        if(object->kind==ObjectKind::FrameWindow&&key==L"document"){
             return FrameDocumentValue(object->node);
+        }
         if(object->kind==ObjectKind::FrameWindow&&(key==L"focus"||key==L"blur"))
             return ObjectNodeNative(object,object->node,[node=object->node,key](RuntimeCore& r,const Value&,const std::vector<Value>&){
                 if(r.windowFocusSink)r.windowFocusSink(node,key==L"focus");
@@ -8644,9 +8870,27 @@ struct RuntimeCore {
             if(key==L"removeEventListener")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){r.RemoveEventListener(r.webViewListeners,a);return Value::Undefined();});
         }
         if(object->kind==ObjectKind::Storage){
-            if(key==L"getItem")return ObjectNative(object,[object](RuntimeCore& r,const Value&,const std::vector<Value>& a){if(a.empty())return Value::Null();const auto found=object->props.find(r.String(a[0]));return found==object->props.end()?Value::Null():found->second;});
-            if(key==L"setItem")return ObjectNative(object,[object](RuntimeCore& r,const Value&,const std::vector<Value>& a){if(a.size()>1)object->props[r.String(a[0])]=Value::String(r.String(a[1]));return Value::Undefined();});
-            if(key==L"removeItem")return ObjectNative(object,[object](RuntimeCore& r,const Value&,const std::vector<Value>& a){if(!a.empty())object->props.erase(r.String(a[0]));return Value::Undefined();});
+            if(key==L"length")return Value::Number(static_cast<double>(StorageFor(object)->Length()));
+            if(key==L"key"||key==L"getItem"||key==L"setItem"||key==L"removeItem"||key==L"clear")return Native([key](RuntimeCore& r,const Value& receiver,const std::vector<Value>& a){
+                const auto target=r.Deref(receiver);
+                if(!target.object||target.object->kind!=ObjectKind::Storage)return Value::Thrown(r.ErrorValue(L"TypeError",L"Storage method called on incompatible receiver"));
+                const auto area=r.StorageFor(target.object);
+                const size_t required=key==L"setItem"?2:key==L"clear"?0:1;
+                if(a.size()<required)return Value::Thrown(r.ErrorValue(L"TypeError",L"Not enough arguments to Storage method"));
+                if(key==L"clear"){area->Clear(r.location,r.storageSource);return Value::Undefined();}
+                if(key==L"key"){
+                    const auto number=r.NumericArgument(a[0]);if(number.abrupt)return number;
+                    const auto index=static_cast<std::uint32_t>(r.Int32(number));std::wstring name;
+                    return area->Key(index,name)?Value::String(name):Value::Null();
+                }
+                const auto name=r.StringArgument(a[0]);if(name.abrupt)return name;
+                if(key==L"getItem"){std::wstring value;return area->Get(name.StringText(),value)?Value::String(value):Value::Null();}
+                if(key==L"removeItem"){area->Remove(name.StringText(),r.location,r.storageSource);return Value::Undefined();}
+                const auto value=r.StringArgument(a[1]);if(value.abrupt)return value;
+                if(!area->Set(name.StringText(),value.StringText(),r.location,r.storageSource))return Value::Thrown(r.ErrorValue(L"QuotaExceededError",L"Storage quota exceeded"));
+                return Value::Undefined();
+            });
+            std::wstring stored;if(StorageFor(object)->Get(key,stored))return Value::String(stored);
         }
         if(object->props.count(L"$worker")){
             if(key==L"addEventListener"||key==L"removeEventListener")return ObjectNative(object,[object,key](RuntimeCore& r,const Value&,const std::vector<Value>& a){
@@ -9388,6 +9632,24 @@ struct RuntimeCore {
         if(base.type==Value::Type::Function&&base.function){const auto setter=base.function->props.find(L"$set:"+key);if(setter!=base.function->props.end())Call(setter->second,base,{v});else base.function->props[key]=v;return;}
         if(base.type==Value::Type::Native&&base.native){const auto setter=base.native->props.find(L"$set:"+key);if(setter!=base.native->props.end())Call(setter->second,base,{v});else base.native->props[key]=v;return;}
         if(base.type!=Value::Type::Object||!base.object)return;auto object=base.object;
+        if(object->kind==ObjectKind::Document&&key==L"cookie"){
+            const auto text=StringArgument(v);if(text.abrupt)throw JavaScriptException{text};
+            if(!object->isolatedDocument||object->isolatedDocument.get()==&document)browserContext->SetDocumentCookie(location,text.StringText(),SiteForCookies());return;
+        }
+        if(object->kind==ObjectKind::Storage){
+            const auto text=StringArgument(v);if(text.abrupt)throw JavaScriptException{text};
+            if(!StorageFor(object)->Set(key,text.StringText(),location,storageSource))throw JavaScriptException{ErrorValue(L"QuotaExceededError",L"Storage quota exceeded")};return;
+        }
+        if(object->kind==ObjectKind::FrameWindow){
+            if(auto* target=MessageTarget(object);target&&target->CurrentOrigin()!=CurrentOrigin()){
+                if(key!=L"location")throw JavaScriptException{ErrorValue(L"SecurityError",L"Blocked cross-origin window property assignment")};
+                const auto text=StringArgument(v);if(text.abrupt)throw JavaScriptException{text};
+                target->RequestNavigation(text.StringText());return;
+            }
+            if(auto* target=MessageTarget(object);target&&!object->node){
+                target->SetProperty(target->global->values[L"window"],key,target->ForeignRealmValue(v,this,{}),strict);return;
+            }
+        }
         if(object->kind==ObjectKind::FrameWindow&&object->node&&frameGlobalSetter&&key!=L"name"){
             frameGlobalSetter(object->node,key,v);return;
         }
@@ -9609,6 +9871,11 @@ struct RuntimeCore {
         if(reference.type!=Value::Type::Reference)return true;const auto ref=reference.reference;
         if(ref->kind==Reference::Kind::Variable){if(ref->env){auto* env=ref->env->Find(ref->name);if(env)env->values.erase(ref->name);}return true;}
         auto base=Deref(ref->base);
+        if(base.object&&base.object->kind==ObjectKind::FrameWindow){
+            if(auto* target=MessageTarget(base.object);target&&target->CurrentOrigin()!=CurrentOrigin())
+                throw JavaScriptException{ErrorValue(L"SecurityError",L"Blocked cross-origin window property deletion")};
+        }
+        if(base.object&&base.object->kind==ObjectKind::Storage){StorageFor(base.object)->Remove(ref->name,location,storageSource);return true;}
         double typedIndex=0;if(TypedPropertyIndex(base,ref->name,typedIndex))return !ValidTypedIndex(base.object,typedIndex);
         if(base.object&&base.object->kind==ObjectKind::Proxy){
             const auto target=base.object->props.find(L"$target"),handler=base.object->props.find(L"$handler");
@@ -11173,11 +11440,13 @@ struct RuntimeCore {
     }
     void InstallGlobals(){
         auto documentValue=ObjectValue(ObjectKind::Document);
-        documentValue.object->props[L"cookie"]=Value::String(L"");
         global->values[L"document"]=documentValue;
         global->values[L"Infinity"]=Value::Number(std::numeric_limits<double>::infinity());
         global->values[L"NaN"]=Value::Number(std::numeric_limits<double>::quiet_NaN());
-        auto window=CreateObject(ObjectKind::Window);auto chrome=CreateObject(ObjectKind::Plain);const auto hostBridge=ObjectValue(ObjectKind::WebView);chrome->props[L"webview"]=hostBridge;window->props[L"chrome"]=Value::FromObject(chrome);window->props[L"twebframe"]=hostBridge;global->values[L"window"]=Value::FromObject(window);
+        auto window=CreateObject(ObjectKind::Window);
+        if(compatibilityBridgeEnabled){auto chrome=CreateObject(ObjectKind::Plain);const auto hostBridge=ObjectValue(ObjectKind::WebView);
+            chrome->props[L"webview"]=hostBridge;window->props[L"chrome"]=Value::FromObject(chrome);window->props[L"twebframe"]=hostBridge;}
+        global->values[L"window"]=Value::FromObject(window);
         window->props[L"$get:frameElement"]=Native([](RuntimeCore& runtime,const Value& thisValue,const std::vector<Value>&){
             const auto receiver=runtime.Deref(thisValue);
             if(!receiver.object||receiver.object->kind!=ObjectKind::Window)
@@ -11229,24 +11498,8 @@ struct RuntimeCore {
         global->values[L"btoa"]=btoa;window->props[L"btoa"]=btoa;
         const auto getSelection=Native([](RuntimeCore& r,const Value&,const std::vector<Value>&){return r.SelectionValue();});
         global->values[L"getSelection"]=getSelection;window->props[L"getSelection"]=getSelection;
-        const auto postMessage=Native([](RuntimeCore& runtime,const Value&,
-                                         const std::vector<Value>& arguments){
-            if(arguments.empty())return Value::Undefined();
-            std::wstring targetOrigin=L"/";
-            if(arguments.size()>1){
-                const auto options=runtime.Deref(arguments[1]);
-                targetOrigin=options.type==Value::Type::Object?
-                    runtime.String(runtime.GetProperty(options,L"targetOrigin")):
-                    runtime.String(options);
-            }
-            const auto origin=runtime.CurrentOrigin();
-            if(!targetOrigin.empty()&&targetOrigin!=L"*"&&targetOrigin!=L"/"&&
-               targetOrigin!=origin)return Value::Undefined();
-            const auto data=runtime.Deref(arguments[0]);
-            runtime.EnqueueTask([&runtime,data,origin]{
-                runtime.DispatchSelfWindowMessage(data,origin);
-            });
-            return Value::Undefined();
+        const auto postMessage=Native([](RuntimeCore& runtime,const Value&,const std::vector<Value>& arguments){
+            return runtime.SendWindowMessage({},arguments);
         });
         global->values[L"postMessage"]=postMessage;window->props[L"postMessage"]=postMessage;
         const auto domConstructor=[this,&window](const std::wstring& name){
@@ -11680,6 +11933,14 @@ struct RuntimeCore {
                 for(const auto* property:{L"bubbles",L"cancelable",L"composed"})boolean(property);
                 if(name==L"CustomEvent")any(L"detail",Value::Null());
                 if(name==L"MessageEvent"){any(L"data",Value::Null());text(L"origin");text(L"lastEventId");any(L"source",Value::Null());any(L"ports",runtime.ArrayValue({}));}
+                if(name==L"StorageEvent"){
+                    for(const auto* field:{L"key",L"oldValue",L"newValue"}){
+                        const auto value=runtime.GetProperty(options,field);
+                        if(value.type==Value::Type::Undefined||value.type==Value::Type::Null)event.object->props[field]=Value::Null();
+                        else {const auto converted=runtime.StringArgument(value);if(converted.abrupt)return converted;event.object->props[field]=converted;}
+                    }
+                    text(L"url");any(L"storageArea",Value::Null());
+                }
                 if(name==L"UIEvent"||name==L"MouseEvent"||name==L"KeyboardEvent"||name==L"InputEvent"||name==L"PointerEvent"){
                     any(L"view",Value::Null());number(L"detail");
                 }
@@ -11714,6 +11975,7 @@ struct RuntimeCore {
         };
         intrinsicEventPrototype=installEvent(L"Event",{});
         installEvent(L"CustomEvent",intrinsicEventPrototype);installEvent(L"MessageEvent",intrinsicEventPrototype);
+        installEvent(L"StorageEvent",intrinsicEventPrototype);
         const auto uiEventPrototype=installEvent(L"UIEvent",intrinsicEventPrototype);
         const auto mouseEventPrototype=installEvent(L"MouseEvent",uiEventPrototype);
         installEvent(L"KeyboardEvent",uiEventPrototype);installEvent(L"InputEvent",uiEventPrototype);installEvent(L"PointerEvent",mouseEventPrototype);
@@ -11751,15 +12013,23 @@ struct RuntimeCore {
         global->values[L"screen"]=screen;window->props[L"screen"]=screen;
         const auto pixelRatio=Value::Number(devicePixelRatio);
         global->values[L"devicePixelRatio"]=pixelRatio;window->props[L"devicePixelRatio"]=pixelRatio;
-        auto parent=parentMessageSink?ObjectValue(ObjectKind::FrameWindow):Value::FromObject(window);
+        const auto embedding=embeddingParent.lock();
+        const bool hasParent=(embedding&&embedding->core)||parentMessageSink;
+        auto parent=hasParent?ObjectValue(ObjectKind::FrameWindow):Value::FromObject(window);
         auto top=Value::FromObject(window);
-        if(parentMessageSink){
-            if(topMessageSink){top=ObjectValue(ObjectKind::FrameWindow);top.object->props[L"$topProxy"]=Value::Bool(true);}
+        if(hasParent){
+            auto* root=embedding?embedding->core:nullptr;
+            if(root)for(auto ancestor=root->embeddingParent.lock();ancestor&&ancestor->core;ancestor=root->embeddingParent.lock())root=ancestor->core;
+            if((root&&root!=embedding->core)||(!root&&topMessageSink)){top=ObjectValue(ObjectKind::FrameWindow);top.object->props[L"$topProxy"]=Value::Bool(true);}
             else top=parent;
             parent.object->props[L"window"]=parent;parent.object->props[L"self"]=parent;
             parent.object->props[L"parent"]=top;parent.object->props[L"top"]=top;
             top.object->props[L"window"]=top;top.object->props[L"self"]=top;
             top.object->props[L"parent"]=top;top.object->props[L"top"]=top;
+            if(embedding&&embedding->core){
+                parent.object->messageRuntimeLifetime=embedding;
+                top.object->messageRuntimeLifetime=root->eventRuntimeLifetime;
+            }
         }
         global->values[L"parent"]=parent;window->props[L"parent"]=parent;
         // A direct child browsing context sees the containing context through
@@ -12693,9 +12963,9 @@ struct RuntimeCore {
         wchar_t localeName[LOCALE_NAME_MAX_LENGTH]{};
         const std::wstring language=GetUserDefaultLocaleName(localeName,static_cast<int>(std::size(localeName)))>0?localeName:L"en-US";
         navigator.object->props[L"appName"]=Value::String(L"Netscape");navigator.object->props[L"appVersion"]=Value::String(L"5.0");
-        navigator.object->props[L"userAgent"]=Value::String(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) TWebFrame/1.0");
+        navigator.object->props[L"userAgent"]=Value::String(BrowserContext::UserAgent());
         navigator.object->props[L"platform"]=Value::String(L"Win32");navigator.object->props[L"language"]=Value::String(language);
-        navigator.object->props[L"languages"]=ArrayValue({Value::String(language)});navigator.object->props[L"cookieEnabled"]=Value::Bool(false);
+        navigator.object->props[L"languages"]=ArrayValue({Value::String(language)});navigator.object->props[L"cookieEnabled"]=Value::Bool(browserContext->CookiesEnabled());
         navigator.object->props[L"onLine"]=Value::Bool(true);
         navigator.object->props[L"hardwareConcurrency"]=Value::Number(std::max<DWORD>(1,GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)));
         global->values[L"navigator"]=navigator;window->props[L"navigator"]=navigator;
@@ -13056,7 +13326,12 @@ struct RuntimeCore {
         auto interval=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){if(a.empty())return Value::Number(0);const std::vector<Value> args=a.size()>2?std::vector<Value>(a.begin()+2,a.end()):std::vector<Value>{};return Value::Number(r.ScheduleTimer(a[0],a.size()>1?r.Number(a[1]):0,true,args));});
         auto clearTimeout=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){if(!a.empty())r.ClearTimer(static_cast<unsigned>(r.Number(a[0])));return Value::Undefined();});
         global->values[L"setTimeout"]=timeout;global->values[L"clearTimeout"]=clearTimeout;global->values[L"setInterval"]=interval;global->values[L"clearInterval"]=clearTimeout;window->props[L"setTimeout"]=timeout;window->props[L"clearTimeout"]=clearTimeout;window->props[L"setInterval"]=interval;window->props[L"clearInterval"]=clearTimeout;
-        global->values[L"structuredClone"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){return a.empty()?Value::Undefined():r.CloneValue(a[0]);});
+        global->values[L"structuredClone"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
+            if(a.empty())return Value::Thrown(r.ErrorValue(L"TypeError",L"structuredClone requires a value"));
+            std::vector<std::shared_ptr<Object>> transfers;
+            if(a.size()>1&&a[1].type!=Value::Type::Undefined&&a[1].type!=Value::Type::Null)r.ValidateTransfers(r.GetProperty(a[1],L"transfer"),transfers);
+            auto result=r.CloneValue(a[0]);r.DetachTransfers(transfers);return result;
+        });
         global->values[L"getComputedStyle"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){if(a.empty())return r.ObjectValue(ObjectKind::Style);const auto value=r.Deref(a[0]);if(value.type==Value::Type::Object&&value.object&&value.object->kind==ObjectKind::Node){auto style=r.ObjectValue(ObjectKind::Style);style.object->node=value.object->node;style.object->props[L"$computed"]=Value::Bool(true);return style;}return r.ObjectValue(ObjectKind::Style);});
         window->props[L"getComputedStyle"]=global->values[L"getComputedStyle"];
         auto promise=ObjectValue(ObjectKind::PromiseConstructor);
@@ -13137,6 +13412,21 @@ struct RuntimeCore {
         global->values[L"location"]=Value::FromObject(locationObject);window->props[L"location"]=Value::FromObject(locationObject);
         auto storage=ObjectValue(ObjectKind::Storage);global->values[L"localStorage"]=storage;window->props[L"localStorage"]=storage;
         auto sessionStorage=ObjectValue(ObjectKind::Storage);global->values[L"sessionStorage"]=sessionStorage;window->props[L"sessionStorage"]=sessionStorage;
+        sessionStorage.object->props[L"$sessionStorage"]=Value::Bool(true);
+        auto storageConstructor=domConstructor(L"Storage");
+        const auto storagePrototype=storageConstructor.native->props[L"prototype"];
+        storage.object->prototype=storagePrototype.object;sessionStorage.object->prototype=storagePrototype.object;
+        storagePrototype.object->props[L"$get:length"]=Native([](RuntimeCore& r,const Value& receiver,const std::vector<Value>&){
+            const auto target=r.Deref(receiver);
+            if(!target.object||target.object->kind!=ObjectKind::Storage)return Value::Thrown(r.ErrorValue(L"TypeError",L"Storage length called on incompatible receiver"));
+            return Value::Number(static_cast<double>(r.StorageFor(target.object)->Length()));
+        });
+        storagePrototype.object->props[L"$enumerable:length"]=Value::Bool(true);
+        for(const auto* name:{L"key",L"getItem",L"setItem",L"removeItem",L"clear"}){
+            auto method=GetPropertyValue(storage,name,true);method.native->props[L"name"]=Value::String(name);
+            method.native->props[L"length"]=Value::Number(std::wstring(name)==L"setItem"?2:std::wstring(name)==L"clear"?0:1);
+            storagePrototype.object->props[name]=method;
+        }
         const auto urlConstructor=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){if(a.empty())return Value::Thrown(r.ErrorValue(L"TypeError",L"URL requires an input"));return r.UrlValue(r.String(a[0]),a.size()>1?r.String(a[1]):r.location);});
         urlConstructor.native->props[L"createObjectURL"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
             if(a.empty()||!a[0].object||!a[0].object->props.count(L"$blob"))
@@ -13335,6 +13625,11 @@ struct RuntimeCore {
                 const auto method=readOption(L"method"),credentials=readOption(L"credentials");
                 auto request=r.RequestData(resource,method.type==Value::Type::Undefined?L"GET":r.String(method),readOption(L"body"),
                     credentials.type!=Value::Type::Undefined&&r.String(credentials)==L"include");
+                if(credentials.type!=Value::Type::Undefined){
+                    const auto option=r.String(credentials);
+                    if(option!=L"omit"&&option!=L"same-origin"&&option!=L"include")return rejected(L"Invalid credentials mode");
+                    request.credentials=option==L"omit"?ScriptRequest::Credentials::Omit:option==L"include"?ScriptRequest::Credentials::Include:ScriptRequest::Credentials::SameOrigin;
+                }
                 request.mode=mode==L"no-cors"?ScriptRequest::Mode::NoCors:mode==L"same-origin"?ScriptRequest::Mode::SameOrigin:ScriptRequest::Mode::Cors;
                 if(request.mode==ScriptRequest::Mode::NoCors&&request.method!=L"GET"&&request.method!=L"HEAD"&&request.method!=L"POST")
                     return rejected(L"Method is not allowed in no-cors mode");
@@ -13416,11 +13711,18 @@ struct RuntimeCore {
         catch(const std::exception& e){const auto* text=e.what();const int bytes=static_cast<int>(std::strlen(text));int count=MultiByteToWideChar(CP_UTF8,0,text,bytes,nullptr,0);lastError.assign(std::max(0,count),L'\0');if(count>0)MultiByteToWideChar(CP_UTF8,0,text,bytes,lastError.data(),count);if(error)*error=lastError;return false;}
     }
     void DispatchSelfWindowMessage(const Value& data,const std::wstring& sourceOrigin){
+        DispatchWindowMessageValue(data,global->values[L"window"],sourceOrigin);
+    }
+    void DispatchWindowMessageValue(const Value& data,const Value& source,const std::wstring& sourceOrigin){
         MutationBatch batch(*this);
         auto event=CreateObject(ObjectKind::Event);
         event->props[L"data"]=Deref(data);event->props[L"type"]=Value::String(L"message");
+        event->prototype=global->values[L"MessageEvent"].native->props[L"prototype"].object;
+        event->props[L"ports"]=ArrayValue({});
+        if(receivedMessageKinds.size()<64){const auto kind=GetProperty(data,L"event");receivedMessageKinds.push_back(kind.type==Value::Type::String?kind.StringText():L"<message>");}
         const auto target=global->values[L"window"],eventValue=Value::FromObject(event);
-        event->props[L"source"]=target;event->props[L"origin"]=Value::String(sourceOrigin);
+        event->props[L"source"]=source;event->props[L"origin"]=Value::String(sourceOrigin);
+        event->props[L"bubbles"]=Value::Bool(false);event->props[L"cancelable"]=Value::Bool(false);
         event->props[L"lastEventId"]=Value::String(L"");event->props[L"target"]=target;
         event->props[L"currentTarget"]=target;event->props[L"eventPhase"]=Value::Number(2);
         event->props[L"defaultPrevented"]=Value::Bool(false);
@@ -13721,6 +14023,22 @@ struct JavaScriptRuntime::Impl {
 JavaScriptRuntime::JavaScriptRuntime(Document& document):impl_(std::make_unique<Impl>(document)){}
 JavaScriptRuntime::~JavaScriptRuntime()=default;
 void JavaScriptRuntime::SetMessageSink(MessageSink sink){impl_->core.messageSink=std::move(sink);}
+void JavaScriptRuntime::SetCompatibilityBridgeEnabled(bool enabled){
+    auto& core=impl_->core;core.compatibilityBridgeEnabled=enabled;
+    if(!enabled){core.global->values.erase(L"chrome");core.global->values.erase(L"twebframe");
+        core.GlobalWindowObject()->props.erase(L"chrome");core.GlobalWindowObject()->props.erase(L"twebframe");}
+    else if(!core.GlobalWindowObject()->props.count(L"chrome")){
+        auto chrome=core.ObjectValue(ObjectKind::Plain),bridge=core.ObjectValue(ObjectKind::WebView);
+        chrome.object->props[L"webview"]=bridge;core.GlobalWindowObject()->props[L"chrome"]=chrome;core.GlobalWindowObject()->props[L"twebframe"]=bridge;
+        core.global->values[L"chrome"]=chrome;core.global->values[L"twebframe"]=bridge;
+    }
+}
+void JavaScriptRuntime::SetBrowserContext(std::shared_ptr<BrowserContext> context,std::uint64_t session){
+    if(!context)return;auto& core=impl_->core;
+    for(auto& binding:core.storageBindings)binding.area->Unsubscribe(binding.subscription);core.storageBindings.clear();
+    core.browserContext=std::move(context);core.storageSession=session?session:core.browserContext->NewBrowsingContext();core.storageSource=core.browserContext->NewBrowsingContext();
+    if(core.CurrentOrigin()!=L"null")for(const auto* name:{L"localStorage",L"sessionStorage"})core.StorageFor(core.global->values[name].object);
+}
 void JavaScriptRuntime::SetMutationSink(MutationSink sink){impl_->core.mutationSink=std::move(sink);}
 void JavaScriptRuntime::SetFrameScheduler(FrameScheduler scheduler){impl_->core.frameScheduler=std::move(scheduler);}
 void JavaScriptRuntime::SetTimerScheduler(TimerScheduler scheduler){impl_->core.timerScheduler=std::move(scheduler);}
@@ -13734,6 +14052,7 @@ void JavaScriptRuntime::SetSvgGeometryProvider(GeometryProvider provider){impl_-
 void JavaScriptRuntime::SetSvgTextLengthProvider(SvgTextLengthProvider provider){impl_->core.svgTextLengthProvider=std::move(provider);}
 void JavaScriptRuntime::SetStylePropertyProvider(StylePropertyProvider provider){impl_->core.stylePropertyProvider=std::move(provider);}
 void JavaScriptRuntime::SetResourceLoader(ResourceLoader loader){impl_->core.resourceLoader=std::move(loader);}
+std::wstring JavaScriptRuntime::SiteForCookies(const std::wstring& documentUrl) const {return impl_->core.SiteForCookies(documentUrl);}
 void JavaScriptRuntime::SetAsyncResourceLoader(AsyncResourceLoader loader){impl_->core.asyncResourceLoader=std::move(loader);}
 void JavaScriptRuntime::SetRequestLoader(ScriptRequestLoader loader){impl_->core.requestLoader=std::move(loader);}
 void JavaScriptRuntime::SetAsyncRequestLoader(AsyncScriptRequestLoader loader){impl_->core.asyncRequestLoader=std::move(loader);}
@@ -13749,6 +14068,11 @@ void JavaScriptRuntime::SetFrameMessageSink(FrameMessageSink sink){impl_->core.f
 void JavaScriptRuntime::SetFrameDocumentSink(FrameDocumentSink sink){impl_->core.frameDocumentSink=std::move(sink);}
 void JavaScriptRuntime::SetFrameDocumentProvider(FrameDocumentProvider provider){impl_->core.frameDocumentProvider=std::move(provider);}
 void JavaScriptRuntime::SetFrameRuntimeProvider(FrameRuntimeProvider provider){
+    impl_->core.frameMessageTargetProvider=[this,provider](const auto& node){
+        const auto runtime=provider?provider(node):std::shared_ptr<JavaScriptRuntime>{};
+        if(runtime&&runtime->impl_->core.embeddingParent.expired())runtime->SetEmbeddingFrame(this,node);
+        return std::make_pair(runtime?&runtime->impl_->core:nullptr,runtime);
+    };
     const auto resolve=[this,provider=std::move(provider)](const std::shared_ptr<Node>& node){
         const auto runtime=provider?provider(node):std::shared_ptr<JavaScriptRuntime>{};
         if(!runtime)return runtime;
@@ -13831,6 +14155,8 @@ void JavaScriptRuntime::SetDisplaySize(double width,double height){
 }
 void JavaScriptRuntime::SetLocation(const std::wstring& location){
     auto& core=impl_->core;core.UpdateLocation(location);
+    for(auto& binding:core.storageBindings)binding.area->Unsubscribe(binding.subscription);core.storageBindings.clear();
+    if(core.CurrentOrigin()!=L"null")for(const auto* name:{L"localStorage",L"sessionStorage"})core.StorageFor(core.global->values[name].object);
     const auto found=core.global->values.find(L"history");
     if(found!=core.global->values.end()&&found->second.object&&found->second.object->items.size()==1)
         found->second.object->items.front().object->props[L"url"]=Value::String(location);

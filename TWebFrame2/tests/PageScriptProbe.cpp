@@ -36,8 +36,9 @@ void SaveLayoutSnapshot(TWebFrame::View& view,const std::filesystem::path& filen
 }
 
 int wmain(int argc,wchar_t** argv){
-    if(argc<2||argc>5){std::wcerr<<L"Usage: PageScriptProbe https://host/path [observation-seconds] [output-directory] [--visible]\n";return 2;}
+    if(argc<2||argc>5){std::wcerr<<L"Usage: PageScriptProbe https://host/path [observation-seconds] [output-directory] [--visible|--native]\n";return 2;}
     const bool visible=argc==5&&std::wstring(argv[4])==L"--visible";
+    const bool native=argc==5&&std::wstring(argv[4])==L"--native";
     const auto observationSeconds=argc>=3?std::max(1,std::min(600,_wtoi(argv[2]))):60;
     const auto outputDirectory=argc>=4?std::filesystem::path(argv[3]):std::filesystem::path(L"TWebFrame2/tests/artifacts");
     std::filesystem::create_directories(outputDirectory);
@@ -47,7 +48,7 @@ int wmain(int argc,wchar_t** argv){
     const auto elapsed=[&]{return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now()-observationStart).count();};
     HttpClient client;const std::wstring url=argv[1];
-    const auto page=client.Get(url);
+    const auto page=client.Get(url,L"",true);
     std::wcout<<L"PAGE "<<page.status<<L" bytes="<<page.body.size()<<L'\n';
     if(!page.Ok())return 1;
     const auto com=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
@@ -55,14 +56,16 @@ int wmain(int argc,wchar_t** argv){
                              0,0,1000,760,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
     RECT bounds{0,0,1000,760};auto view=TWebFrame::View::Create(host,bounds);
     if(!view){DestroyWindow(host);return 1;}
+    view->SetBrowserContext(client.Context());
+    if(native)view->SetCompatibilityBridgeEnabled(false);
     if(visible){ShowWindow(host,SW_SHOWNORMAL);SetForegroundWindow(host);SetFocus(view->Window());}
-    std::mutex outputMutex;
+    auto outputMutex=std::make_shared<std::mutex>();
     unsigned messageSnapshot=0;
     unsigned savedMessageSnapshot=0;
     view->SetPageScriptsEnabled(true);view->SetParallelResourceLoading(true);
     view->SetMessageHandler([&](const std::wstring& message){
         {
-            std::lock_guard<std::mutex> lock(outputMutex);std::wcout<<L"SCRIPT_MESSAGE ms="<<elapsed()<<L' '<<message<<L"|error="<<view->LastError()<<L'\n';
+            std::lock_guard<std::mutex> lock(*outputMutex);std::wcout<<L"SCRIPT_MESSAGE ms="<<elapsed()<<L' '<<message<<L"|error="<<view->LastError()<<L'\n';
         }
         // The bridge callback runs inside JavaScript. Layout snapshots can
         // flush observers, so collect them only after the current job returns.
@@ -70,20 +73,27 @@ int wmain(int argc,wchar_t** argv){
     });
     view->SetLoadHandler([&](bool ok,const std::wstring& error){
         {
-            std::lock_guard<std::mutex> lock(outputMutex);
+            std::lock_guard<std::mutex> lock(*outputMutex);
             std::wcout<<L"LOAD "<<ok<<L" error="<<error<<L'\n';
         }
-        if(ok)view->ExecuteScript(LR"JS(
+        if(ok&&!native)view->ExecuteScript(LR"JS(
             window.addEventListener('message',function(event){
                 var data=event.data;
                 window.chrome.webview.postMessage('origin='+event.origin+'|trusted='+event.isTrusted+'|event='+(data&&data.event)+'|source='+(data&&data.source)+'|mode='+(data&&data.mode)+'|widget='+(data&&data.widgetId)+'|code='+(data&&data.code));
             });
         )JS");
     });
+    view->SetNetworkResourceLoader([context=client.Context(),outputMutex](const TWebFrame::NetworkRequest& request){
+        auto result=context->Request(request);
+        // URLs are printed without query strings; response cookies are not logged.
+        {std::lock_guard<std::mutex> lock(*outputMutex);
+            std::wcout<<L"RESOURCE "<<result.status<<L" bytes="<<result.bytes.size()<<L' '<<request.url.substr(0,request.url.find_first_of(L"?#"))<<L'\n';}
+        return result;
+    });
     view->SetResourceLoader([&](const std::wstring& target,std::wstring& text){
         const auto response=client.Get(target,page.url);
         if(response.Ok())text=HttpClient::DecodeText(response);
-        std::lock_guard<std::mutex> lock(outputMutex);
+        std::lock_guard<std::mutex> lock(*outputMutex);
         if(response.contentType.find(L"text/html")!=std::wstring::npos){
             const auto cache=outputDirectory/
                 (L"frame-resource-"+std::to_wstring(std::hash<std::wstring>{}(target))+L".html");

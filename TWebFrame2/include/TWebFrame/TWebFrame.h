@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "BrowserContext.h"
 
 namespace TWebFrame {
 
@@ -24,6 +25,9 @@ public:
     // use the engine transport to preserve response metadata and CORS. Return
     // false when a resource is unavailable.
     using ResourceLoader = std::function<bool(const std::wstring&, std::wstring&)>;
+    // HTTP resource requests carry the initiating document and ancestor site
+    // policy. Local/archive resources continue to use the existing callbacks.
+    using NetworkResourceLoader = std::function<NetworkResponse(const NetworkRequest&)>;
     // Resolves byte resources without a text transcoding step. Image hosts use
     // this callback so JPEG/PNG/GIF bytes, including archive-backed resources,
     // reach the shared decoder unchanged.
@@ -51,8 +55,13 @@ public:
     void SetBounds(const RECT& bounds);
     void SetVisible(bool visible);
     void SetMessageHandler(MessageHandler handler);
+    // The legacy embedded-app bridge is enabled by default for compatibility.
+    // Standalone browsers can disable its chrome.webview and twebframe globals.
+    void SetCompatibilityBridgeEnabled(bool enabled);
     void SetLoadHandler(LoadHandler handler);
+    void SetBrowserContext(std::shared_ptr<BrowserContext> context,std::uint64_t session=0);
     void SetResourceLoader(ResourceLoader loader);
+    void SetNetworkResourceLoader(NetworkResourceLoader loader);
     void SetBinaryResourceLoader(BinaryResourceLoader loader);
     void SetNavigationHandler(NavigationHandler handler);
     void SetHistoryChangedHandler(HistoryChangedHandler handler);

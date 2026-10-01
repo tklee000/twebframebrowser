@@ -6,6 +6,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <TWebFrame/BrowserContext.h>
 
 namespace TWebFrame::Internal {
 inline bool CorsSafelistedRequestHeader(const std::wstring& name,const std::wstring& value){
@@ -41,25 +42,8 @@ inline bool CorsSafelistedRequestHeader(const std::wstring& name,const std::wstr
     }
     return false;
 }
-struct ScriptRequest {
-    enum class Mode { Cors, NoCors, SameOrigin };
-    std::wstring url, method=L"GET", origin, referrer;
-    std::vector<std::pair<std::wstring,std::wstring>> headers;
-    std::vector<unsigned char> body;
-    unsigned timeout=0;
-    bool includeCredentials=false;
-    Mode mode=Mode::Cors;
-};
-struct ScriptResponse {
-    unsigned status=0;
-    std::wstring statusText,url,headers,contentType,body;
-    // Transport observations, relative to the beginning of Send(). Negative
-    // times indicate that a host supplied no phase measurements.
-    double requestStartOffsetMs=-1,responseStartOffsetMs=-1;
-    size_t decodedBodySize=0,encodedBodySize=0;
-    bool timingAllowed=false;
-    bool opaque=false;
-};
+using ScriptRequest=TWebFrame::NetworkRequest;
+using ScriptResponse=TWebFrame::NetworkResponse;
 using ScriptRequestLoader=std::function<ScriptResponse(const ScriptRequest&)>;
 using AsyncScriptRequestLoader=std::function<void(const ScriptRequest&,std::function<void(ScriptResponse)>)>;
 }

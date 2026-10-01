@@ -2694,6 +2694,7 @@ int wmain(int argc,wchar_t** argv) {
     Check(browserCompatDoc.Parse(L"<body><div id='first'></div><div id='second'></div></body>",&error),
           L"browser compatibility fixture parses");
     JavaScriptRuntime browserCompatJs(browserCompatDoc);std::wstring browserCompatResult;
+    browserCompatJs.SetLocation(L"https://storage.example.test/compatibility");
     Check(browserCompatJs.Execute(LR"JS(
         var first=document.getElementById('first'),second=document.getElementById('second');
         var comment=document.createComment('marker');first.appendChild(comment);
@@ -7873,7 +7874,7 @@ int wmain(int argc,wchar_t** argv) {
                 return false;
             });
             Check(inputView->NavigateToString(
-                L"<iframe id='middle' src='https://middle.frames.test/child.html'></iframe><script>const middle=document.getElementById('middle');window.addEventListener('message',event=>{if(event.source===middle.contentWindow)window.chrome.webview.postMessage(event.data.kind+(event.data.separate===undefined?'':'|'+event.data.separate));});</script>",
+                L"<iframe id='middle' src='https://middle.frames.test/child.html'></iframe><script>const middle=document.getElementById('middle');window.addEventListener('message',event=>{if(event.source===middle.contentWindow.frames[0]&&event.source!==middle.contentWindow)window.chrome.webview.postMessage(event.data.kind+(event.data.separate===undefined?'':'|'+event.data.separate));});</script>",
                 L"https://top.frames.test/index.html"),
                 L"nested iframe messaging fixture loads");
             const auto nestedMessageDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);

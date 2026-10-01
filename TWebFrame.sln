@@ -6,6 +6,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TWebFrame", "TWebFrame2\TWe
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TWebFrameTests", "TWebFrame2\tests\TWebFrameTests.vcxproj", "{4B5C62D1-2789-4E06-8B3E-9908B69441A8}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "BrowserContextRegression", "TWebFrame2\tests\BrowserContextRegression.vcxproj", "{3C3A8B50-1432-4C9D-BCEA-A92A0DCF6858}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -14,6 +16,12 @@ Global
 		Release|x64 = Release|x64
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{3C3A8B50-1432-4C9D-BCEA-A92A0DCF6858}.Debug|Win32.ActiveCfg = Debug|x64
+		{3C3A8B50-1432-4C9D-BCEA-A92A0DCF6858}.Release|Win32.ActiveCfg = Release|x64
+		{3C3A8B50-1432-4C9D-BCEA-A92A0DCF6858}.Debug|x64.ActiveCfg = Debug|x64
+		{3C3A8B50-1432-4C9D-BCEA-A92A0DCF6858}.Debug|x64.Build.0 = Debug|x64
+		{3C3A8B50-1432-4C9D-BCEA-A92A0DCF6858}.Release|x64.ActiveCfg = Release|x64
+		{3C3A8B50-1432-4C9D-BCEA-A92A0DCF6858}.Release|x64.Build.0 = Release|x64
 		{05D5ACB1-7F24-4E5A-9BC0-D910A099A271}.Debug|Win32.ActiveCfg = Debug|Win32
 		{05D5ACB1-7F24-4E5A-9BC0-D910A099A271}.Debug|Win32.Build.0 = Debug|Win32
 		{05D5ACB1-7F24-4E5A-9BC0-D910A099A271}.Debug|x64.ActiveCfg = Debug|x64

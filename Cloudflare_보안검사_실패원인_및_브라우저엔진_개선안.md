@@ -1,5 +1,9 @@
 # Cloudflare 보안검사 실패 원인 분석 및 브라우저 엔진 개선안
 
+> 2026-10-02 구현 상태: 사용자와 확정한 이번 범위는 16절의 Phase 1~4이다.
+> 아래 1~17절은 개선 전 진단과 설계 제안으로 보존한다.
+> 실제 반영 내용, 검증 결과와 남은 범위는 18절에 기록한다.
+
 ## 1. 문서 목적
 
 본 문서는 현재 구현된 TWebFrame 계열 자체 브라우저 엔진이 Cloudflare 보안검사를 통과하지 못하는 주요 원인을 정리하고, 웹 표준 호환성 관점에서 개선해야 할 항목을 우선순위별로 제시하기 위한 문서이다.
@@ -744,5 +748,142 @@ Web APIs
 - SSO 시스템
 
 ---
+
+## 18. Phase 1~4 구현 및 검증 결과 (2026-10-02)
+
+### 18.1 이번 반영 범위
+
+16절의 네 단계에 해당하는 쿠키, 공통 네트워크, 저장소, 프레임 통신을 구현했다.
+14절의 WebAssembly·IndexedDB·WebGL·Service Worker 등 신규 플랫폼 API는 별도 장기 확장 범위로 남긴다.
+
+| 단계 | 반영한 동작 | 주요 코드 |
+|---|---|---|
+| Phase 1 | 실제 CookieJar와 document.cookie를 연결하고 cookieEnabled를 활성화 | [CookieJar.h](TWebFrame2/src/CookieJar.h), [BrowserContext.cpp](TWebFrame2/src/BrowserContext.cpp) |
+| Phase 2 | navigation, iframe, script, CSS, image, fetch/XHR가 같은 HTTP 세션과 쿠키 저장소 사용 | [BrowserContext.h](TWebFrame2/include/TWebFrame/BrowserContext.h), [ScriptHttp.h](TWebFrame2/src/ScriptHttp.h), [HttpClient.cpp](Browser/HttpClient.cpp), [ResourceScheduler.cpp](Browser/ResourceScheduler.cpp), [View.cpp](TWebFrame2/src/View.cpp) |
+| Phase 3 | origin별 localStorage와 탭별 sessionStorage, navigation 이후 유지, storage 이벤트 | [BrowserContext.cpp](TWebFrame2/src/BrowserContext.cpp), [JavaScript.cpp](TWebFrame2/src/JavaScript.cpp) |
+| Phase 4 | Structured Clone 기반 postMessage, targetOrigin, 실제 MessageEvent.source, WindowProxy와 origin 접근 검사 | [JavaScript.cpp](TWebFrame2/src/JavaScript.cpp), [View.cpp](TWebFrame2/src/View.cpp) |
+
+공개 `View::SetBrowserContext`로 프로필을 공유하고, 같은 탭의 하위 프레임은 동일한 sessionStorage namespace를 사용한다.
+HTTP 리소스 콜백 `SetNetworkResourceLoader`에는 요청을 시작한 문서의 origin, referrer, 부모 프레임을 포함한 siteForCookies가 전달된다.
+기존 로컬 파일·압축 리소스용 콜백은 계속 사용할 수 있다.
+HTTP용 기존 콜백을 직접 제공하는 외부 호스트는 새 콜백으로 이전하거나 동일한 BrowserContext를 사용해야 한다.
+
+### 18.2 쿠키와 네트워크
+
+- 여러 Set-Cookie 응답 필드와 document.cookie 쓰기가 동일한 CookieJar를 갱신한다.
+- host-only/Domain, default Path와 경계 매칭, Secure, HttpOnly, SameSite, Expires, Max-Age, 쿠키 prefix를 처리한다.
+- ICANN과 PRIVATE 영역을 포함한 Mozilla Public Suffix List 10,334개 규칙으로 공용 도메인에 대한 쿠키 설정을 제한한다.
+- SameSite는 scheme과 등록 가능 도메인으로 비교한다. 다른 사이트를 포함한 프레임의 ancestor chain은 opaque site 정책을 사용한다.
+- script는 HttpOnly 쿠키를 읽거나 덮어쓰지 못하며, 비보안 요청이 기존 Secure 쿠키를 같은 경로에 덮어쓰는 것도 제한한다.
+- Expires는 HTTP 날짜의 일반 형식과 과거 형식을 처리하며, Max-Age가 우선한다. 만료 시 저장소와 cache용 쿠키 generation을 함께 갱신한다.
+- fetch의 omit/same-origin/include와 XHR의 withCredentials를 적용한다. Set-Cookie는 CORS 응답 필터링 전에 처리하되 script에는 노출하지 않는다.
+- WinHTTP 자체 쿠키와 자동 redirect 처리를 끄고 엔진이 직접 관리한다. 상대 redirect URL, POST→GET 전환, 최대 20회 redirect, origin 변경 시 Authorization 제거를 적용한다.
+- iframe redirect는 최종 응답 URL을 문서 URL과 리소스 base로 사용한다. redirect 이전 URL로 origin 검사를 통과시키지 않는다.
+- HTTP와 navigator가 동일한 TWebFrame UA를 사용한다. standalone 브라우저는 embedded 앱의 chrome.webview/twebframe 브리지를 비활성화한다.
+
+리소스 캐시는 명시적인 max-age만 사용하며 no-store/no-cache, Vary, 만료된 Age/Date, 잘못된 freshness 값은 재사용하지 않는다.
+쿠키 generation, 요청 origin과 ancestor site 정책을 cache key에 포함해 인증 상태가 바뀐 응답을 재사용하지 않는다.
+최상위 navigation은 리소스 캐시에서 제공하지 않는다.
+
+PSL 갱신은 Windows PowerShell에서 실행할 수 있으며, 생성 파일에 원본 SHA256과 MPL 2.0 라이선스 정보를 남긴다.
+
+~~~powershell
+.\tools\Update-PublicSuffixList.ps1
+~~~
+
+### 18.3 저장소와 프레임 통신
+
+localStorage는 scheme/host/port를 정규화한 origin별로 공유한다. IDN과 IPv6도 동일한 origin 정규화 경로를 사용한다.
+standalone 브라우저의 프로필 위치는 `%LOCALAPPDATA%\TWebFrameBrowser\Profile`이며,
+localStorage는 `LocalStorage` 하위의 origin hash 파일에 저장한다.
+저장한 origin을 파일 내부에서도 확인하고 임시 파일 교체 방식으로 기록한다.
+프로필 경로 없이 생성한 BrowserContext는 메모리 저장소를 사용한다.
+
+sessionStorage는 origin과 최상위 탭 namespace로 분리하고 reload와 같은 탭의 navigation 뒤에도 유지한다.
+탭을 닫으면 해당 namespace를 해제한다. length/key/getItem/setItem/removeItem/clear,
+named property 접근, Object.keys와 삭제를 지원한다. origin별 용량은 key/value의 UTF-16 크기 합계 5 MiB이며
+초과 쓰기는 기존 값을 바꾸지 않고 QuotaExceededError를 반환한다.
+opaque origin의 저장소 접근은 SecurityError로 제한한다.
+다른 문서에는 비동기 StorageEvent를 보내며, 같은 값 재설정과 쓰기를 실행한 문서에는 이벤트를 보내지 않는다.
+
+postMessage는 JSON 변환 대신 메시지를 호출 시점에 복제한다.
+순환 참조, Date, Map/Set, ArrayBuffer, TypedArray/DataView의 공유 backing buffer와 offset, Blob/File 등 엔진이 지원하는 clone 타입을 보존한다.
+ArrayBuffer transfer는 수신 데이터가 준비된 뒤 송신 측 buffer/view를 detach하며, 실패한 clone/중복 transfer는 기존 buffer를 유지한다.
+targetOrigin은 전송 호출 시 검증하고 실제 전달 시 수신 문서의 origin과 다시 비교한다.
+MessageEvent의 origin/source/ports와 prototype을 설정하며, 중첩 iframe에서도 실제 발신 창의 WindowProxy를 사용한다.
+
+다른 origin의 document/name 읽기·쓰기·삭제를 제한하고 iframe.contentDocument는 null을 반환한다.
+같은 origin의 parent 창에는 실제 문서·전역 값·메서드 접근을 전달한다.
+창 종료 뒤의 proxy와 navigation으로 origin이 바뀐 realm 값도 검사한다.
+
+### 18.4 빌드와 회귀검사
+
+Release|x64 기준으로 엔진 solution과 standalone 브라우저를 빌드했다.
+기존 `TWebFrameTests`, 신규 `BrowserContextRegression`, 실제 loopback HTTP 서버를 사용하는
+`ScriptHttpRegression`, 장시간 GC 검사 `RuntimeHeapRegression`으로 검증한다.
+
+최종 실행 결과는 BrowserContextRegression 51건과 ScriptHttpRegression 36건 모두 통과,
+기존 TWebFrameTests 전체 통과, RuntimeHeapRegression 통과다.
+아래 명령은 저장소 루트에서 실행하며, 개별 회귀검사 프로젝트는 solution 빌드가 만든 동일한 엔진 라이브러리를 사용한다.
+
+`BrowserContextRegression`은 쿠키 속성/PSL/SameSite, origin·탭 격리, profile localStorage 재생성,
+storage 이벤트/예외/용량, JIT threshold 0과 2의 typed-buffer clone, transfer 실패 시 원자성,
+WindowProxy의 origin 제한과 메시지 identity를 포함한다.
+`ScriptHttpRegression`은 실제 navigation→쿠키→XHR/fetch, credential/CORS,
+redirect 쿠키와 URL, 동기/비동기 iframe redirect의 최종 origin, script/CSS/image 요청 정책과 cache를 검사한다.
+
+~~~powershell
+$solutionRoot = (Get-Location).Path + '\'
+msbuild .\TWebFrame.sln /t:Build /p:Configuration=Release /p:Platform=x64 /m
+.\bin\x64\Release\TWebFrameTests.exe
+.\TWebFrame2\tests\bin\x64\Release\BrowserContextRegression.exe
+
+msbuild .\TWebFrame2\tests\ScriptHttpRegression.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=$solutionRoot" /p:BuildProjectReferences=false /m
+.\TWebFrame2\tests\bin\x64\Release\ScriptHttpRegression.exe
+
+msbuild .\TWebFrame2\tests\RuntimeHeapRegression.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=$solutionRoot" /p:BuildProjectReferences=false /m
+.\TWebFrame2\tests\bin\x64\Release\RuntimeHeapRegression.exe
+~~~
+
+### 18.5 Cloudflare 공식 테스트 키 통합 검증
+
+[Cloudflare 공식 testing 문서](https://developers.cloudflare.com/turnstile/troubleshooting/testing/)의
+always-pass/always-fail 공개 테스트 키만 사용한다.
+브리지를 끈 `--native` 환경에서 실제 api.js와 iframe을 로드해 다음 결과를 확인했다.
+
+| 테스트 키 | 콜백 | iframe 메시지 |
+|---|---|---|
+| 1x00000000000000000000AA | TEST_ONLY\|pass\|success\|dummy=true | init → requestExtraParams → translationInit → food → complete |
+| 2x00000000000000000000AB | TEST_ONLY\|fail\|error\|code=600010 | init → requestExtraParams → translationInit → food → fail |
+
+두 경우 모두 document.readyState=complete, 런타임 오류 없음, 실행 제한 미도달, pendingPromises=0을 확인했다.
+iframe.document 진단 접근에 발생한 SecurityError는 다른 origin의 문서를 보호하는 정상 동작이다.
+재실행 스크립트는 프로세스 시작 여부뿐 아니라 DOM 콜백 값, 실제 iframe 메시지와 런타임 상태까지 검증하며 테스트 서버를 종료한다.
+
+~~~powershell
+$solutionRoot = (Get-Location).Path + '\'
+msbuild .\TWebFrame2\tests\PageScriptProbe.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=$solutionRoot" /p:BuildProjectReferences=false /m
+.\TWebFrame2\tests\Run-TurnstileIntegration.ps1
+~~~
+
+### 18.6 현재 한계와 다음 범위
+
+공식 테스트 키의 성공은 실제 서비스의 Cloudflare 보안검사 통과를 뜻하지 않는다.
+실제 보호 사이트의 통과 여부는 이번 검증에서 확정하지 않았다.
+UA·TLS를 다른 엔진으로 위장하거나 탐지값을 강제로 바꾸는 동작은 추가하지 않았다.
+
+현재 쿠키는 BrowserContext 수명 동안 메모리에 공유하며, 브라우저 재시작 이후의 쿠키 파일 복원은 추가하지 않았다.
+localStorage의 디스크 지속과 sessionStorage의 탭 수명은 구현되어 있다.
+MessagePort transfer, WebAssembly, IndexedDB, WebGL, Permissions, module script,
+Service Worker 및 WebSocket 등 14절의 신규 API 확장은 후속 범위다.
+WinHTTP의 TLS/프록시/인증서 처리는 Windows 동작을 사용한다.
+이 검증 결과를 전체 HTML/Fetch/Web Platform 표준 적합성의 증명으로 해석해서는 안 된다.
+
+구현 기준: [HTTP Cookies](https://httpwg.org/http-extensions/draft-ietf-httpbis-rfc6265bis.html),
+[Public Suffix List](https://publicsuffix.org/list/public_suffix_list.dat),
+[Fetch](https://fetch.spec.whatwg.org/),
+[Web Storage](https://html.spec.whatwg.org/multipage/webstorage.html),
+[Structured Data](https://html.spec.whatwg.org/multipage/structured-data.html),
+[Web Messaging](https://html.spec.whatwg.org/multipage/web-messaging.html).
 
 

@@ -27,6 +27,9 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="include\TWebFrame\TWebFrame.h" />
+    <ClInclude Include="include\TWebFrame\BrowserContext.h" />
+    <ClInclude Include="src\CookieJar.h" />
+    <ClInclude Include="src\PublicSuffixRules.inc" />
     <ClInclude Include="src\ScriptDialog.h" />
     <ClInclude Include="src\ScriptRequest.h" />
     <ClInclude Include="src\ScriptHttp.h" />
@@ -36,6 +39,7 @@
     <ClInclude Include="src\Accessibility.h" /><ClInclude Include="src\Canvas.h" /><ClInclude Include="src\CSS.h" /><ClInclude Include="src\DOM.h" /><ClInclude Include="src\EditingCommand.h" /><ClInclude Include="src\FastMap.h" /><ClInclude Include="src\JavaScript.h" /><ClInclude Include="src\Layout.h" /><ClInclude Include="src\NumericParser.h" /><ClInclude Include="src\RasterImage.h" /><ClInclude Include="src\TextInput.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\BrowserContext.cpp" />
      <ClCompile Include="src\Accessibility.cpp" /><ClCompile Include="src\CSS.cpp" /><ClCompile Include="src\DOM.cpp" /><ClCompile Include="src\EditingCommand.cpp" /><ClCompile Include="src\JavaScript.cpp"><AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions></ClCompile><ClCompile Include="src\Layout.cpp" /><ClCompile Include="src\TextInput.cpp" /><ClCompile Include="src\View.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

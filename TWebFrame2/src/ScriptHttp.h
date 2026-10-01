@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ScriptRequest.h"
+#include "CookieJar.h"
 #include <windows.h>
 #include <winhttp.h>
 #include <algorithm>
@@ -10,8 +11,10 @@
 #include <mutex>
 #include <climits>
 #include <chrono>
+#include <shlwapi.h>
 
 #pragma comment(lib,"winhttp.lib")
+#pragma comment(lib,"shlwapi.lib")
 
 namespace TWebFrame::Internal {
 // A browsing context and its frames share this session. The host's text-only
@@ -26,14 +29,10 @@ class ScriptHttpSession {
     };
     Handle session{nullptr};
     std::once_flag initialization;
+    std::shared_ptr<CookieJar> cookies_;
     static std::wstring Lower(std::wstring value){std::transform(value.begin(),value.end(),value.begin(),towlower);return value;}
     static std::wstring Origin(const std::wstring& url){
-        const auto scheme=url.find(L"://");if(scheme==std::wstring::npos)return L"null";
-        auto result=Lower(url.substr(0,url.find_first_of(L"/?#",scheme+3)));
-        const auto port=result.rfind(L':');
-        if((result.rfind(L"https://",0)==0&&result.substr(port)==L":443")||
-           (result.rfind(L"http://",0)==0&&result.substr(port)==L":80"))result.erase(port);
-        return result;
+        return BrowserContext::Origin(url);
     }
     static std::wstring Header(HINTERNET request,DWORD query,const wchar_t* name=WINHTTP_HEADER_NAME_BY_INDEX){
         DWORD bytes=0;WinHttpQueryHeaders(request,query,name,nullptr,&bytes,WINHTTP_NO_HEADER_INDEX);
@@ -62,12 +61,16 @@ class ScriptHttpSession {
         if(!text.empty()&&text.front()==0xfeff)text.erase(text.begin());return text;
     }
 public:
+    explicit ScriptHttpSession(std::shared_ptr<CookieJar> cookies=std::make_shared<CookieJar>()):cookies_(std::move(cookies)){}
     ScriptResponse Send(const ScriptRequest& data){
         ScriptResponse result;result.url=data.url;
         const auto started=std::chrono::steady_clock::now();
         const auto elapsed=[&]{return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();};
-        std::call_once(initialization,[this]{session.value=WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) TWebFrame/1.0",
-            WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0);});
+        std::call_once(initialization,[this]{session.value=WinHttpOpen(BrowserContext::UserAgent(),
+            WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0);
+            if(session.value){DWORD connections=6;WinHttpSetOption(session.value,WINHTTP_OPTION_MAX_CONNS_PER_SERVER,&connections,sizeof(connections));}
+            if(session.value)WinHttpSetTimeouts(session.value,5000,5000,8000,8000);
+        });
         if(!session.value)return result;
         URL_COMPONENTS parts{sizeof(parts)};parts.dwHostNameLength=parts.dwUrlPathLength=parts.dwExtraInfoLength=static_cast<DWORD>(-1);
         if(!WinHttpCrackUrl(data.url.c_str(),0,0,&parts)||
@@ -78,6 +81,9 @@ public:
         const auto fragment=path.find(L'#');if(fragment!=std::wstring::npos)path.erase(fragment);
         const bool crossOrigin=data.origin!=Origin(data.url);
         const bool noCors=data.mode==ScriptRequest::Mode::NoCors;
+        const bool navigation=data.mode==ScriptRequest::Mode::Navigation;
+        const bool credentials=data.credentials!=ScriptRequest::Credentials::Omit&&
+            (data.includeCredentials||data.credentials==ScriptRequest::Credentials::Include||!crossOrigin||navigation);
         if(crossOrigin&&data.mode==ScriptRequest::Mode::SameOrigin)return result;
         auto method=data.method;std::transform(method.begin(),method.end(),method.begin(),towupper);
         if(noCors&&method!=L"GET"&&method!=L"HEAD"&&method!=L"POST")return result;
@@ -95,13 +101,13 @@ public:
             headers+=header.first+L": "+header.second+L"\r\n";
             if(!safe)unsafeHeaders.push_back(name);
         }
-        if((crossOrigin&&!noCors)||(method!=L"GET"&&method!=L"HEAD"))headers+=L"Origin: "+data.origin+L"\r\n";
+        if((crossOrigin&&!noCors&&!navigation)||(method!=L"GET"&&method!=L"HEAD"))headers+=L"Origin: "+data.origin+L"\r\n";
         const auto originAllowed=[&](HINTERNET request){
             const auto allowed=Header(request,WINHTTP_QUERY_CUSTOM,L"Access-Control-Allow-Origin");
-            if(allowed!=data.origin&&!(allowed==L"*"&&!data.includeCredentials))return false;
-            return !data.includeCredentials||Header(request,WINHTTP_QUERY_CUSTOM,L"Access-Control-Allow-Credentials")==L"true";
+            if(allowed!=data.origin&&!(allowed==L"*"&&!credentials))return false;
+            return !credentials||Header(request,WINHTTP_QUERY_CUSTOM,L"Access-Control-Allow-Credentials")==L"true";
         };
-        if(crossOrigin&&!noCors&&((method!=L"GET"&&method!=L"HEAD"&&method!=L"POST")||!unsafeHeaders.empty())){
+        if(crossOrigin&&!noCors&&!navigation&&((method!=L"GET"&&method!=L"HEAD"&&method!=L"POST")||!unsafeHeaders.empty())){
             Handle preflight(WinHttpOpenRequest(connection.value,L"OPTIONS",path.c_str(),nullptr,WINHTTP_NO_REFERER,
                 WINHTTP_DEFAULT_ACCEPT_TYPES,parts.nScheme==INTERNET_SCHEME_HTTPS?WINHTTP_FLAG_SECURE:0));
             if(!preflight.value)return result;DWORD disable=WINHTTP_DISABLE_COOKIES|WINHTTP_DISABLE_REDIRECTS;
@@ -120,15 +126,19 @@ public:
             if(method!=L"GET"&&method!=L"HEAD"&&method!=L"POST"&&
                !Contains(Header(preflight.value,WINHTTP_QUERY_CUSTOM,L"Access-Control-Allow-Methods"),method))return result;
             const auto allowed=Header(preflight.value,WINHTTP_QUERY_CUSTOM,L"Access-Control-Allow-Headers");
-            for(const auto& name:unsafeHeaders)if(!Contains(allowed,name)&&!(allowed==L"*"&&!data.includeCredentials))return result;
+            for(const auto& name:unsafeHeaders)if(!Contains(allowed,name)&&!(allowed==L"*"&&!credentials&&name!=L"authorization"))return result;
         }
-        const auto referrer=Origin(data.referrer)==Origin(data.url)?data.referrer:
+        const auto referrer=data.referrer.empty()?L"":Origin(data.referrer)==Origin(data.url)?data.referrer:
             (Origin(data.referrer).rfind(L"https://",0)==0&&parts.nScheme==INTERNET_SCHEME_HTTP?L"":Origin(data.referrer)+L"/");
         Handle request(WinHttpOpenRequest(connection.value,method.c_str(),path.c_str(),nullptr,
             referrer.empty()?WINHTTP_NO_REFERER:referrer.c_str(),WINHTTP_DEFAULT_ACCEPT_TYPES,
             parts.nScheme==INTERNET_SCHEME_HTTPS?WINHTTP_FLAG_SECURE:0));
         if(!request.value)return result;
-        if(crossOrigin&&!data.includeCredentials){DWORD disable=WINHTTP_DISABLE_COOKIES;WinHttpSetOption(request.value,WINHTTP_OPTION_DISABLE_FEATURE,&disable,sizeof(disable));}
+        // WinHTTP's private cookie handling must never compete with the profile jar.
+        DWORD disable=WINHTTP_DISABLE_COOKIES|WINHTTP_DISABLE_REDIRECTS;
+        WinHttpSetOption(request.value,WINHTTP_OPTION_DISABLE_FEATURE,&disable,sizeof(disable));
+        if(credentials){const auto cookie=cookies_->Header(data.url,data.siteForCookies,data.topLevelNavigation,method);
+            if(!cookie.empty())headers+=L"Cookie: "+cookie+L"\r\n";}
         const int timeout=data.timeout?static_cast<int>(std::min(data.timeout,static_cast<unsigned>(INT_MAX))):8000;
         WinHttpSetTimeouts(request.value,timeout,timeout,timeout,timeout);
         DWORD decompress=WINHTTP_DECOMPRESSION_FLAG_GZIP|WINHTTP_DECOMPRESSION_FLAG_DEFLATE;
@@ -139,7 +149,15 @@ public:
             size?const_cast<unsigned char*>(data.body.data()):WINHTTP_NO_REQUEST_DATA,size,size,0)||
             !WinHttpReceiveResponse(request.value,nullptr))return result;
         result.responseStartOffsetMs=elapsed();
-        if(crossOrigin&&!noCors&&!originAllowed(request.value))return result;
+        // Cookie processing precedes CORS filtering, including failed CORS responses.
+        if(credentials){DWORD index=0;for(;;){DWORD length=0;DWORD probe=index;
+            WinHttpQueryHeaders(request.value,WINHTTP_QUERY_SET_COOKIE,WINHTTP_HEADER_NAME_BY_INDEX,nullptr,&length,&probe);
+            if(GetLastError()!=ERROR_INSUFFICIENT_BUFFER)break;
+            std::wstring field(length/sizeof(wchar_t),L'\0');
+            if(!WinHttpQueryHeaders(request.value,WINHTTP_QUERY_SET_COOKIE,WINHTTP_HEADER_NAME_BY_INDEX,field.data(),&length,&index))break;
+            field.resize(wcslen(field.c_str()));cookies_->Set(data.url,field,false,data.siteForCookies,data.topLevelNavigation);
+        }}
+        if(crossOrigin&&!noCors&&!navigation&&!originAllowed(request.value))return result;
         DWORD urlBytes=0;WinHttpQueryOption(request.value,WINHTTP_OPTION_URL,nullptr,&urlBytes);
         if(urlBytes>sizeof(wchar_t)){
             std::wstring finalUrl(urlBytes/sizeof(wchar_t),L'\0');
@@ -147,11 +165,31 @@ public:
         }
         const bool redirectedCrossOrigin=Origin(result.url)!=data.origin;
         if(redirectedCrossOrigin&&data.mode==ScriptRequest::Mode::SameOrigin)return ScriptResponse{};
-        if(!crossOrigin&&redirectedCrossOrigin&&!noCors&&!originAllowed(request.value))return ScriptResponse{};
+        if(!crossOrigin&&redirectedCrossOrigin&&!noCors&&!navigation&&!originAllowed(request.value))return ScriptResponse{};
         DWORD status=0,statusBytes=sizeof(status);
         if(!WinHttpQueryHeaders(request.value,WINHTTP_QUERY_STATUS_CODE|WINHTTP_QUERY_FLAG_NUMBER,
             WINHTTP_HEADER_NAME_BY_INDEX,&status,&statusBytes,WINHTTP_NO_HEADER_INDEX))return result;
         result.status=status;result.statusText=Header(request.value,WINHTTP_QUERY_STATUS_TEXT);
+        if(status==301||status==302||status==303||status==307||status==308){
+            const auto destination=Header(request.value,WINHTTP_QUERY_LOCATION);
+            if(!destination.empty()){
+                // Resolve relative redirects without allowing credentials or cookies
+                // from one request to be blindly forwarded to a different host.
+                static thread_local unsigned redirects=0;
+                if(redirects>=20)return ScriptResponse{};
+                auto next=data;DWORD capacity=32768;std::wstring combined(capacity,L'\0');
+                if(FAILED(UrlCombineW(data.url.c_str(),destination.c_str(),combined.data(),&capacity,0)))return ScriptResponse{};
+                combined.resize(capacity);next.url=combined;
+                if((status==303&&method!=L"HEAD")||((status==301||status==302)&&method==L"POST")){
+                    next.method=L"GET";next.body.clear();next.headers.erase(std::remove_if(next.headers.begin(),next.headers.end(),[](const auto& header){
+                        const auto name=Lower(header.first);return name==L"content-type"||name==L"content-encoding"||name==L"content-language"||name==L"content-location";
+                    }),next.headers.end());
+                }
+                if(Origin(next.url)!=Origin(data.url))next.headers.erase(std::remove_if(next.headers.begin(),next.headers.end(),[](const auto& header){return Lower(header.first)==L"authorization";}),next.headers.end());
+                struct RedirectScope {unsigned& depth;explicit RedirectScope(unsigned& value):depth(value){++depth;}~RedirectScope(){--depth;}} scope(redirects);
+                return Send(next);
+            }
+        }
         result.opaque=noCors&&(crossOrigin||redirectedCrossOrigin);
         if(result.opaque){
             if(Lower(Header(request.value,WINHTTP_QUERY_CUSTOM,L"Cross-Origin-Resource-Policy"))==L"same-origin")return ScriptResponse{};
@@ -175,14 +213,14 @@ public:
             const bool safe=name==L"cache-control"||name==L"content-language"||name==L"content-length"||name==L"content-type"||
                 name==L"expires"||name==L"last-modified"||name==L"pragma";
             const auto exposed=Header(request.value,WINHTTP_QUERY_CUSTOM,L"Access-Control-Expose-Headers");
-            if(name!=L"set-cookie"&&name!=L"set-cookie2"&&(!crossOrigin||safe||Contains(exposed,name)||
-               (exposed==L"*"&&!data.includeCredentials)))result.headers+=line+L"\r\n";
+            if(name!=L"set-cookie"&&name!=L"set-cookie2"&&(!crossOrigin||navigation||safe||Contains(exposed,name)||
+               (exposed==L"*"&&!credentials)))result.headers+=line+L"\r\n";
             start=end;
         }
         std::vector<unsigned char> bytes;unsigned char block[32768];
         for(;;){DWORD received=0;if(!WinHttpReadData(request.value,block,sizeof(block),&received))return ScriptResponse{};
             if(!received)break;if(bytes.size()+received>24*1024*1024)return ScriptResponse{};bytes.insert(bytes.end(),block,block+received);}
-        result.decodedBodySize=bytes.size();result.body=Decode(bytes,result.contentType);return result;
+        result.decodedBodySize=bytes.size();result.body=Decode(bytes,result.contentType);result.bytes=std::move(bytes);return result;
     }
 };
 }

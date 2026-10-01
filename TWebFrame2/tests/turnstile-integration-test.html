@@ -16,7 +16,7 @@ var testCase=new URLSearchParams(location.search).get('case')==='fail'?'fail':'p
 function recordIntegration(state,extra) {
     var result='TEST_ONLY|'+testCase+'|'+state+'|'+extra;
     document.getElementById('status').textContent=result;
-    window.chrome.webview.postMessage(result);
+    if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage(result);
 }
 function integrationReady() {
     recordIntegration('ready','');

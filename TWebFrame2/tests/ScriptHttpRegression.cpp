@@ -8,6 +8,8 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <mutex>
+#include "../../Browser/ResourceScheduler.h"
 
 #pragma comment(lib,"ws2_32.lib")
 #pragma comment(lib,"ole32.lib")
@@ -24,6 +26,7 @@ class Server {
     std::atomic<bool> stopping{false};
 public:
     unsigned short port=0;
+    std::atomic<unsigned> requests{0};
     Server(){
         listener=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
         sockaddr_in address{};address.sin_family=AF_INET;address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
@@ -38,6 +41,7 @@ public:
             }
             const auto first=request.find(' '),last=request.find(' ',first+1);
             const auto path=first==std::string::npos?std::string():request.substr(first+1,last-first-1);
+            ++requests;
             std::string status="200 OK",body="body",headers="Content-Type: text/plain; charset=utf-8\r\nX-Result: retained\r\n";
             if(path=="/partial"){
                 status="206 Partial Content";
@@ -47,6 +51,43 @@ public:
             else if(path=="/unauthorized"){status="401 Unauthorized";body="unauthorized-body";}
             else if(path=="/cors")headers+="Access-Control-Allow-Origin: *\r\nAccess-Control-Expose-Headers: X-Result\r\n";
             else if(path=="/redirect"){status="302 Found";headers+="Location: /missing\r\n";body="";}
+            else if(path=="/set-cookie"){headers+="Set-Cookie: server=1; Path=/; HttpOnly\r\nSet-Cookie: visible=2; Path=/\r\n";body="set";}
+            else if(path=="/redirect-cookie"){status="302 Found";headers+="Location: /echo-cookie\r\nSet-Cookie: redirect=3; Path=/\r\n";body="";}
+            else if(path=="/folder/relative"){status="302 Found";headers+="Location: ../echo-cookie\r\n";body="";}
+            else if(path=="/cookie-omit"){headers+="Set-Cookie: omitted=8; Path=/\r\n";}
+            else if(path=="/cors-failure"){headers+="Set-Cookie: cors-side-effect=7; Path=/\r\n";}
+            else if(path=="/frame-redirect"){status="302 Found";headers+="Location: http://localhost:"+std::to_string(port)+"/frame-fixture\r\n";body="";}
+            else if(path=="/cors-credentials"){
+                const auto start=request.find("\r\nOrigin: ");const auto end=start==std::string::npos?start:request.find("\r\n",start+2);
+                const auto origin=start==std::string::npos?"null":request.substr(start+10,end-start-10);
+                headers+="Access-Control-Allow-Origin: "+origin+"\r\nAccess-Control-Allow-Credentials: true\r\nAccess-Control-Expose-Headers: *\r\n";
+            }
+            else if(path=="/frame-fixture"){
+                headers="Content-Type: text/html; charset=utf-8\r\n";
+                body="<body><link rel='stylesheet' href='/frame.css'><script src='/frame-script'></script><img src='/frame.gif'></body>";
+            }else if(path=="/frame-script"){
+                headers="Content-Type: application/javascript\r\n";
+                body="parent.postMessage({frameReady:document.cookie,enabled:navigator.cookieEnabled},'*');";
+            }else if(path=="/frame.css"){headers="Content-Type: text/css\r\n";body="body {color:red}";}
+            else if(path=="/frame.gif"){
+                headers="Content-Type: image/gif\r\n";
+                const unsigned char image[]={71,73,70,56,57,97,1,0,1,0,128,0,0,0,0,0,255,255,255,33,249,4,1,0,0,0,0,44,0,0,0,0,1,0,1,0,0,2,2,68,1,0,59};
+                body.assign(reinterpret_cast<const char*>(image),sizeof(image));
+            }
+            else if(path.rfind("/cache",0)==0){
+                headers+="Cache-Control: ";
+                headers+=path=="/cache-no-store"?"max-age=60, no-store\r\n":path=="/cache-bad"?"max-age=-1\r\n":
+                    path=="/cache-shared"?"s-maxage=60\r\n":"max-age=60\r\n";
+                if(path=="/cache-vary")headers+="Vary: Cookie\r\n";
+                if(path=="/cache-stale")headers+="Age: 61\r\n";
+                if(path=="/cache-old-date")headers+="Date: Sun, 06 Nov 1994 08:49:37 GMT\r\n";
+                const auto start=request.find("\r\nCookie: ");const auto end=start==std::string::npos?start:request.find("\r\n",start+2);
+                body=start==std::string::npos?"":request.substr(start+10,end-start-10);
+            }
+            else if(path=="/echo-cookie"){
+                const auto start=request.find("\r\nCookie: ");const auto end=start==std::string::npos?start:request.find("\r\n",start+2);
+                body=start==std::string::npos?"":request.substr(start+10,end-start-10);
+            }
             const auto response="HTTP/1.1 "+status+"\r\n"+headers+"Content-Length: "+std::to_string(body.size())+"\r\nConnection: close\r\n\r\n"+body;
             size_t sent=0;while(sent<response.size()){
                 const int count=send(client,response.data()+sent,static_cast<int>(response.size()-sent),0);if(count<=0)break;sent+=count;
@@ -102,6 +143,78 @@ int wmain(){
             Async(*view,LR"JS(fetch('/redirect').then(r=>window.chrome.webview.postMessage(r.status+'|'+r.url.endsWith('/missing'))).catch(e=>window.chrome.webview.postMessage(e.name));)JS",
                 L"404|true",L"GET redirects preserve final status and response URL");
             Check(callbackRequests==0,L"HTTP script requests never pass through the text-only callback");
+            auto context=std::make_shared<TWebFrame::BrowserContext>();view->SetBrowserContext(context);
+            TWebFrame::NetworkRequest navigation;navigation.url=origin+L"/set-cookie";navigation.mode=TWebFrame::NetworkRequest::Mode::Navigation;
+            navigation.credentials=TWebFrame::NetworkRequest::Credentials::Include;navigation.topLevelNavigation=true;
+            Check(context->Request(navigation).status==200,L"navigation records multiple Set-Cookie fields in the shared jar");
+            Execute(*view,LR"JS(document.cookie='script=4; Path=/';var x=new XMLHttpRequest();x.open('GET','/echo-cookie',false);x.send();return document.cookie+'|'+x.responseText+'|'+x.getResponseHeader('set-cookie');)JS",
+                L"visible=2; script=4|server=1; visible=2; script=4|null",L"navigation, document.cookie and XHR share cookies while HttpOnly and Set-Cookie remain hidden");
+            Async(*view,LR"JS(fetch('/echo-cookie',{credentials:'omit'}).then(r=>r.text()).then(t=>window.chrome.webview.postMessage('cookies:'+t));)JS",
+                L"cookies:",L"fetch credentials=omit suppresses same-origin cookies");
+            Async(*view,LR"JS(fetch('/redirect-cookie').then(r=>r.text()).then(t=>window.chrome.webview.postMessage(t));)JS",
+                L"server=1; visible=2; script=4; redirect=3",L"redirect responses update cookies before the next request");
+            Async(*view,LR"JS(fetch('/folder/relative').then(r=>r.text()).then(t=>window.chrome.webview.postMessage(t));)JS",
+                L"server=1; visible=2; script=4; redirect=3",L"relative redirects resolve dot segments against the request URL");
+            Async(*view,LR"JS(fetch('/cookie-omit',{credentials:'omit'}).then(()=>window.chrome.webview.postMessage(String(document.cookie.includes('omitted='))));)JS",
+                L"false",L"credentials=omit ignores Set-Cookie response fields");
+            Async(*view,L"fetch('"+cross+LR"JS(/cors-credentials',{credentials:'include'}).then(r=>window.chrome.webview.postMessage(r.status+'|'+r.headers.get('x-result'))).catch(e=>window.chrome.webview.postMessage(e.name));)JS",
+                L"200|null",L"credentialed CORS does not treat exposed-header wildcard as authorization");
+            {
+                Server other;Check(other.port!=0,L"second same-site cross-origin HTTP server starts");
+                const auto otherOrigin=L"http://127.0.0.1:"+std::to_wstring(other.port);
+                Async(*view,L"fetch('"+otherOrigin+LR"JS(/cors-failure',{credentials:'include'}).then(()=>window.chrome.webview.postMessage('unexpected')).catch(e=>window.chrome.webview.postMessage(e.name+'|'+document.cookie.includes('cors-side-effect=7')));)JS",
+                    L"TypeError|true",L"same-site Set-Cookie is processed before a credentialed CORS response is rejected");
+            }
+            auto network=std::make_shared<ResourceScheduler>(2);view->SetBrowserContext(network->Context());
+            struct RequestLog {std::mutex mutex;std::vector<TWebFrame::NetworkRequest> requests;};
+            auto metadata=std::make_shared<RequestLog>();
+            view->SetNetworkResourceLoader([network,metadata](const TWebFrame::NetworkRequest& request){
+                {std::lock_guard<std::mutex> lock(metadata->mutex);metadata->requests.push_back(request);}
+                const auto response=network->Get(request);TWebFrame::NetworkResponse result;
+                if(response){result.status=response->status;result.url=response->url;result.contentType=response->contentType;
+                    result.headers=response->headers;result.body=HttpClient::DecodeText(*response);result.bytes=response->body;}
+                return result;
+            });
+            network->Context()->SetDocumentCookie(cross+L"/",L"frameLax=private; Path=/");
+            view->SetPageScriptsEnabled(true);
+            const auto frameFixture=L"<body><script>addEventListener('message',e=>{if(e.data.frameReady!==undefined)chrome.webview.postMessage('frame:'+e.data.enabled+'|'+e.data.frameReady);});</script><iframe src='"+origin+L"/frame-redirect'></iframe></body>";
+            Check(view->NavigateToString(frameFixture,origin+L"/resources"),L"redirected cross-site frame fixture loads through the browser scheduler");
+            Async(*view,L"return 'waiting';",L"frame:true|",L"iframe scripts share the profile and enforce cross-site document-cookie policy");
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+            bool scriptPolicy=false,cssPolicy=false,imagePolicy=false,framePolicy=false;
+            do {
+                {std::lock_guard<std::mutex> lock(metadata->mutex);for(const auto& request:metadata->requests){
+                    if(request.url==origin+L"/frame-redirect")framePolicy=request.origin==origin&&request.siteForCookies==origin&&!request.topLevelNavigation;
+                    if(request.origin!=cross||request.siteForCookies!=L"null")continue;
+                    if(request.url==cross+L"/frame-script")scriptPolicy=true;
+                    if(request.url==cross+L"/frame.css")cssPolicy=true;
+                    if(request.url==cross+L"/frame.gif")imagePolicy=true;
+                }}
+                if(scriptPolicy&&cssPolicy&&imagePolicy&&framePolicy)break;
+                MSG message{};if(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}else Sleep(1);
+            }while(std::chrono::steady_clock::now()<deadline);
+            Check(scriptPolicy&&cssPolicy&&imagePolicy&&framePolicy,L"iframe, script, CSS and image requests carry their initiating origin and ancestor site policy");
+            Execute(*view,L"return document.querySelector('iframe').contentDocument===null;",L"true",L"asynchronous iframe redirects adopt the final origin and protect the redirected document");
+            view->SetParallelResourceLoading(false);
+            Check(view->NavigateToString(frameFixture,origin+L"/sync-resources"),L"synchronous redirected frame fixture loads");
+            Async(*view,L"return 'waiting';",L"frame:true|",L"synchronous redirected iframe retains correct origin and cookie policy");
+            Execute(*view,L"return document.querySelector('iframe').contentDocument===null;",L"true",L"synchronous iframe redirects enforce the final origin's same-origin policy");
+            view->SetNetworkResourceLoader({});view->SetParallelResourceLoading(false);
+            const auto cacheUrl=origin+L"/cache";
+            network->Context()->SetDocumentCookie(origin+L"/",L"cached=first; Path=/");
+            const auto before=server.requests.load();const auto cached=network->Get(cacheUrl,origin);
+            Check(cached&&HttpClient::DecodeText(*cached)==L"cached=first"&&network->Get(cacheUrl,origin)==cached&&server.requests.load()==before+1,L"explicitly fresh resources reuse the profile cache");
+            network->Context()->SetDocumentCookie(origin+L"/",L"cached=second; Path=/");
+            const auto refreshed=network->Get(cacheUrl,origin);
+            Check(refreshed&&HttpClient::DecodeText(*refreshed)==L"cached=second"&&server.requests.load()==before+2,L"cookie revision prevents reuse of stale authenticated cache responses");
+            for(const auto* path:{L"/cache-no-store",L"/cache-vary",L"/cache-stale",L"/cache-bad",L"/cache-shared",L"/cache-old-date"}){
+                const auto count=server.requests.load();network->Get(origin+path,origin);network->Get(origin+path,origin);
+                Check(server.requests.load()==count+2,L"no-store, Vary, stale Age/Date and invalid or shared-only freshness are fetched again");
+            }
+            TWebFrame::NetworkRequest navigate; navigate.url=cacheUrl;navigate.referrer=origin;
+            navigate.mode=TWebFrame::NetworkRequest::Mode::Navigation;navigate.credentials=TWebFrame::NetworkRequest::Credentials::Include;navigate.topLevelNavigation=true;
+            const auto navigationCount=server.requests.load();network->Get(navigate);network->Get(navigate);
+            Check(server.requests.load()==navigationCount+2,L"top-level navigations are not served from the resource cache");
         }
         DestroyWindow(host);
     }

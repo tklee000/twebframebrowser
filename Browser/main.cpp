@@ -105,15 +105,6 @@ std::wstring ResolveAddress(const std::wstring& input) {
     return L"https://" + address;
 }
 
-std::wstring OriginOf(const std::wstring& url) {
-    const auto scheme = url.find(L"://");
-    if (scheme == std::wstring::npos) return L"";
-    const auto end = url.find_first_of(L"/?#", scheme + 3);
-    std::wstring origin = url.substr(0, end);
-    std::transform(origin.begin(), origin.end(), origin.begin(), towlower);
-    return origin;
-}
-
 std::wstring ResolveResourceUrl(const std::wstring& base, const std::wstring& reference) {
     auto value = Trim(reference);
     if (value.empty() || value.front() == L'#') return L"";
@@ -460,7 +451,7 @@ private:
         RefreshChrome();
     }
 
-    void AddTab(const std::wstring& url, bool focusAddress = false) {
+    void AddTab(const std::wstring& url, bool focusAddress = false,const std::wstring& initiator=L"") {
         auto tab = std::make_shared<Tab>();
         tab->id = ++nextTabId_;
         std::weak_ptr<Tab> weak = tab;
@@ -476,12 +467,23 @@ private:
             return;
         }
         tab->view->SetParallelResourceLoading(true);
+        tab->view->SetBrowserContext(network_->Context());
+        tab->view->SetCompatibilityBridgeEnabled(false);
         tab->view->SetExecutionYieldHandler([this]{return ServiceChromeDuringScript();});
         // Script execution is enabled for normal browser compatibility. The
         // --disable-scripts launch option disables page scripts without
         // changing URL, stylesheet, iframe or form behavior.
         tab->view->SetPageScriptsEnabled(pageScriptsEnabled_);
         auto network = network_;
+        tab->view->SetNetworkResourceLoader([network](const TWebFrame::NetworkRequest& request){
+            const auto response=network->Get(request);TWebFrame::NetworkResponse result;
+            if(response){
+                result.status=response->status;result.url=response->url;
+                result.headers=response->headers;result.contentType=response->contentType;
+                result.body=HttpClient::DecodeText(*response);result.bytes=response->body;result.error=response->error;
+            }
+            return result;
+        });
         tab->view->SetResourceLoader([network, weak](const std::wstring& target, std::wstring& text) {
             auto current = weak.lock();
             if (!current) return false;
@@ -502,8 +504,11 @@ private:
             return true;
         });
         tab->view->SetNavigationHandler([this, weak](const std::wstring& target, bool newWindow) {
-            if (newWindow) AddTab(target);
-            else if (auto current = weak.lock()) Navigate(current, target, true);
+            if (auto current = weak.lock()){
+                const auto initiator=current->url;
+                if(newWindow)AddTab(target,false,initiator);
+                else Navigate(current,target,true,initiator);
+            }
         });
         tab->view->SetHistoryChangedHandler([this,weak](const std::wstring& target,bool replace,int delta){
             if(const auto current=weak.lock()){
@@ -542,14 +547,14 @@ private:
             }
         });
         Activate(tabs_.size() - 1);
-        Navigate(tab, url.empty() ? L"about:blank" : url, true);
+        Navigate(tab, url.empty() ? L"about:blank" : url, true,initiator);
         if (focusAddress) {
             SetFocus(address_);
             SendMessageW(address_, EM_SETSEL, 0, -1);
         }
     }
 
-    void Navigate(const std::shared_ptr<Tab>& tab, const std::wstring& target, bool addHistory) {
+    void Navigate(const std::shared_ptr<Tab>& tab, const std::wstring& target, bool addHistory,const std::wstring& initiator=L"") {
         if (!tab || !tab->view) return;
         std::wstring url = ResolveAddress(target);
         if (url.empty()) return;
@@ -580,12 +585,7 @@ private:
         HWND destination = hwnd_;auto network = network_;auto alive = alive_;
         const bool pageScriptsEnabled = pageScriptsEnabled_;
         unsigned id = tab->id, sequence = tab->sequence;
-        std::wstring referer;
-        if (tab->historyIndex > 0 && tab->historyIndex < tab->history.size() &&
-            OriginOf(tab->history[tab->historyIndex - 1]) == OriginOf(url))
-            referer = tab->history[tab->historyIndex - 1];
-        else if (OriginOf(url) == L"https://www.ppomppu.co.kr")
-            referer = L"https://www.ppomppu.co.kr/";
+        const auto referer=initiator;
         const auto publish = [destination, alive](std::unique_ptr<FetchResult> result) {
             if (alive->load() && PostMessageW(destination, kFetchFinished, 0,
                                                reinterpret_cast<LPARAM>(result.get())))
@@ -633,7 +633,7 @@ private:
                     network->Prefetch(resource, response->url, ResourcePriority::Normal,
                                       cancellation);
                 publish(std::move(initial));
-            }, cancellation);
+            }, cancellation,true);
     }
 
     void FetchFinished(std::unique_ptr<FetchResult> result) {

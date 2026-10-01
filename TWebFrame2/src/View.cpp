@@ -497,7 +497,10 @@ struct View::Impl {
     MessageHandler messageHandler;
     LoadHandler loadHandler;
     View::ResourceLoader resourceLoader;
-    std::shared_ptr<ScriptHttpSession> scriptHttp=std::make_shared<ScriptHttpSession>();
+    View::NetworkResourceLoader networkResourceLoader;
+    std::shared_ptr<BrowserContext> browserContext=std::make_shared<BrowserContext>();
+    std::uint64_t storageSession=browserContext->NewBrowsingContext();
+    bool ownsStorageSession=true;
     View::BinaryResourceLoader binaryResourceLoader;
     View::NavigationHandler navigationHandler;
     View::HistoryChangedHandler historyChangedHandler;
@@ -512,6 +515,7 @@ struct View::Impl {
     bool deferredExecutionMessagePosted=false;
     bool executionChromeInterrupted=false;
     bool pageScriptsEnabled=true;
+    bool javascriptCompatibilityBridgeEnabled=true;
     bool parallelResourceLoading=false;
     std::uint64_t navigationGeneration=0;
     std::uint64_t resourceGeneration=0;
@@ -791,8 +795,55 @@ struct View::Impl {
         asyncLifetime->resourceGeneration=resourceGeneration;
     }
 
+    NetworkRequest ResourceRequest(const std::wstring& url,const std::wstring& location)const{
+        NetworkRequest request;request.url=url;request.referrer=location;
+        request.origin=BrowserContext::Origin(location);request.siteForCookies=javascript.SiteForCookies(location);
+        request.mode=NetworkRequest::Mode::Navigation;request.credentials=NetworkRequest::Credentials::Include;
+        return request;
+    }
+    View::ResourceLoader TextLoader(const std::wstring& location)const{
+        const auto loader=resourceLoader;const auto network=networkResourceLoader;
+        const auto context=browserContext;const auto policy=ResourceRequest(L"",location);
+        return [loader,network,context,policy](const std::wstring& url,std::wstring& content){
+            if(BrowserContext::Origin(url)!=L"null"&&(network||!loader)){
+                auto request=policy;request.url=url;
+                const auto response=network?network(request):context->Request(request);
+                if(response.status<200||response.status>=300)return false;
+                content=response.body;return true;
+            }
+            return loader&&loader(url,content);
+        };
+    }
+    std::function<bool(const std::wstring&,std::wstring&,std::wstring&)> FrameLoader()const{
+        const auto loader=resourceLoader;const auto network=networkResourceLoader;
+        const auto context=browserContext;const auto base=basePath;
+        const auto policy=ResourceRequest(L"",currentLocation);
+        return [loader,network,context,base,policy](const std::wstring& source,std::wstring& html,std::wstring& finalUrl){
+            const auto resolved=ResolveResourceForBase(base,source);
+            if(BrowserContext::Origin(resolved)!=L"null"&&(network||!loader)){
+                auto request=policy;request.url=resolved;
+                const auto response=network?network(request):context->Request(request);
+                if(response.status<200||response.status>=300)return false;
+                html=response.body;finalUrl=BrowserContext::Origin(response.url)==L"null"?resolved:response.url;return true;
+            }
+            return LoadTextResourceForBase(loader,base,source,html);
+        };
+    }
+    View::BinaryResourceLoader BinaryLoader()const{
+        const auto loader=binaryResourceLoader;const auto network=networkResourceLoader;
+        const auto context=browserContext;const auto policy=ResourceRequest(L"",currentLocation);
+        return [loader,network,context,policy](const std::wstring& url,std::vector<unsigned char>& bytes){
+            if(BrowserContext::Origin(url)!=L"null"&&(network||!loader)){
+                auto request=policy;request.url=url;
+                const auto response=network?network(request):context->Request(request);
+                if(response.status<200||response.status>=300)return false;
+                bytes=response.bytes;return true;
+            }
+            return loader&&loader(url,bytes);
+        };
+    }
     bool LoadTextResource(const std::wstring& reference,std::wstring& content)const{
-        return LoadTextResourceForBase(resourceLoader,basePath,reference,content);
+        return LoadTextResourceForBase(TextLoader(currentLocation),basePath,reference,content);
     }
 
     static int HexDigit(wchar_t value){
@@ -820,8 +871,9 @@ struct View::Impl {
                             std::vector<unsigned char>& bytes)const{
         if(DecodeImageDataUrl(reference,bytes))return true;
         const auto resolved=ResolveResourceReference(reference);
-        if(binaryResourceLoader&&binaryResourceLoader(resolved,bytes))return true;
-        if(resolved!=reference&&binaryResourceLoader&&binaryResourceLoader(reference,bytes))return true;
+        const auto loader=BinaryLoader();
+        if(loader(resolved,bytes))return true;
+        if(resolved!=reference&&loader(reference,bytes))return true;
         if(resolved.find(L"://")!=std::wstring::npos&&resolved.rfind(L"file://",0)!=0)return false;
         auto local=resolved;
         if(local.rfind(L"file:///",0)==0)local=PercentDecode(local.substr(8));
@@ -842,9 +894,9 @@ struct View::Impl {
         const auto key=ResolveResourceReference(reference);
         const auto cached=rasterImageCache.find(key);
         if(cached!=rasterImageCache.end())return cached->second;
-        if(parallelResourceLoading&&binaryResourceLoader){
+        if(parallelResourceLoading&&(binaryResourceLoader||BrowserContext::Origin(key)!=L"null")){
             if(pendingRasterImages.insert(key).second){
-                const auto loader=binaryResourceLoader;
+                const auto loader=BinaryLoader();
                 const auto fallback=reference;
                 const auto lifetime=asyncLifetime;
                 const auto generation=resourceGeneration;
@@ -1163,6 +1215,7 @@ struct View::Impl {
         layout.SetFramePainter([this](ID2D1RenderTarget* target,const LayoutBox& box){
             PaintChildFrame(target,box);
         });
+        javascript.SetBrowserContext(browserContext,storageSession);
         javascript.SetMessageSink([this](const std::wstring& msg){if(messageHandler)messageHandler(msg);});
         javascript.SetMutationSink([this](const JavaScriptRuntime::Mutation& mutation){HandleMutation(mutation);});
         javascript.SetFocusSink([this](const std::shared_ptr<Node>& node){
@@ -1290,21 +1343,21 @@ struct View::Impl {
             return LoadTextResource(resource,content);
         });
         const auto sendRequest=[](const ScriptRequest& request,const View::ResourceLoader& loader,
-                                  const std::wstring& base,const std::shared_ptr<ScriptHttpSession>& http){
+                                  const std::wstring& base,const std::shared_ptr<BrowserContext>& http){
             // The text resource callback cannot represent HTTP status, headers,
             // redirects or CORS. All script HTTP methods use the full transport.
-            if(request.url.rfind(L"https://",0)==0||request.url.rfind(L"http://",0)==0)return http->Send(request);
+            if(request.url.rfind(L"https://",0)==0||request.url.rfind(L"http://",0)==0)return http->Request(request);
             ScriptResponse response;response.url=request.url;
             if(LoadTextResourceForBase(loader,base,request.url,response.body)){
                 response.status=200;response.statusText=L"OK";
             }return response;
         };
         javascript.SetRequestLoader([this,sendRequest](const ScriptRequest& request){
-            return sendRequest(request,resourceLoader,basePath,scriptHttp);
+            return sendRequest(request,resourceLoader,basePath,browserContext);
         });
         javascript.SetAsyncRequestLoader([this,sendRequest](const ScriptRequest& request,std::function<void(ScriptResponse)> complete){
-            if(!parallelResourceLoading){complete(sendRequest(request,resourceLoader,basePath,scriptHttp));return;}
-            const auto loader=resourceLoader;const auto base=basePath;const auto http=scriptHttp;
+            if(!parallelResourceLoading){complete(sendRequest(request,resourceLoader,basePath,browserContext));return;}
+            const auto loader=resourceLoader;const auto base=basePath;const auto http=browserContext;
             const auto lifetime=asyncLifetime;const auto generation=resourceGeneration;
             ImageWorkers().Submit(BackgroundWorkQueue::Priority::Critical,
                 [request,complete=std::move(complete),sendRequest,loader,base,http,lifetime,generation]() mutable {
@@ -1325,7 +1378,7 @@ struct View::Impl {
                 std::wstring content;const bool loaded=LoadTextResource(resource,content);
                 complete(loaded,std::move(content));return;
             }
-            const auto loader=resourceLoader;const auto base=basePath;
+            const auto loader=TextLoader(currentLocation);const auto base=basePath;
             const auto lifetime=asyncLifetime;
             const auto generation=resourceGeneration;
             ImageWorkers().Submit(BackgroundWorkQueue::Priority::Critical,
@@ -1887,10 +1940,12 @@ struct View::Impl {
         if(const auto region=CreateRectRgn(0,0,0,0))
             if(!SetWindowRgn(child->Window(),region,FALSE))DeleteObject(region);
         child->SetResourceLoader(resourceLoader);
-        child->impl_->scriptHttp=scriptHttp;
+        child->SetNetworkResourceLoader(networkResourceLoader);
+        child->SetBrowserContext(browserContext,storageSession);
         child->SetBinaryResourceLoader(binaryResourceLoader);
         child->SetParallelResourceLoading(parallelResourceLoading);
         child->SetPageScriptsEnabled(pageScriptsEnabled);
+        child->impl_->javascript.SetCompatibilityBridgeEnabled(javascriptCompatibilityBridgeEnabled);
         child->SetExecutionYieldHandler(javascriptExecutionYieldHandler);
         child->SetNavigationHandler(navigationHandler);
         child->SetMessageHandler([this](const std::wstring& message){
@@ -1928,7 +1983,7 @@ struct View::Impl {
                 });
         }
 
-        std::wstring childHtml,frameBase,frameLocation;
+        std::wstring childHtml,frameBase,frameLocation,finalFrameUrl;
         bool loaded=false,deferSource=false;
         const auto srcdoc=node->attributes.find(L"srcdoc");
         if(srcdoc!=node->attributes.end()){
@@ -1942,13 +1997,14 @@ struct View::Impl {
                 const auto sourceKey=ResolveResourceReference(source);
                 const auto prepared=preparedText?preparedText->find(sourceKey):
                     std::unordered_map<std::wstring,std::wstring>::const_iterator{};
-                if(preparedText&&prepared!=preparedText->end()){
+                if(preparedText&&prepared!=preparedText->end()&&
+                   !(BrowserContext::Origin(sourceKey)!=L"null"&&(networkResourceLoader||!resourceLoader))){
                     childHtml=prepared->second;loaded=true;
                 }else if(failedText&&failedText->count(sourceKey)>0){
                     loaded=false;
                 }else if(parallelResourceLoading){
                     deferSource=true;
-                }else loaded=LoadTextResource(source,childHtml);
+                }else loaded=FrameLoader()(source,childHtml,finalFrameUrl);
                 const auto resolvedSource=ResolveResourceReference(source);
                 if(resolvedSource.find(L"://")!=std::wstring::npos){
                     frameBase=resolvedSource;frameLocation=resolvedSource;
@@ -1960,11 +2016,12 @@ struct View::Impl {
                     if(framePath.is_relative())framePath=std::filesystem::path(basePath)/framePath;
                     frameBase=framePath.parent_path().wstring();frameLocation=framePath.wstring();
                 }
+                if(!finalFrameUrl.empty())frameBase=frameLocation=finalFrameUrl;
                 if(deferSource){
-                    const auto loader=resourceLoader;const auto parentBase=basePath;
+                    const auto loader=FrameLoader();
                     const auto generation=resourceGeneration;const auto lifetime=asyncLifetime;
                     ImageWorkers().Submit(BackgroundWorkQueue::Priority::Normal,
-                        [source,node,loader,parentBase,generation,lifetime,
+                        [source,node,loader,generation,lifetime,
                          frameBase,frameLocation,request]{
                         {
                             std::lock_guard<std::mutex> lock(lifetime->mutex);
@@ -1974,7 +2031,9 @@ struct View::Impl {
                         auto result=std::make_unique<AsyncFrameSourceResult>();
                         result->generation=generation;result->request=request;result->node=node;
                         result->base=frameBase;result->location=frameLocation;
-                        result->loaded=LoadTextResourceForBase(loader,parentBase,source,result->html);
+                        std::wstring finalUrl;
+                        result->loaded=loader(source,result->html,finalUrl);
+                        if(!finalUrl.empty())result->base=result->location=finalUrl;
                         std::lock_guard<std::mutex> lock(lifetime->mutex);
                         if(!lifetime->alive||!lifetime->hwnd||
                            lifetime->resourceGeneration!=generation)return;
@@ -4359,7 +4418,7 @@ struct View::Impl {
             ExecuteInitialDocumentScript(script,generation);
         for(const auto& script:initialDocumentScripts){
             if(script->ready||script->resource.empty())continue;
-            const auto resource=script->resource;const auto loader=resourceLoader;
+            const auto resource=script->resource;const auto loader=TextLoader(currentLocation);
             const auto base=basePath;const auto lifetime=asyncLifetime;
             ImageWorkers().Submit(BackgroundWorkQueue::Priority::Critical,
                 [this,script,resource,loader,base,lifetime,generation]{
@@ -4499,7 +4558,7 @@ struct View::Impl {
         pendingRasterImages.clear();ClearPendingImageLoads();
         PublishAsyncGenerations();
         const auto lifetime=asyncLifetime;
-        const auto loader=resourceLoader;
+        const auto loader=TextLoader(location);
         const bool loadStylesInWorker=parallelResourceLoading;
         const bool scriptingEnabled=pageScriptsEnabled;
         const bool externalPage=base.find(L"://")!=std::wstring::npos;
@@ -4566,6 +4625,7 @@ struct View::Impl {
 
 View::View(std::unique_ptr<Impl> impl):impl_(std::move(impl)){}
 View::~View(){
+    if(impl_&&impl_->ownsStorageSession)impl_->browserContext->ReleaseBrowsingContext(impl_->storageSession);
     auto* compositionOwner=impl_?impl_->compositionParent:nullptr;
     if(compositionOwner)++compositionOwner->childFrameDestructionDepth;
     if(impl_)++impl_->childFrameDestructionDepth;
@@ -4600,7 +4660,7 @@ View::~View(){
         child->impl_->javascript.SetParentMessageSink({});child->impl_->javascript.SetTopMessageSink({});
         child->impl_->javascript.SetEmbeddingFrame(nullptr,{});
         child->SetMessageHandler({});child->SetNavigationHandler({});
-        child->SetResourceLoader({});child->SetBinaryResourceLoader({});child->SetLoadHandler({});
+        child->SetResourceLoader({});child->SetNetworkResourceLoader({});child->SetBinaryResourceLoader({});child->SetLoadHandler({});
     }
     // DestroyWindow/accessibility teardown can synchronously paint the parent
     // while its frame vector is erasing this entry. Release the implementation
@@ -4613,8 +4673,24 @@ HWND View::Window()const noexcept{return impl_->hwnd;}
 void View::SetBounds(const RECT& bounds){MoveWindow(impl_->hwnd,bounds.left,bounds.top,bounds.right-bounds.left,bounds.bottom-bounds.top,TRUE);}
 void View::SetVisible(bool visible){if(!visible)impl_->HideTooltip();ShowWindow(impl_->hwnd,visible?SW_SHOW:SW_HIDE);}
 void View::SetMessageHandler(MessageHandler handler){impl_->messageHandler=std::move(handler);}
+void View::SetCompatibilityBridgeEnabled(bool enabled){
+    impl_->javascriptCompatibilityBridgeEnabled=enabled;impl_->javascript.SetCompatibilityBridgeEnabled(enabled);
+    for(auto& frame:impl_->childFrames)frame.view->SetCompatibilityBridgeEnabled(enabled);
+}
 void View::SetLoadHandler(LoadHandler handler){impl_->loadHandler=std::move(handler);}
+void View::SetBrowserContext(std::shared_ptr<BrowserContext> context,std::uint64_t session){
+    if(!context)return;
+    if(impl_->ownsStorageSession)impl_->browserContext->ReleaseBrowsingContext(impl_->storageSession);
+    impl_->browserContext=std::move(context);impl_->storageSession=session?session:impl_->browserContext->NewBrowsingContext();
+    impl_->ownsStorageSession=session==0;
+    impl_->javascript.SetBrowserContext(impl_->browserContext,impl_->storageSession);
+    for(auto& frame:impl_->childFrames)frame.view->SetBrowserContext(impl_->browserContext,impl_->storageSession);
+}
 void View::SetResourceLoader(ResourceLoader loader){impl_->resourceLoader=std::move(loader);}
+void View::SetNetworkResourceLoader(NetworkResourceLoader loader){
+    impl_->networkResourceLoader=std::move(loader);
+    for(auto& frame:impl_->childFrames)frame.view->SetNetworkResourceLoader(impl_->networkResourceLoader);
+}
 void View::SetBinaryResourceLoader(BinaryResourceLoader loader){impl_->binaryResourceLoader=std::move(loader);}
 void View::SetNavigationHandler(NavigationHandler handler){impl_->navigationHandler=std::move(handler);}
 void View::SetHistoryChangedHandler(HistoryChangedHandler handler){impl_->historyChangedHandler=std::move(handler);}
