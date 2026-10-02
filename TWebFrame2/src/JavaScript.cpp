@@ -15,7 +15,6 @@
 #include "Streams.h"
 #include "BigInteger.h"
 #include "WindowsIntl.h"
-#include "ScriptArchive.h"
 #include "RuntimeRegex.h"
 #include "OriginFileSystem.h"
 #include "AudioRuntime.h"
@@ -2799,7 +2798,6 @@ struct RuntimeCore {
         ++scriptJobs;scriptJobMilliseconds+=duration;
         scriptCpuTicks+=cpu;longestScriptCpuTicks=std::max(longestScriptCpuTicks,cpu);
         longestScriptJobMilliseconds=std::max(longestScriptJobMilliseconds,duration);
-        ScriptArchive::Job(location,duration,cpu,executedInstructions-scriptStartedInstructions);
         if(executionCompletionHandler)executionCompletionHandler();
     }
     struct NodeEventListeners {
@@ -5993,7 +5991,6 @@ struct RuntimeCore {
                     for(const auto& value:a){std::wstring script;
                         if(!r.resourceLoader||!r.resourceLoader(r.UrlValue(r.String(value),r.location).object->props[L"href"].StringText(),script))
                             return Value::Thrown(r.ErrorValue(L"NetworkError",L"Worker import script could not be loaded"));
-                        ScriptArchive archive(script,r.location,L"importScripts");
                         Compiler compiler(r.module,script);const auto result=r.RunCompletion(compiler.CompileProgram(),r.global);
                         if(result.thrown)return Value::Thrown(result.value);
                     }return Value::Undefined();
@@ -6092,7 +6089,6 @@ struct RuntimeCore {
                 DrainMicrotasks();return;
             }
             if(!source.empty()){
-                ScriptArchive archive(source,location,L"external-dynamic");
                 Compiler compiler(module,source);
                 auto program=compiler.CompileProgram();
                 const auto completion=RunCompletion(program,global);
@@ -6180,7 +6176,6 @@ struct RuntimeCore {
                         const auto previousScript=currentScript;
                         currentScript=node;
                         try{
-                            ScriptArchive archive(source,location,L"inline-dynamic");
                             Compiler compiler(module,source);
                             auto program=compiler.CompileProgram();
                             Run(program,global);
@@ -10071,7 +10066,6 @@ struct RuntimeCore {
     }
     Value EvalProgram(const Value& input,const std::shared_ptr<Environment>& caller,bool inheritedStrict){
         const auto source=Deref(input);if(source.type!=Value::Type::String)return source;
-        ScriptArchive archive(source.StringText(),location,L"eval");
         if(traceFunctions&&diagnosticEvaluations.size()<16)diagnosticEvaluations.push_back(std::to_wstring(source.StringText().size())+L": "+source.StringText().substr(0,500));
         try{
             Chunk chunk;bool cached=false;
@@ -12433,7 +12427,6 @@ struct RuntimeCore {
             std::wstring source=L"(function anonymous(";
             for(size_t index=0;index+1<a.size();++index){if(index)source+=L',';source+=r.String(a[index]);}
             source+=L"\n){\n"+(a.empty()?std::wstring{}:r.String(a.back()))+L"\n})";
-            ScriptArchive archive(source,r.location,L"Function");
             try{Compiler compiler(r.module,source);const auto completion=r.RunCompletion(compiler.CompileExpressionOnly(),r.global);
                 return completion.thrown?Value::Thrown(completion.value):completion.value;
             }catch(const std::exception& exception){return Value::Thrown(r.ErrorValue(L"SyntaxError",Utf8ToWide(exception.what())));}
@@ -14002,7 +13995,6 @@ struct RuntimeCore {
             global->values[name].native->props[L"length"]=Value::Number(1);
     }
     bool CompileRun(const std::wstring& source,std::wstring* result,std::wstring* error){
-        ScriptArchive archive(source,location,workerGlobal.object?L"worker-program":L"program");
         MutationBatch batch(*this);
         try{Compiler compiler(module,source);auto program=compiler.CompileProgram();
             const auto completion=RunCompletion(program,global);

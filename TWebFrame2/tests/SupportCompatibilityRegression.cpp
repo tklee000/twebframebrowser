@@ -1,11 +1,11 @@
 #include "../src/DOM.h"
 #include "../src/JavaScript.h"
-#include "TraceJson.h"
+#include "RegressionIO.h"
 #include <ole2.h>
 #include <chrono>
 #include <iostream>
 using namespace TWebFrame::Internal;
-using namespace ParityTrace;
+using namespace RegressionIO;
 #include "SupportDpiRendering.h"
 #include "SupportRuntimeChecks.h"
 int wmain(){
@@ -25,6 +25,10 @@ int wmain(){
         WriteText((L"TWebFrame2/tests/artifacts/support-language-"+std::to_wstring(scale)+L"-"+std::to_wstring(jit)+L".json").c_str(),result);
         std::wcout<<L"DPI="<<scale<<L" JIT="<<jit<<L" language="<<result<<L" error="<<error<<L'\n';
         if(!ok||result!=ReadText(L"TWebFrame2/tests/support-language-expected.json"))++failures;
+        ok=runtime.Execute(ReadText(L"TWebFrame2/tests/semantic-regression.js"),nullptr,&error);
+        runtime.RunTimers();ok=runtime.Execute(L"return JSON.stringify(window.__semanticResults.cases);",&result,&error)&&ok;
+        WriteText((L"TWebFrame2/tests/artifacts/semantic-"+std::to_wstring(scale)+L"-"+std::to_wstring(jit)+L".json").c_str(),result);
+        if(!ok||result!=ReadText(L"TWebFrame2/tests/semantic-expected.json"))++failures;
         ok=runtime.Execute(ReadText(L"TWebFrame2/tests/support-api-regression.js"),nullptr,&error);
         const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(15);bool done=false;
         do{runtime.RunTimers();std::wstring state;runtime.Execute(L"return window.__supportDone;",&state,&error);done=state==L"true";if(!done)Sleep(1);}while(!done&&std::chrono::steady_clock::now()<deadline);

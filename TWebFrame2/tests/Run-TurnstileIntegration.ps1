@@ -1,5 +1,5 @@
 param(
-    [string]$Probe = (Join-Path $PSScriptRoot 'bin\x64\Release\PageScriptProbe.exe'),
+    [string]$Probe = (Join-Path $PSScriptRoot 'bin\x64\Release\PageIntegrationRegression.exe'),
     [string]$OutputDirectory = (Join-Path $PSScriptRoot 'artifacts\browser-context-turnstile-current'),
     [ValidateRange(15, 120)][int]$ObservationSeconds = 30
 )
@@ -7,7 +7,7 @@ param(
 # Uses only Cloudflare's documented pass, fail and interactive public test keys.
 # Pointer interaction is confined to the local test-key fixture.
 $ErrorActionPreference = 'Stop'
-if (!(Test-Path -LiteralPath $Probe)) { throw 'Build PageScriptProbe.vcxproj in Release|x64 first.' }
+if (!(Test-Path -LiteralPath $Probe)) { throw 'Build PageIntegrationRegression.vcxproj in Release|x64 first.' }
 $Probe = (Resolve-Path -LiteralPath $Probe).Path
 $OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
 [System.IO.Directory]::CreateDirectory($OutputDirectory) | Out-Null

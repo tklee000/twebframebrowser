@@ -14,8 +14,8 @@ if (process.argv.includes('--generate-reference')) {
 for (const scale of ['1.000000', '1.500000']) for (const jit of ['0', '16']) {
   const actual = JSON.parse(fs.readFileSync(path.join(root, 'artifacts', `support-language-${scale}-${jit}.json`), 'utf8'));
   assert.deepStrictEqual(actual, language, `DPI=${scale}, JIT=${jit}`);
+  const semantic = JSON.parse(fs.readFileSync(path.join(root, 'artifacts', `semantic-${scale}-${jit}.json`), 'utf8'));
+  const reference = JSON.parse(fs.readFileSync(path.join(root, 'semantic-expected.json'), 'utf8'));
+  assert.deepStrictEqual(semantic, reference, `Semantic DPI=${scale}, JIT=${jit}`);
 }
-const captured = JSON.parse(JSON.parse(fs.readFileSync(path.join(root, 'artifacts/support-capabilities.jsonl'), 'utf8')).result);
-const reference = JSON.parse(fs.readFileSync(path.join(root, 'artifacts/script-corpus-audit-20261002/semantic-reference.json'), 'utf8'));
-assert.deepStrictEqual(captured.cases, reference);
-console.log(`Language ${Object.keys(language).length} cases × 4 configurations and original ${reference.length} semantic cases agree with references.`);
+console.log(`Language ${Object.keys(language).length} cases and 29 semantic cases × 4 configurations agree with references.`);

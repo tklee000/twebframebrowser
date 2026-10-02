@@ -9,6 +9,7 @@ capture/
 sample_/
 **/bin/
 **/obj/
+/packages/
 sample/*.zip
 sample/codex_ui/packages/
 sample/html_ui/
