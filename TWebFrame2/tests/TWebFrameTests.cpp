@@ -859,7 +859,7 @@ int RunJavaScriptExceptionRegression(){
             probe(function(){new DataView();});
             probe(function(){nonexistentFunction();});
             return nativeErrors.join('|');
-        )JS",&result,&error)&&result==L"TypeError|RangeError|TypeError|TypeError|TypeError|RangeError|URIError|URIError|TypeError|TypeError|TypeError|TypeError",
+        )JS",&result,&error)&&result==L"TypeError|RangeError|TypeError|TypeError|TypeError|RangeError|URIError|URIError|TypeError|TypeError|TypeError|ReferenceError",
             L"native API argument errors retain their JavaScript error types");
         Check(InterlockedCompareExchange(&firstChanceCppExceptions,0,0)==0,
               L"native feature probes do not raise first-chance C++ exceptions");
@@ -1741,6 +1741,30 @@ int RunEmbeddedScriptCompatibility(){
     const auto host=document.GetElementById(L"host");
     Check(host&&host->shadowRoot&&host->shadowRoot->children.size()==2,
         L"a closed shadow root owns its children without adding them to the light tree index");
+    Document templateDocument;Check(templateDocument.Parse(L"<body><template id='parsed-template'><p id='inert'>Inert</p></template><main id='template-target'></main></body>",&error),error.c_str());
+    JavaScriptRuntime templateRuntime(templateDocument);std::wstring templateResult;
+    Check(templateRuntime.Execute(LR"JS(
+        var parsed=document.getElementById('parsed-template'),content=parsed.content;
+        var clone=parsed.cloneNode(true),target=document.getElementById('template-target');
+        var inert=document.getElementById('inert')===null;
+        target.appendChild(content);
+        return inert+'|'+(content instanceof DocumentFragment)+'|'+content.nodeType+'|'+
+            (content.parentNode===null)+'|'+parsed.childNodes.length+'|'+content.childNodes.length+'|'+
+            target.textContent+'|'+clone.content.textContent+'|'+(clone.content!==content);
+    )JS",&templateResult,&error)&&templateResult==L"true|true|11|true|0|0|Inert|Inert|true",
+        L"parsed template content is inert, branded, independently cloneable and consumed as a fragment");
+    Check(templateRuntime.Execute(LR"JS(
+        var dynamic=document.createElement('template'),fragment=dynamic.content;
+        dynamic.innerHTML='<p>Details <a href="/help">Help</a></p>';
+        var html=dynamic.innerHTML,first=fragment.firstChild;
+        dynamic.innerHTML='<span>Replacement</span>';
+        var replaced=dynamic.content===fragment&&first.parentNode===null;
+        target.appendChild(fragment);
+        var light=document.createElement('span');light.textContent='Light';dynamic.appendChild(light);
+        return (html.indexOf('<p>Details ')===0)+'|'+replaced+'|'+target.textContent+'|'+
+            dynamic.content.childNodes.length+'|'+dynamic.childNodes.length;
+    )JS",&templateResult,&error)&&templateResult==L"true|true|InertReplacement|0|1",
+        L"template innerHTML preserves fragment identity and separates content from light-DOM children");
     StyleSheet sheet;Check(sheet.Parse(document.StyleText(),&error),error.c_str());
     LayoutEngine layout(document,sheet);
     for(const auto scale:{1.0f,1.5f}){

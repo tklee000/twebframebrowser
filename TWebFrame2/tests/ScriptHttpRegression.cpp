@@ -53,6 +53,8 @@ public:
             else if(path=="/redirect"){status="302 Found";headers+="Location: /missing\r\n";body="";}
             else if(path=="/set-cookie"){headers+="Set-Cookie: server=1; Path=/; HttpOnly\r\nSet-Cookie: visible=2; Path=/\r\n";body="set";}
             else if(path=="/redirect-cookie"){status="302 Found";headers+="Location: /echo-cookie\r\nSet-Cookie: redirect=3; Path=/\r\n";body="";}
+            else if(path=="/redirect-fragment"){status="302 Found";headers+="Location: /echo-cookie#replacement\r\n";body="";}
+            else if(path=="/fragment-fixture"){headers="Content-Type: text/html; charset=utf-8\r\n";body="<script>parent.postMessage({fragment:location.hash},'*');</script>";}
             else if(path=="/folder/relative"){status="302 Found";headers+="Location: ../echo-cookie\r\n";body="";}
             else if(path=="/cookie-omit"){headers+="Set-Cookie: omitted=8; Path=/\r\n";}
             else if(path=="/cors-failure"){headers+="Set-Cookie: cors-side-effect=7; Path=/\r\n";}
@@ -144,9 +146,16 @@ int wmain(){
                 L"404|true",L"GET redirects preserve final status and response URL");
             Check(callbackRequests==0,L"HTTP script requests never pass through the text-only callback");
             auto context=std::make_shared<TWebFrame::BrowserContext>();view->SetBrowserContext(context);
+            unsigned observed=0;
+            context->SetNetworkObserver([&](const TWebFrame::NetworkRequest&,const TWebFrame::NetworkResponse& response){
+                ++observed;Check(response.status==200,L"diagnostic observer receives the completed HTTP response");
+                context->SetNetworkObserver({}); // Reentrant setter must not hold the profile mutex.
+                throw std::runtime_error("diagnostic failure");
+            });
             TWebFrame::NetworkRequest navigation;navigation.url=origin+L"/set-cookie";navigation.mode=TWebFrame::NetworkRequest::Mode::Navigation;
             navigation.credentials=TWebFrame::NetworkRequest::Credentials::Include;navigation.topLevelNavigation=true;
             Check(context->Request(navigation).status==200,L"navigation records multiple Set-Cookie fields in the shared jar");
+            Check(observed==1,L"diagnostic failures and reentrant removal preserve the network response");
             Execute(*view,LR"JS(document.cookie='script=4; Path=/';var x=new XMLHttpRequest();x.open('GET','/echo-cookie',false);x.send();return document.cookie+'|'+x.responseText+'|'+x.getResponseHeader('set-cookie');)JS",
                 L"visible=2; script=4|server=1; visible=2; script=4|null",L"navigation, document.cookie and XHR share cookies while HttpOnly and Set-Cookie remain hidden");
             Async(*view,LR"JS(fetch('/echo-cookie',{credentials:'omit'}).then(r=>r.text()).then(t=>window.chrome.webview.postMessage('cookies:'+t));)JS",
@@ -199,6 +208,27 @@ int wmain(){
             Check(view->NavigateToString(frameFixture,origin+L"/sync-resources"),L"synchronous redirected frame fixture loads");
             Async(*view,L"return 'waiting';",L"frame:true|",L"synchronous redirected iframe retains correct origin and cookie policy");
             Execute(*view,L"return document.querySelector('iframe').contentDocument===null;",L"true",L"synchronous iframe redirects enforce the final origin's same-origin policy");
+            TWebFrame::NetworkRequest fragmentRequest;fragmentRequest.url=origin+L"/echo-cookie#host-origin=parent";
+            fragmentRequest.mode=TWebFrame::NetworkRequest::Mode::Navigation;
+            const auto fragmentResponse=network->Context()->Request(fragmentRequest);
+            Check(fragmentResponse.status==200&&fragmentResponse.url==fragmentRequest.url,
+                L"navigation response URLs preserve the document fragment while HTTP requests omit it");
+            fragmentRequest.mode=TWebFrame::NetworkRequest::Mode::Cors;fragmentRequest.origin=origin;
+            Check(network->Context()->Request(fragmentRequest).url==origin+L"/echo-cookie",
+                L"fetch response URLs exclude the document fragment");
+            fragmentRequest.mode=TWebFrame::NetworkRequest::Mode::Navigation;fragmentRequest.url=origin+L"/redirect#host-origin=parent";
+            Check(network->Context()->Request(fragmentRequest).url==origin+L"/missing#host-origin=parent",
+                L"redirects without an explicit fragment inherit the navigation fragment");
+            fragmentRequest.url=origin+L"/redirect-fragment#host-origin=parent";
+            Check(network->Context()->Request(fragmentRequest).url==origin+L"/echo-cookie#replacement",
+                L"an explicit redirect fragment replaces the previous navigation fragment");
+            for(const bool parallel:{false,true}){
+                view->SetParallelResourceLoading(parallel);
+                Check(view->NavigateToString(L"<script>addEventListener('message',e=>{if(e.data.fragment!==undefined)chrome.webview.postMessage('fragment:'+e.data.fragment);});</script><iframe src='"+origin+L"/fragment-fixture#host-origin=parent'></iframe>",origin+L"/fragment-parent"),
+                    L"fragment-initialized iframe fixture loads");
+                Async(*view,L"return 'waiting';",L"fragment:#host-origin=parent",
+                    L"synchronous and asynchronous iframe bootstrap scripts receive the navigation fragment");
+            }
             view->SetNetworkResourceLoader({});view->SetParallelResourceLoading(false);
             const auto cacheUrl=origin+L"/cache";
             network->Context()->SetDocumentCookie(origin+L"/",L"cached=first; Path=/");

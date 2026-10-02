@@ -237,13 +237,64 @@ void CheckNestedOverflow(float scale) {
     layout.DiscardDeviceResources();
 }
 
+void CheckCompositedFrameText(float scale) {
+    Document document, frameDocument;
+    StyleSheet styles, frameStyles;
+    Check(document.Parse(LR"HTML(<style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        .host{position:absolute;top:20px;width:220px;height:160px;background:white}
+        #plain{left:20px}#rounded{left:280px;overflow:hidden;border-radius:8px}
+        #faded{left:540px;opacity:.7}
+        iframe{display:block;width:220px;height:160px;border:0}
+        </style><div class='host' id='plain'><iframe></iframe></div>
+        <div class='host' id='rounded'><iframe></iframe></div>
+        <div class='host' id='faded'><iframe></iframe></div>)HTML") &&
+        frameDocument.Parse(L"<style>*{margin:0;padding:0}body{color:#0a0a0a;font:20px Segoe UI}p{margin:16px}</style><p>Frame text</p><p>\ubb38\uc81c \ud574\uacb0</p>"),
+        L"composited frame text fixture parses");
+    Check(styles.Parse(document.StyleText()) && frameStyles.Parse(frameDocument.StyleText()),
+        L"composited frame text CSS parses");
+    LayoutEngine layout(document, styles), frameLayout(frameDocument, frameStyles);
+    layout.Layout(800, 400, scale);
+    frameLayout.Layout(220, 160, scale);
+    Raster raster(scale);
+    if (!raster.target) return;
+    layout.SetFramePainter([&](ID2D1RenderTarget* target, const LayoutBox& box) {
+        const auto mode = target->GetTextAntialiasMode();
+        ComPtr<IDWriteRenderingParams> params;
+        target->GetTextRenderingParams(&params);
+        D2D1_MATRIX_3X2_F transform{};
+        target->GetTransform(&transform);
+        target->SetTransform(D2D1::Matrix3x2F::Translation(box.content.x, box.content.y) * transform);
+        frameLayout.Paint(target, raster.text.Get());
+        target->SetTransform(transform);
+        ComPtr<IDWriteRenderingParams> restored;
+        target->GetTextRenderingParams(&restored);
+        Check(target->GetTextAntialiasMode() == mode && restored.Get() == params.Get(),
+            L"child frame painting restores the parent's text rendering state");
+    });
+    raster.Paint(layout);
+    const auto pixels = raster.Snapshot();
+    for (float left : {20.0f, 280.0f, 540.0f}) {
+        size_t ink = 0;
+        for (UINT y = static_cast<UINT>(35 * scale); y < static_cast<UINT>(100 * scale); ++y)
+            for (UINT x = static_cast<UINT>((left + 15) * scale); x < static_cast<UINT>((left + 200) * scale); ++x) {
+                const auto pixel = pixels[static_cast<size_t>(y) * raster.width + x];
+                if ((pixel & 255) < 180 && ((pixel >> 8) & 255) < 180 && ((pixel >> 16) & 255) < 180) ++ink;
+            }
+        Check(ink > 100, L"plain, rounded and translucent child frames paint readable Latin and Korean text");
+        std::wcout << L"Frame text DPI " << scale << L" left " << left << L" ink " << ink << L'\n';
+    }
+    frameLayout.DiscardDeviceResources();
+    layout.DiscardDeviceResources();
+}
+
 void CheckOverflowingAncestor(float scale) {
     Document document;
     StyleSheet styles;
     Check(document.Parse(LR"HTML(<style>
         *{margin:0;padding:0}
         .viewport{width:300px;height:200px;overflow:auto}
-        .flow{width:250px}.short{height:20px;overflow:visible}
+        .flow{width:250px}.short{height:20px;overflow:visible;border-top:1px solid transparent}
         .child{margin-top:300px;width:200px;height:40px;background:#d03020}
         </style><div class='viewport'><div class='flow'>
         <div class='short' id='overflow-host'><div class='child'></div></div>
@@ -285,14 +336,19 @@ void CheckOverflowingAncestor(float scale) {
 
 int wmain(int argc, wchar_t** argv) {
     const bool benchmark = argc > 1 && std::wstring(argv[1]) == L"--benchmark";
+    const bool frameTextOnly = argc > 1 && std::wstring(argv[1]) == L"--frame-text";
     std::wcout << std::fixed << std::setprecision(3);
     if (benchmark) std::wcout << L"scenario,rows,dpi_scale,input_p50_ms,paint_p50_ms\n";
     for (float scale : {1.0f, 1.5f}) {
-        for (bool positioned : {false, true}) Run(scale, positioned, benchmark ? 3000 : 80, benchmark);
-        CheckNestedOverflow(scale);
-        CheckOverflowingAncestor(scale);
+        if (!frameTextOnly) {
+            for (bool positioned : {false, true}) Run(scale, positioned, benchmark ? 3000 : 80, benchmark);
+            CheckNestedOverflow(scale);
+            CheckOverflowingAncestor(scale);
+        }
+        CheckCompositedFrameText(scale);
     }
     if (failures) { std::wcerr << failures << L" checks failed\n"; return 1; }
-    std::wcout << L"Scroll rendering regression passed at 100% and 150% DPI\n";
+    std::wcout << (frameTextOnly ? L"Composited frame text regression" : L"Scroll rendering regression")
+        << L" passed at 100% and 150% DPI\n";
     return 0;
 }

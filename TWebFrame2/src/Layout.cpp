@@ -1277,13 +1277,32 @@ Microsoft::WRL::ComPtr<IDWriteRenderingParams> WebTextRenderingParams(
     return params;
 }
 
-void ConfigureWebTextRendering(ID2D1RenderTarget* target,IDWriteFactory* factory) {
+void ConfigureWebTextRendering(ID2D1RenderTarget* target,IDWriteFactory* factory,
+                               bool transparentLayer=false) {
     if(!target)return;
-    const bool subpixel=target->GetPixelFormat().alphaMode==D2D1_ALPHA_MODE_IGNORE;
+    const bool subpixel=!transparentLayer&&
+        target->GetTextAntialiasMode()!=D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE&&
+        target->GetPixelFormat().alphaMode==D2D1_ALPHA_MODE_IGNORE;
     target->SetTextAntialiasMode(subpixel?D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE:
                                         D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
     if(auto params=WebTextRenderingParams(factory,subpixel))target->SetTextRenderingParams(params.Get());
 }
+
+class ScopedWebTextRendering {
+    ID2D1RenderTarget* target_;
+    D2D1_TEXT_ANTIALIAS_MODE mode_;
+    Microsoft::WRL::ComPtr<IDWriteRenderingParams> params_;
+public:
+    ScopedWebTextRendering(ID2D1RenderTarget* target,IDWriteFactory* factory,
+                          bool transparentLayer=false):target_(target),mode_(target->GetTextAntialiasMode()) {
+        target_->GetTextRenderingParams(&params_);
+        ConfigureWebTextRendering(target_,factory,transparentLayer);
+    }
+    ~ScopedWebTextRendering() {
+        target_->SetTextAntialiasMode(mode_);
+        target_->SetTextRenderingParams(params_.Get());
+    }
+};
 
 Microsoft::WRL::ComPtr<IDWriteTextFormat> TextFormat(IDWriteFactory* factory,
                                                       const ComputedStyle& style) {
@@ -7019,7 +7038,13 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
     if(!box.visible||!Intersects(box.subtreeBounds,clipBounds))return;
     float opacity=1.0f;TryParseFloat(box.style.Get(L"opacity",L"1"),opacity);
     opacity=std::max(0.0f,std::min(1.0f,opacity));
-    if(box.style.Is(L"visibility",L"hidden")||opacity<=0.001f)return;D2D1_MATRIX_3X2_F previousTransform{};const bool transformed=ApplyPaintTransform(target,box,previousTransform);Microsoft::WRL::ComPtr<ID2D1Layer> opacityLayer;if(opacity<0.999f&&SUCCEEDED(target->CreateLayer(nullptr,&opacityLayer)))target->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(),nullptr,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,D2D1::IdentityMatrix(),opacity),opacityLayer.Get());const auto background=BackgroundColor(box.style);ID2D1SolidColorBrush* brush=nullptr;
+    if(box.style.Is(L"visibility",L"hidden")||opacity<=0.001f)return;D2D1_MATRIX_3X2_F previousTransform{};const bool transformed=ApplyPaintTransform(target,box,previousTransform);Microsoft::WRL::ComPtr<ID2D1Layer> opacityLayer;
+    std::unique_ptr<ScopedWebTextRendering> opacityTextRendering;
+    if(opacity<0.999f&&SUCCEEDED(target->CreateLayer(nullptr,&opacityLayer))){
+        target->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(),nullptr,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,D2D1::IdentityMatrix(),opacity),opacityLayer.Get());
+        opacityTextRendering=std::make_unique<ScopedWebTextRendering>(target,factory,true);
+    }
+    const auto background=BackgroundColor(box.style);ID2D1SolidColorBrush* brush=nullptr;
     const auto radius=UniformCornerRadii(box.style,box.rect.width,box.rect.height,viewportWidth_);
     PaintOuterBoxShadows(target,box.style,box.rect,radius,viewportWidth_,deviceScale_,
                          shadowBitmapCacheTarget_,shadowBitmapCache_);
@@ -7219,6 +7244,7 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
     Microsoft::WRL::ComPtr<ID2D1Layer> roundedOverflowLayer;
     Microsoft::WRL::ComPtr<ID2D1RoundedRectangleGeometry> roundedOverflowGeometry;
     bool roundedOverflowClip=false;
+    std::unique_ptr<ScopedWebTextRendering> roundedTextRendering;
     if(clip){
         // Overflow clips at the padding edge. The padding-box curve is the
         // border-box radius inset by the border; clipping to content instead
@@ -7242,6 +7268,9 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
                 target->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(),
                     roundedOverflowGeometry.Get()),roundedOverflowLayer.Get());
                 roundedOverflowClip=true;
+                // The mask layer has alpha even on an opaque page target.
+                // Child document paints must inherit grayscale coverage.
+                roundedTextRendering=std::make_unique<ScopedWebTextRendering>(target,factory,true);
             }
         }
     }
@@ -7263,11 +7292,13 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
     }
     if(clip){
         if(roundedOverflowClip)target->PopLayer();
+        roundedTextRendering.reset();
         target->PopAxisAlignedClip();
     }
     if(!box.viewportScrollContainer)PaintScrollbars(target,box);
     PaintOutline(target,box.style,box.rect,radius,viewportWidth_);
     if(opacityLayer)target->PopLayer();
+    opacityTextRendering.reset();
     if(transformed)target->SetTransform(previousTransform);
 }
 
@@ -7955,13 +7986,16 @@ bool LayoutEngine::DragScrollbar(const std::shared_ptr<Node>& node,float y,float
     return DragScrollbar(node,0,y,dragOffset,false);
 }
 
-void LayoutEngine::DumpBox(const LayoutBox& box,std::wstring& output,bool& first)const{
+void LayoutEngine::DumpBox(const LayoutBox& box,std::wstring& output,bool& first,bool includeText)const{
     if(!box.visible)return;
-    if(box.node->type==NodeType::Element){
+    if(box.node->type==NodeType::Element||(includeText&&box.node->type==NodeType::Text)){
         if(!first)output+=L",";first=false;std::wostringstream s;
         s<<L"{\"tag\":\""<<EscapeJson(box.node->tag)<<L"\",\"id\":\""<<EscapeJson(box.node->Attribute(L"id"))
          <<L"\",\"x\":"<<std::lround(box.rect.x)<<L",\"y\":"<<std::lround(box.rect.y)
          <<L",\"width\":"<<std::lround(box.rect.width)<<L",\"height\":"<<std::lround(box.rect.height);
+        if(includeText&&box.node->type==NodeType::Text)s<<L",\"text\":\""<<EscapeJson(BoxText(box))
+            <<L"\",\"color\":\""<<EscapeJson(box.style.Get(L"color"))<<L"\",\"contentWidth\":"<<box.content.width
+            <<L",\"contentHeight\":"<<box.content.height;
         // SVG descendants have no HTML layout boxes. Include their geometry
         // and stroke inputs so a renderer dump can diagnose their paint rules.
         if(box.node->tag==L"svg"){
@@ -7988,8 +8022,8 @@ void LayoutEngine::DumpBox(const LayoutBox& box,std::wstring& output,bool& first
         }
         s<<L'}';output+=s.str();
     }
-    for(const auto& child:box.children)DumpBox(*child,output,first);
+    for(const auto& child:box.children)DumpBox(*child,output,first,includeText);
 }
-std::wstring LayoutEngine::DumpJson()const{std::wstring out=L"[";bool first=true;if(root_)DumpBox(*root_,out,first);return out+L"]";}
+std::wstring LayoutEngine::DumpJson(bool includeText)const{std::wstring out=L"[";bool first=true;if(root_)DumpBox(*root_,out,first,includeText);return out+L"]";}
 
 } // namespace TWebFrame::Internal

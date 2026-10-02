@@ -35,6 +35,8 @@ struct Node : std::enable_shared_from_this<Node> {
     // Shadow trees are owned by their host, but remain outside light-DOM
     // children and document selector indexes. Rendering uses their children.
     std::shared_ptr<Node> shadowRoot;
+    std::shared_ptr<Node> templateContent;
+    std::shared_ptr<Node> TemplateContents();
     std::weak_ptr<Node> shadowHost;
     bool closedShadowRoot = false;
     const std::vector<std::shared_ptr<Node>>& RenderChildren() const {

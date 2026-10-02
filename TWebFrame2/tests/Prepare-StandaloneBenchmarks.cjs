@@ -1,0 +1,14 @@
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+const root=path.resolve('TWebFrame2/tests/artifacts/cloudflare-stage-comparison-20261002');
+const folder=path.join(root,'standalone','fixtures');fs.mkdirSync(folder,{recursive:true});
+const raw=fs.readFileSync(path.join(root,'twebframe2/visit-01/page-script-layout.json'),'utf8').replace(/[\x00-\x1f]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));
+const dump=JSON.parse(raw),call=dump.frames.flatMap(f=>f.runtime.calls).find(c=>c.name==='P'&&c.count>1000000&&c.source.length<100);
+if(!call)throw Error('No archived hot lookup function');
+const lookup=`(function(){var wT=[];for(var i=0;i<2048;i++)wT.push('value-'+i);function p(){return wT;}${call.source}\nvar sum=0;for(var i=0;i<3551538;i++)sum+=P(185+(i&1023)).length;return sum;})()`;
+const bitReverse=dump.frames.flatMap(f=>f.runtime.calls).find(c=>c.name==='Pw'&&c.source.startsWith('function Pw(')&&c.source.length<100);
+if(!bitReverse)throw Error('No archived numeric loop function');
+fs.writeFileSync(path.join(folder,'archived-numeric-loop.js'),`(function(){${bitReverse.source}\nvar sum=0;for(var i=0;i<200000;i++)sum+=Pw(i,16);return sum;})()`);
+fs.writeFileSync(path.join(folder,'archived-lookup.js'),lookup);
+fs.copyFileSync(path.join(root,'twebframe2/visit-04/scripts/12.js'),path.join(folder,'archived-eval.js'));
+fs.writeFileSync(path.join(folder,'metadata.json'),JSON.stringify({lookup:{originalSource:call.source,observedCalls:call.count,adapter:'deterministic 2048-entry string table; same archived function body'},numericLoop:{originalSource:bitReverse.source,observedCalls:bitReverse.count,adapter:'200000 input integers; same archived function body'},eval:{source:'twebframe2/visit-04/scripts/12.js',changes:false},files:['archived-lookup.js','archived-eval.js','archived-numeric-loop.js'].map(file=>({file,sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(folder,file))).digest('hex')}))},null,2));
+console.log(folder);

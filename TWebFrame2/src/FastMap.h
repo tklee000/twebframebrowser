@@ -115,6 +115,13 @@ public:
         return index == kEmptyBucket ? end() : const_iterator(entries_.data() + index);
     }
 
+    // Cache indices, never pointers: insertion may reallocate the dense store,
+    // and erasure may move entries. Validate the key before using a cached slot.
+    T* find_cached(const Key& key,size_type& index) {
+        if(index<entries_.size()&&equal_(entries_[index].first,key))return &entries_[index].second;
+        index=FindIndex(key);return index==kEmptyBucket?nullptr:&entries_[index].second;
+    }
+
     size_type count(const Key& key) const { return FindIndex(key) == kEmptyBucket ? 0u : 1u; }
 
     size_type erase(const Key& key) {

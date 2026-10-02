@@ -158,8 +158,10 @@ public:
             field.resize(wcslen(field.c_str()));cookies_->Set(data.url,field,false,data.siteForCookies,data.topLevelNavigation);
         }}
         if(crossOrigin&&!noCors&&!navigation&&!originAllowed(request.value))return result;
+        // WinHTTP's wire URL omits fragments. Navigation documents retain
+        // their fragment for bootstrap data and history; fetch URLs exclude it.
         DWORD urlBytes=0;WinHttpQueryOption(request.value,WINHTTP_OPTION_URL,nullptr,&urlBytes);
-        if(urlBytes>sizeof(wchar_t)){
+        if(!navigation&&urlBytes>sizeof(wchar_t)){
             std::wstring finalUrl(urlBytes/sizeof(wchar_t),L'\0');
             if(WinHttpQueryOption(request.value,WINHTTP_OPTION_URL,finalUrl.data(),&urlBytes))result.url.assign(finalUrl.c_str());
         }
@@ -180,6 +182,10 @@ public:
                 auto next=data;DWORD capacity=32768;std::wstring combined(capacity,L'\0');
                 if(FAILED(UrlCombineW(data.url.c_str(),destination.c_str(),combined.data(),&capacity,0)))return ScriptResponse{};
                 combined.resize(capacity);next.url=combined;
+                if(destination.find(L'#')==std::wstring::npos){
+                    const auto hash=data.url.find(L'#');
+                    if(hash!=std::wstring::npos){const auto nextHash=next.url.find(L'#');if(nextHash!=std::wstring::npos)next.url.resize(nextHash);next.url+=data.url.substr(hash);}
+                }
                 if((status==303&&method!=L"HEAD")||((status==301||status==302)&&method==L"POST")){
                     next.method=L"GET";next.body.clear();next.headers.erase(std::remove_if(next.headers.begin(),next.headers.end(),[](const auto& header){
                         const auto name=Lower(header.first);return name==L"content-type"||name==L"content-encoding"||name==L"content-language"||name==L"content-location";

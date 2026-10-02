@@ -8,6 +8,7 @@
 #include <fstream>
 #include <mutex>
 #include <thread>
+#include "TraceJson.h"
 
 bool SaveViewPixels(HWND window,const wchar_t* filename){
     RECT bounds{};if(!GetClientRect(window,&bounds))return false;
@@ -38,11 +39,12 @@ void SaveLayoutSnapshot(TWebFrame::View& view,const std::filesystem::path& filen
 
 int wmain(int argc,wchar_t** argv){
     if(argc<2){std::wcerr<<L"Usage: PageScriptProbe https://host/path [observation-seconds] [output-directory] [--visible] [--native] [--click=x,y]\n";return 2;}
-    bool visible=false,native=false,clickRequested=false;int clickX=0,clickY=0;
+    bool visible=false,native=false,archive=false,clickRequested=false;int clickX=0,clickY=0;
     for(int i=4;i<argc;++i){
         const std::wstring option=argv[i];
         if(option==L"--visible")visible=true;
         else if(option==L"--native")native=true;
+        else if(option==L"--archive")archive=true;
         else if(option.rfind(L"--click=",0)==0&&swscanf_s(option.c_str()+8,L"%d,%d",&clickX,&clickY)==2&&clickX>=0&&clickY>=0&&clickX<32768&&clickY<32768)clickRequested=true;
         else {std::wcerr<<L"Unknown or invalid option\n";return 2;}
     }
@@ -55,6 +57,25 @@ int wmain(int argc,wchar_t** argv){
     const auto elapsed=[&]{return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now()-observationStart).count();};
     HttpClient client;const std::wstring url=argv[1];
+    if(archive){
+        const auto directory=std::filesystem::absolute(outputDirectory/L"scripts").wstring();
+        SetEnvironmentVariableW(L"TWEBFRAME_SCRIPT_ARCHIVE",directory.c_str());
+        std::filesystem::create_directories(outputDirectory/L"responses");
+        auto networkMutex=std::make_shared<std::mutex>();auto sequence=std::make_shared<unsigned>(0);
+        client.Context()->SetNetworkObserver([outputDirectory,networkMutex,sequence,observationStart](const TWebFrame::NetworkRequest& request,const TWebFrame::NetworkResponse& response){
+            std::lock_guard<std::mutex> lock(*networkMutex);const auto id=++*sequence;
+            const auto file=L"responses/"+std::to_wstring(id)+L".body";
+            std::ofstream body(outputDirectory/file,std::ios::binary);
+            body.write(reinterpret_cast<const char*>(response.bytes.data()),response.bytes.size());body.close();
+            const auto record=L"{\"id\":"+std::to_wstring(id)+L",\"ms\":"+std::to_wstring(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-observationStart).count())+
+                L",\"url\":"+ParityTrace::Quote(request.url)+L",\"method\":"+ParityTrace::Quote(request.method)+
+                L",\"origin\":"+ParityTrace::Quote(request.origin)+L",\"userAgent\":"+ParityTrace::Quote(TWebFrame::BrowserContext::UserAgent())+
+                L",\"status\":"+std::to_wstring(response.status)+L",\"contentType\":"+ParityTrace::Quote(response.contentType)+
+                L",\"bytes\":"+std::to_wstring(response.bytes.size())+L",\"error\":"+ParityTrace::Quote(response.error)+
+                L",\"file\":"+ParityTrace::Quote(file)+L"}\n";
+            std::ofstream events(outputDirectory/L"network.jsonl",std::ios::binary|std::ios::app);events<<ParityTrace::Utf8(record);
+        });
+    }
     const auto page=client.Get(url,L"",true);
     std::wcout<<L"PAGE "<<page.status<<L" bytes="<<page.body.size()<<L'\n';
     if(!page.Ok())return 1;
@@ -129,7 +150,17 @@ int wmain(int argc,wchar_t** argv){
         if(std::chrono::steady_clock::now()<deadline)return true;
         executionTimeLimit=true;return false;
     });
-    const bool started=view->NavigateToStringAsync(HttpClient::DecodeText(page),page.url);
+    auto html=HttpClient::DecodeText(page);
+    if(archive){
+        const std::wstring observer=LR"JS(<script>(function(){window.__stageMessages=[];
+addEventListener('message',function(e){var d=e.data;if(!d||d.source!=='cloudflare-challenge')return;
+window.__stageMessages.push({phase:d.event,code:d.code||d.errorCode||null,origin:e.origin,
+trusted:e.isTrusted,mode:d.mode||null,tokenPresent:!!d.token,at:performance.now()});});})();</script>)JS";
+        // Preserve doctype/head parsing and install the observer before site scripts.
+        const auto head=html.find(L"<head");const auto end=head==std::wstring::npos?std::wstring::npos:html.find(L'>',head);
+        html.insert(end==std::wstring::npos?0:end+1,observer);
+    }
+    const bool started=view->NavigateToStringAsync(html,page.url);
     auto nextSnapshot=std::chrono::steady_clock::now()+std::chrono::seconds(10);
     bool settling=false,clicked=false;
     while(started&&std::chrono::steady_clock::now()<deadline){
@@ -142,6 +173,7 @@ int wmain(int argc,wchar_t** argv){
             }
             if(std::chrono::steady_clock::now()>=nextSnapshot){
                 SaveLayoutSnapshot(*view,outputDirectory/L"page-script-progress.json");
+                if(archive)SaveLayoutSnapshot(*view,outputDirectory/(L"progress-"+std::to_wstring(elapsed())+L".json"));
                 SaveViewPixels(view->Window(),(outputDirectory/L"page-script-progress.bmp").c_str());
                 std::wcout<<L"OBSERVE ms="<<elapsed()<<L" error="<<view->LastError()<<L'\n';
                 nextSnapshot=std::chrono::steady_clock::now()+std::chrono::seconds(10);
@@ -170,6 +202,13 @@ int wmain(int argc,wchar_t** argv){
     SaveViewPixels(view->Window(),(outputDirectory/L"page-script-render.bmp").c_str());
     view->SetExecutionYieldHandler({});
     std::wstring result;
+    if(archive&&view->ExecuteScript(LR"JS(return JSON.stringify({url:location.href,ready:document.readyState,
+        userAgent:navigator.userAgent,secure:isSecureContext,time:Date.now(),alignedTime:performance.timeOrigin+performance.now(),
+        phases:window.__stageMessages||[],tokenPresent:!!(document.querySelector('input[name="cf-turnstile-response"]')||{}).value,
+        capabilities:{Worker:typeof Worker,WebAssembly:typeof WebAssembly,AudioContext:typeof AudioContext,
+        OffscreenCanvas:typeof OffscreenCanvas,FontFace:typeof FontFace,TextEncoder:typeof TextEncoder,
+        ReadableStream:typeof ReadableStream,MessageChannel:typeof MessageChannel,cryptoSubtle:!!crypto.subtle},
+        compatibility:window.__compatResults||null});)JS",&result))SaveTextSnapshot(result,outputDirectory/L"result.json");
     const bool inspected=view->ExecuteScript(LR"JS(
         var descriptions=[];
         for(var i=0;i<window.length;i++){
@@ -191,5 +230,13 @@ int wmain(int argc,wchar_t** argv){
     )JS",&result);
     SaveTextSnapshot(result,outputDirectory/L"page-script-text.txt");
     std::wcout<<L"BODY_TEXT "<<textInspected<<L" chars="<<result.size()<<L'\n';
+    if(view->ExecuteScript(LR"JS(
+        return JSON.stringify(Array.from(document.querySelectorAll('h1,h2,p,button')).slice(0,32).map(function(node){
+            var style=getComputedStyle(node),rect=node.getBoundingClientRect();
+            return {tag:node.tagName,text:node.innerText.slice(0,200),color:style.color,font:style.fontFamily,
+                size:style.fontSize,visibility:style.visibility,opacity:style.opacity,
+                x:rect.x,y:rect.y,width:rect.width,height:rect.height};
+        }));
+    )JS",&result))SaveTextSnapshot(result,outputDirectory/L"page-script-text-layout.json");
     view.reset();DestroyWindow(host);if(SUCCEEDED(com))CoUninitialize();return started?0:1;
 }

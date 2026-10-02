@@ -163,7 +163,7 @@ public:
                                std::shared_ptr<Node>& targetNode, size_t& targetOffset);
     bool TextCaretRect(const std::shared_ptr<Node>& textNode, size_t textOffset,
                        LayoutRect& caretRect);
-    std::wstring DumpJson() const;
+    std::wstring DumpJson(bool includeText=false) const;
     const LayoutBox* Root() const { return root_.get(); }
     const LayoutBox* BoxFor(const std::shared_ptr<Node>& node) const;
     bool VisualBounds(const std::shared_ptr<Node>& node, LayoutRect& bounds) const;
@@ -209,7 +209,7 @@ private:
     bool BeginScrollbarBox(LayoutBox& box, float x, float y,
                            std::shared_ptr<Node>& dragNode, float& dragOffset,
                            bool& horizontal);
-    void DumpBox(const LayoutBox& box, std::wstring& output, bool& first) const;
+    void DumpBox(const LayoutBox& box, std::wstring& output, bool& first,bool includeText) const;
     bool RestyleBox(LayoutBox& box, const ComputedStyle* parentStyle,
                     LayoutBox* localizedRoot = nullptr,
                     bool* fixedOffsetOnly = nullptr);

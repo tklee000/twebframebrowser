@@ -44,10 +44,11 @@ try {
         $probeOptions = @('--native')
         # DIP coordinates of the checkbox in this fixed-size diagnostic fixture.
         if ($case -eq 'interactive') { $probeOptions += '--click=48,150' }
+        if ($case -eq 'fail') { $probeOptions += '--click=94,158' }
         & $Probe ($baseUrl + '?case=' + $case) $ObservationSeconds $caseDirectory @probeOptions *> $log
         if ($LASTEXITCODE -ne 0) { throw ($case + ' probe failed; see ' + $log) }
         $text = Get-Content -LiteralPath (Join-Path $caseDirectory 'page-script-text.txt') -Raw
-        $layout = Get-Content -LiteralPath (Join-Path $caseDirectory 'page-script-layout.json') -Raw | ConvertFrom-Json
+        $layout = Get-Content -LiteralPath (Join-Path $caseDirectory 'page-script-layout.json') -Raw -Encoding UTF8 | ConvertFrom-Json
         $transportLog = Get-Content -LiteralPath $log -Raw
         $callback = if ($case -eq 'fail') { $text -match 'TEST_ONLY\|fail\|error\|code=\d+' }
                     else { $text.Contains('TEST_ONLY|' + $case + '|success|dummy=true') }
@@ -65,6 +66,32 @@ try {
                 $transportLog -notmatch '(?m)^POINTER_CLICK 48,150 error=\s*$') {
                 throw ('Interactive test-key completion must follow the native pointer click; see ' + $log)
             }
+        }
+        if ($case -eq 'fail') {
+            $details = $layout.frames | Where-Object { $_.document.id -contains 'fr-title' } | Select-Object -First 1
+            $title = $details.document | Where-Object id -eq 'fr-title' | Select-Object -First 1
+            $runs = @($details.document | Where-Object { $_.tag -eq '#text' -and $_.text.Trim() -and $_.height -gt 0 })
+            $frame = $layout.document | Where-Object { $_.tag -eq 'iframe' -and $_.id -like '*-fr' } | Select-Object -First 1
+            if (!$details -or !$title -or !$frame -or $runs.Count -lt 5 -or
+                $layout.runtime.receivedMessages -notcontains 'feedbackInit' -or
+                $layout.runtime.receivedMessages -notcontains 'feedbackOpen' -or
+                $transportLog -notmatch '(?m)^POINTER_CLICK 94,158 error=\s*$') {
+                throw ('Failure details did not initialize and create their visible text; see ' + $log)
+            }
+            # Check glyph pixels, since populated DOM text alone can still paint blank.
+            Add-Type -AssemblyName System.Drawing
+            $bitmap = [System.Drawing.Bitmap]::new((Join-Path $caseDirectory 'page-script-render.bmp'))
+            try {
+                $ink = 0
+                for ($y = [int]($frame.y + $title.y); $y -lt [int]($frame.y + $title.y + $title.height); $y++) {
+                    for ($x = [int]($frame.x + $title.x); $x -lt [int]($frame.x + $title.x + $title.width); $x++) {
+                        $pixel = $bitmap.GetPixel($x, $y)
+                        if ($pixel.R -lt 180 -and $pixel.G -lt 180 -and $pixel.B -lt 180) { $ink++ }
+                    }
+                }
+                if ($ink -lt 50) { throw ('Failure details title painted blank; see ' + $log) }
+            } finally { $bitmap.Dispose() }
+            Write-Output ('PASS: native Turnstile failure details initialize and paint title glyphs (' + $ink + ' pixels)')
         }
         Write-Output ('PASS: native Turnstile test-key ' + $case + ' callback and iframe message')
     }

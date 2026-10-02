@@ -181,6 +181,8 @@ public:
     bool Load(const std::wstring& source, std::wstring* error = nullptr);
     bool Execute(const std::wstring& source, std::wstring* result = nullptr,
                  std::wstring* error = nullptr);
+    // Diagnostic compilation in a temporary module, without executing source.
+    bool ValidateSyntax(const std::wstring& source, std::wstring* error = nullptr) const;
     // Zero disables JIT compilation and execution for this runtime.
     void SetJitCompilationThreshold(size_t calls);
     JitStatistics GetJitStatistics() const;

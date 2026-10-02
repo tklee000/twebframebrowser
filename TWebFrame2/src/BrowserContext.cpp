@@ -1,5 +1,6 @@
 #include <TWebFrame/BrowserContext.h>
 #include "ScriptHttp.h"
+#include "OriginFileSystem.h"
 #include <bcrypt.h>
 #include <filesystem>
 #include <fstream>
@@ -116,12 +117,31 @@ struct BrowserContext::Impl {
     Internal::ScriptHttpSession http{cookies};
     std::mutex mutex;
     std::unordered_map<std::wstring,std::shared_ptr<StorageArea>> storage;
+    std::unordered_map<std::wstring,std::shared_ptr<Internal::OriginFileSystem>> originFiles;
     std::atomic<std::uint64_t> nextContext{0};
     std::wstring profileDirectory;
+    BrowserContext::NetworkObserver networkObserver;
 };
 BrowserContext::BrowserContext(const std::wstring& profileDirectory):impl_(std::make_unique<Impl>()){impl_->profileDirectory=profileDirectory;}
 BrowserContext::~BrowserContext()=default;
-NetworkResponse BrowserContext::Request(const NetworkRequest& request){return impl_->http.Send(request);}
+std::shared_ptr<Internal::OriginFileSystem> BrowserContext::OriginFiles(const std::wstring& origin){
+    const auto canonical=Origin(origin);if(canonical==L"null")return {};
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    auto& files=impl_->originFiles[canonical];if(!files){files=std::make_shared<Internal::OriginFileSystem>();
+        if(!impl_->profileDirectory.empty()){const auto filename=StorageFileName(canonical);
+            if(!filename.empty()){files->file=std::filesystem::path(impl_->profileDirectory)/L"OriginFiles"/(filename+L".opfs");files->Load();}}}
+    return files;
+}
+NetworkResponse BrowserContext::Request(const NetworkRequest& request){
+    auto response=impl_->http.Send(request);
+    NetworkObserver observer;
+    {std::lock_guard<std::mutex> lock(impl_->mutex);observer=impl_->networkObserver;}
+    if(observer)try{observer(request,response);}catch(...){/* Diagnostics cannot break transport. */}
+    return response;
+}
+void BrowserContext::SetNetworkObserver(NetworkObserver observer){
+    std::lock_guard<std::mutex> lock(impl_->mutex);impl_->networkObserver=std::move(observer);
+}
 std::wstring BrowserContext::DocumentCookie(const std::wstring& url,const std::wstring& siteForCookies){return impl_->cookies->Header(url,siteForCookies,false,L"GET",true);}
 void BrowserContext::SetDocumentCookie(const std::wstring& url,const std::wstring& cookie,const std::wstring& siteForCookies){impl_->cookies->Set(url,cookie,true,siteForCookies);}
 bool BrowserContext::CookiesEnabled() const {return true;}

@@ -951,6 +951,22 @@ void Node::SetInnerText(const std::wstring& value) {
     children.push_back(child);
 }
 
+std::shared_ptr<Node> Node::TemplateContents() {
+    if(!templateContent){
+        templateContent=std::make_shared<Node>();templateContent->tag=L"#document-fragment";
+        templateContent->ownerDocument=ownerDocument;
+        templateContent->children=std::move(children);
+        for(const auto& child:templateContent->children)child->parent=templateContent;
+    }
+    return templateContent;
+}
+
+static void NormalizeTemplateContents(const std::shared_ptr<Node>& node){
+    if(!node)return;
+    for(const auto& child:node->children)NormalizeTemplateContents(child);
+    if(node->tag==L"template"&&!node->xml)node->TemplateContents();
+}
+
 std::shared_ptr<Node> Node::Closest(const std::wstring& selector) {
     auto current = shared_from_this();
     while (current) {
@@ -1049,6 +1065,7 @@ std::vector<std::shared_ptr<Node>> Document::ParseFragment(const std::wstring& h
                                                             std::wstring* error) {
     HtmlParser parser(html,scriptingEnabled_);
     auto fragment = parser.Parse(true, error);
+    NormalizeTemplateContents(fragment);
     return fragment ? fragment->children : std::vector<std::shared_ptr<Node>>{};
 }
 
@@ -1291,12 +1308,14 @@ std::vector<std::shared_ptr<Node>> Document::QuerySelectorAll(
 std::shared_ptr<Node> Document::CreateElement(const std::wstring& tag) const {
     auto node = std::make_shared<Node>();
     node->type = NodeType::Element; node->tag = xml_?tag:ToLower(tag);node->xml=xml_;
+    if(!xml_&&node->tag==L"template")node->TemplateContents();
     return node;
 }
 
 void Document::SetInnerHtml(const std::shared_ptr<Node>& node, const std::wstring& html,
                             bool reindex) {
     if (!node) return;
+    if(node->tag==L"template"&&!node->xml){SetInnerHtml(node->TemplateContents(),html,reindex);return;}
     std::vector<std::shared_ptr<Node>> children;
     // The innerHTML setter parses in the context of the target element.  Raw
     // text elements do not treat '<' or '&' as markup; RCDATA elements only
@@ -1344,6 +1363,7 @@ std::wstring Document::ScriptText() const {
 
 void Document::Reindex() {
     ++fullReindexCount_;
+    NormalizeTemplateContents(root_);
     for (const auto& entry : ownedNodes_)
         if (const auto node = entry.second.lock(); node && node->ownerDocument == this)
             node->ownerDocument = nullptr;
@@ -1352,13 +1372,15 @@ void Document::Reindex() {
     Walk(root_, [&](const auto& node) {
         node->ownerDocument = this;
         ownedNodes_[node.get()] = node;
-        if(node->shadowRoot){
+        if(node->shadowRoot||node->templateContent){
             std::function<void(const std::shared_ptr<Node>&)> bindShadow=[&](const auto& current){
                 current->ownerDocument=this;ownedNodes_[current.get()]=current;
                 for(const auto& child:current->children)bindShadow(child);
                 if(current->shadowRoot)bindShadow(current->shadowRoot);
+                if(current->templateContent)bindShadow(current->templateContent);
             };
-            bindShadow(node->shadowRoot);
+            if(node->shadowRoot)bindShadow(node->shadowRoot);
+            if(node->templateContent)bindShadow(node->templateContent);
         }
         if (node->type == NodeType::Element) {
             tags_[node->tag][node.get()] = node;
@@ -1433,12 +1455,14 @@ void Document::UpdateElementName(const std::shared_ptr<Node>& node,
 
 bool Document::IndexSubtree(const std::shared_ptr<Node>& node) {
     if(!node)return true;
+    NormalizeTemplateContents(node);
     auto root=node;while(auto parent=root->parent.lock())root=std::move(parent);
     if(root!=root_){
         std::function<void(const std::shared_ptr<Node>&)> bind=[&](const auto& current){
             current->ownerDocument=this;ownedNodes_[current.get()]=current;
             for(const auto& child:current->children)bind(child);
             if(current->shadowRoot)bind(current->shadowRoot);
+            if(current->templateContent)bind(current->templateContent);
         };
         bind(node);return true;
     }

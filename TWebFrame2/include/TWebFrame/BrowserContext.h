@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace TWebFrame {
+namespace Internal { struct OriginFileSystem; }
 struct NetworkRequest {
     enum class Mode { Cors, NoCors, SameOrigin, Navigation };
     enum class Credentials { Omit, SameOrigin, Include };
@@ -59,6 +60,10 @@ public:
     BrowserContext(const BrowserContext&)=delete;
     BrowserContext& operator=(const BrowserContext&)=delete;
     NetworkResponse Request(const NetworkRequest& request);
+    // Optional diagnostic observer. Called on the requesting thread after the
+    // response, outside profile locks; it must not throw or change the response.
+    using NetworkObserver=std::function<void(const NetworkRequest&,const NetworkResponse&)>;
+    void SetNetworkObserver(NetworkObserver observer);
     std::wstring DocumentCookie(const std::wstring& url,const std::wstring& siteForCookies=L"");
     void SetDocumentCookie(const std::wstring& url,const std::wstring& cookie,const std::wstring& siteForCookies=L"");
     bool CookiesEnabled() const;
@@ -66,6 +71,7 @@ public:
     std::uint64_t NewBrowsingContext();
     void ReleaseBrowsingContext(std::uint64_t session);
     std::shared_ptr<StorageArea> Storage(const std::wstring& origin,std::uint64_t session=0);
+    std::shared_ptr<Internal::OriginFileSystem> OriginFiles(const std::wstring& origin);
     static std::wstring Origin(const std::wstring& url);
     static std::wstring Site(const std::wstring& url);
     static const wchar_t* UserAgent();

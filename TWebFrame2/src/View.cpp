@@ -701,7 +701,7 @@ struct View::Impl {
             queued.dpiBounds=*reinterpret_cast<const RECT*>(lParam);queued.hasDpiBounds=true;
         }
         // Coalesce viewport updates; keep input and completion tasks in order.
-        if(message==WM_SIZE||message==WM_MOVE||message==WM_DPICHANGED||
+        if(message==WM_SIZE||message==WM_MOVE||message==WM_DPICHANGED||message==WM_DPICHANGED_AFTERPARENT||
            (message==WM_TIMER&&(wParam==kAnimationFrameTimer||wParam==kJavaScriptTimer)))
             for(auto& pending:deferredExecutionMessages)
                 if(pending.message.hwnd==target&&pending.message.message==message&&
@@ -734,7 +734,7 @@ struct View::Impl {
         // Registered messages (0xC000+) include OS/accessibility queries with
         // borrowed pointers. They must never be mistaken for queued host jobs.
         const bool hostJob=message>=WM_APP&&message<0xc000;
-        if(message==WM_SIZE||message==WM_MOVE||message==WM_DPICHANGED||
+        if(message==WM_SIZE||message==WM_MOVE||message==WM_DPICHANGED||message==WM_DPICHANGED_AFTERPARENT||
            message==WM_COMMAND||message==WM_CLOSE||message==WM_TIMER||hostJob){
             self->DeferExecutionMessage(window,message,wParam,lParam);
             if(message==WM_COMMAND||message==WM_CLOSE||hostJob)
@@ -3971,7 +3971,7 @@ struct View::Impl {
                 message==WM_COPY||message==WM_CUT||message==WM_PASTE||message==WM_UNDO||
                 message==WM_UNICHAR||message==WM_IME_STARTCOMPOSITION||
                 message==WM_IME_COMPOSITION||message==WM_IME_ENDCOMPOSITION;
-            if(scriptTimer||scriptJob||input||message==WM_SIZE||message==WM_DPICHANGED){
+            if(scriptTimer||scriptJob||input||message==WM_SIZE||message==WM_DPICHANGED||message==WM_DPICHANGED_AFTERPARENT){
                 if(scriptTimer)KillTimer(hwnd,wParam);
                 DeferExecutionMessage(hwnd,message,wParam,lParam);return 0;
             }
@@ -4095,7 +4095,13 @@ struct View::Impl {
             if(wParam==kImageAnimationTimer){AdvanceImageAnimations();return 0;}break;
         case kAnimationFrameFallbackMessage:javascript.RunAnimationFrame();return 0;
         case WM_SIZE:{HideTooltip();const bool viewportOnly=!layoutDirty||viewportOnlyDirty;layoutDirty=true;viewportOnlyDirty=viewportOnly;UpdateJavaScriptViewport();LayoutScriptDialog();DispatchViewportResize();InvalidateView();return 0;}
-        case WM_DPICHANGED:{HideTooltip();UpdateTooltipMetrics();const bool viewportOnly=!layoutDirty||viewportOnlyDirty;layoutDirty=true;viewportOnlyDirty=viewportOnly;UpdateJavaScriptViewport();LayoutScriptDialog();DispatchViewportResize();InvalidateView();return 0;}
+        case WM_DPICHANGED:case WM_DPICHANGED_AFTERPARENT:{HideTooltip();UpdateTooltipMetrics();
+            // Child windows receive AFTERPARENT in a per-monitor-v2 host. Both
+            // notifications must invalidate device resources before updating
+            // CSS viewport and input geometry for the new monitor scale.
+            ResetRenderTargets();layout.DiscardDeviceResources();
+            const bool viewportOnly=!layoutDirty||viewportOnlyDirty;layoutDirty=true;viewportOnlyDirty=viewportOnly;
+            UpdateJavaScriptViewport();LayoutScriptDialog();DispatchViewportResize();InvalidateView();return 0;}
         case WM_DROPFILES:{
             const auto drop=reinterpret_cast<HDROP>(wParam);
             POINT point{};DragQueryPoint(drop,&point);
@@ -4746,7 +4752,8 @@ std::wstring View::DumpLayoutJson(bool includeChildFrames)const{
         for(const auto& child:node->RenderChildren())collectShadowStyles(child);
     };
     if(body&&body->shadowRoot)collectShadowStyles(body->shadowRoot);
-    std::wstring output=L"{\"document\":"+DumpLayoutJson()+
+    if(impl_->layoutDirty)const_cast<Impl*>(impl_.get())->Rebuild();
+    std::wstring output=L"{\"document\":"+impl_->layout.DumpJson(true)+
         L",\"bodyChildCount\":"+std::to_wstring(body?body->children.size():0)+
         L",\"bodyShadowChildCount\":"+std::to_wstring(body&&body->shadowRoot?body->shadowRoot->children.size():0)+
         L",\"bodyShadowText\":"+quote(shadowText)+
