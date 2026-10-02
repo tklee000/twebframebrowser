@@ -835,7 +835,7 @@ redirect 쿠키와 URL, 동기/비동기 iframe redirect의 최종 origin, scrip
 ~~~powershell
 $solutionRoot = (Get-Location).Path + '\'
 msbuild .\TWebFrame.sln /t:Build /p:Configuration=Release /p:Platform=x64 /m
-.\bin\x64\Release\TWebFrameTests.exe
+.\TWebFrame2\tests\bin\x64\Release\TWebFrameTests.exe
 .\TWebFrame2\tests\bin\x64\Release\BrowserContextRegression.exe
 
 msbuild .\TWebFrame2\tests\ScriptHttpRegression.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=$solutionRoot" /p:BuildProjectReferences=false /m
@@ -885,5 +885,30 @@ WinHTTP의 TLS/프록시/인증서 처리는 Windows 동작을 사용한다.
 [Web Storage](https://html.spec.whatwg.org/multipage/webstorage.html),
 [Structured Data](https://html.spec.whatwg.org/multipage/structured-data.html),
 [Web Messaging](https://html.spec.whatwg.org/multipage/web-messaging.html).
+
+## 19. 체크박스 클릭 회귀 수정 (2026-10-02)
+
+1.png의 증상은 위젯이 표시되고 입력 포커스가 잡혀도 체크박스의 click이 전달되지 않는 경우다.
+마우스를 놓을 때 실행하는 ReleasePrimaryPointer가 일반 parent만 따라 문서 연결을 검사해,
+closed shadow root 안의 요소를 문서에서 분리된 것으로 판단하고 활성화를 생략했다.
+이 경로는 커밋 931ab0b에서 추가되었으며, Phase 1~4 이후에도 남아 있었다.
+
+클릭 대상을 결정하는 공통 조상 탐색과 문서 연결 검사에 shadow host를 포함한 composed parent 경로를 사용하도록 수정했다.
+pointerup 도중 제거된 요소는 계속 활성화하지 않으며, 취소된 클릭의 checked 상태도 복원한다.
+실제 View의 네이티브 마우스 입력으로 closed shadow checkbox의 신뢰된 클릭,
+preventDefault에 의한 체크 복원, pointerup 중 요소 제거를 회귀검사에 추가했다.
+
+Cloudflare 공식 인터랙션 테스트 키 3x00000000000000000000FF로 같은 증상을 재현했다.
+수정 전에는 클릭 이후에도 interactiveBegin 상태에 머물렀다.
+수정 후에는 네이티브 클릭으로 interactiveEnd → complete 메시지와
+TEST_ONLY|interactive|success|dummy=true 콜백을 확인했다.
+Run-TurnstileIntegration.ps1에 이 경우를 추가하고 클릭 전에는 완료되지 않았는지도 검사한다.
+진단 프로그램은 DOM click 호출 대신 WM_MOUSEMOVE/WM_LBUTTONDOWN/WM_LBUTTONUP을 View에 전달한다.
+최종 재실행에서 pass/fail/interactive 세 경우 모두 통과했고, 검사 스크립트가 시작한 서버도 종료했다.
+
+18.4의 전체 테스트 실행 명령은 예전 root bin 실행 파일 경로를 가리키고 있어 현재 프로젝트 출력 경로로 바로잡았다.
+최신 빌드의 TWebFrame2/tests/bin/x64/Release/TWebFrameTests.exe에서 전체 검사를 다시 실행해 통과했다.
+standalone 브라우저도 다시 빌드했으며 실행 파일은 bin/Browser/x64/Release/TWebFrameBrowser.exe다.
+이 수정은 클릭 이벤트 전달 회귀를 해결한 것이며 실제 서비스의 보안검사 통과를 보장하지 않는다.
 
 

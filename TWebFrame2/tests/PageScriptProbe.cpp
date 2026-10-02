@@ -2,6 +2,7 @@
 #include <TWebFrame/TWebFrame.h>
 #include <objbase.h>
 #include <chrono>
+#include <cmath>
 #include <iostream>
 #include <filesystem>
 #include <fstream>
@@ -36,9 +37,15 @@ void SaveLayoutSnapshot(TWebFrame::View& view,const std::filesystem::path& filen
 }
 
 int wmain(int argc,wchar_t** argv){
-    if(argc<2||argc>5){std::wcerr<<L"Usage: PageScriptProbe https://host/path [observation-seconds] [output-directory] [--visible|--native]\n";return 2;}
-    const bool visible=argc==5&&std::wstring(argv[4])==L"--visible";
-    const bool native=argc==5&&std::wstring(argv[4])==L"--native";
+    if(argc<2){std::wcerr<<L"Usage: PageScriptProbe https://host/path [observation-seconds] [output-directory] [--visible] [--native] [--click=x,y]\n";return 2;}
+    bool visible=false,native=false,clickRequested=false;int clickX=0,clickY=0;
+    for(int i=4;i<argc;++i){
+        const std::wstring option=argv[i];
+        if(option==L"--visible")visible=true;
+        else if(option==L"--native")native=true;
+        else if(option.rfind(L"--click=",0)==0&&swscanf_s(option.c_str()+8,L"%d,%d",&clickX,&clickY)==2&&clickX>=0&&clickY>=0&&clickX<32768&&clickY<32768)clickRequested=true;
+        else {std::wcerr<<L"Unknown or invalid option\n";return 2;}
+    }
     const auto observationSeconds=argc>=3?std::max(1,std::min(600,_wtoi(argv[2]))):60;
     const auto outputDirectory=argc>=4?std::filesystem::path(argv[3]):std::filesystem::path(L"TWebFrame2/tests/artifacts");
     std::filesystem::create_directories(outputDirectory);
@@ -83,10 +90,15 @@ int wmain(int argc,wchar_t** argv){
             });
         )JS");
     });
-    view->SetNetworkResourceLoader([context=client.Context(),outputMutex](const TWebFrame::NetworkRequest& request){
+    view->SetNetworkResourceLoader([context=client.Context(),outputMutex,outputDirectory](const TWebFrame::NetworkRequest& request){
         auto result=context->Request(request);
         // URLs are printed without query strings; response cookies are not logged.
         {std::lock_guard<std::mutex> lock(*outputMutex);
+            if(result.contentType.find(L"text/html")!=std::wstring::npos){
+                const auto cache=outputDirectory/(L"frame-resource-"+std::to_wstring(std::hash<std::wstring>{}(request.url))+L".html");
+                std::ofstream output(cache,std::ios::binary);
+                output.write(reinterpret_cast<const char*>(result.bytes.data()),result.bytes.size());
+            }
             std::wcout<<L"RESOURCE "<<result.status<<L" bytes="<<result.bytes.size()<<L' '<<request.url.substr(0,request.url.find_first_of(L"?#"))<<L'\n';}
         return result;
     });
@@ -119,7 +131,7 @@ int wmain(int argc,wchar_t** argv){
     });
     const bool started=view->NavigateToStringAsync(HttpClient::DecodeText(page),page.url);
     auto nextSnapshot=std::chrono::steady_clock::now()+std::chrono::seconds(10);
-    bool settling=false;
+    bool settling=false,clicked=false;
     while(started&&std::chrono::steady_clock::now()<deadline){
         MSG message{};while(std::chrono::steady_clock::now()<deadline&&PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){
             TranslateMessage(&message);DispatchMessageW(&message);
@@ -134,6 +146,16 @@ int wmain(int argc,wchar_t** argv){
                 std::wcout<<L"OBSERVE ms="<<elapsed()<<L" error="<<view->LastError()<<L'\n';
                 nextSnapshot=std::chrono::steady_clock::now()+std::chrono::seconds(10);
             }
+        }
+        if(clickRequested&&!clicked&&elapsed()>=10000){
+            clicked=true;SaveLayoutSnapshot(*view,outputDirectory/L"page-script-before-click.json");
+            const auto scale=static_cast<double>(GetDpiForWindow(view->Window()))/96.0;
+            const auto point=MAKELPARAM(static_cast<int>(std::lround(clickX*scale)),static_cast<int>(std::lround(clickY*scale)));
+            SendMessageW(view->Window(),WM_MOUSEMOVE,0,point);
+            SendMessageW(view->Window(),WM_LBUTTONDOWN,MK_LBUTTON,point);
+            SendMessageW(view->Window(),WM_LBUTTONUP,0,point);
+            std::wcout<<L"POINTER_CLICK "<<clickX<<L','<<clickY<<L" error="<<view->LastError()<<L'\n';
+            SaveLayoutSnapshot(*view,outputDirectory/L"page-script-after-click.json");
         }
         // A long script job may finish after the initial observation period.
         // Allow its ordinary queued frame messages to reach the parent view.

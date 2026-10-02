@@ -3333,13 +3333,11 @@ struct View::Impl {
         std::shared_ptr<Node> clickTarget;
         if(pressed){
             if(captured)clickTarget=target;
-            else for(auto candidate=target;candidate&&!clickTarget;candidate=candidate->parent.lock())
-                for(auto down=pressed;down;down=down->parent.lock())if(candidate==down){clickTarget=candidate;break;}
+            else for(auto candidate=target;candidate&&!clickTarget;candidate=candidate->ComposedParent())
+                for(auto down=pressed;down;down=down->ComposedParent())if(candidate==down){clickTarget=candidate;break;}
         }
         // A release does not activate a node removed by a pointerup listener.
-        bool connected=false;
-        for(auto current=clickTarget;current;current=current->parent.lock())if(current==document.Root()){connected=true;break;}
-        if(connected){
+        if(IsConnectedToDocument(clickTarget)){
             Activate(clickTarget,x,y,false,pointer,false);
             if(detail==2)javascript.DispatchNodeEvent(clickTarget,L"dblclick",pointer);
         }

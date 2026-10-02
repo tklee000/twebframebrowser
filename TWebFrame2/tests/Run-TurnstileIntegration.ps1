@@ -1,11 +1,11 @@
 param(
     [string]$Probe = (Join-Path $PSScriptRoot 'bin\x64\Release\PageScriptProbe.exe'),
     [string]$OutputDirectory = (Join-Path $PSScriptRoot 'artifacts\browser-context-turnstile-current'),
-    [ValidateRange(10, 120)][int]$ObservationSeconds = 30
+    [ValidateRange(15, 120)][int]$ObservationSeconds = 30
 )
 
-# Uses only Cloudflare's documented always-pass and always-fail public keys.
-# The fixture has no production keys, accounts or challenge interaction.
+# Uses only Cloudflare's documented pass, fail and interactive public test keys.
+# Pointer interaction is confined to the local test-key fixture.
 $ErrorActionPreference = 'Stop'
 if (!(Test-Path -LiteralPath $Probe)) { throw 'Build PageScriptProbe.vcxproj in Release|x64 first.' }
 $Probe = (Resolve-Path -LiteralPath $Probe).Path
@@ -38,21 +38,33 @@ try {
         } catch { Start-Sleep -Milliseconds 100 }
     }
     if (!$ready) { throw 'The test fixture server did not become ready.' }
-    foreach ($case in @('pass', 'fail')) {
+    foreach ($case in @('pass', 'fail', 'interactive')) {
         $caseDirectory = Join-Path $OutputDirectory $case
         $log = Join-Path $OutputDirectory ($case + '.log')
-        & $Probe ($baseUrl + '?case=' + $case) $ObservationSeconds $caseDirectory --native *> $log
+        $probeOptions = @('--native')
+        # DIP coordinates of the checkbox in this fixed-size diagnostic fixture.
+        if ($case -eq 'interactive') { $probeOptions += '--click=48,150' }
+        & $Probe ($baseUrl + '?case=' + $case) $ObservationSeconds $caseDirectory @probeOptions *> $log
         if ($LASTEXITCODE -ne 0) { throw ($case + ' probe failed; see ' + $log) }
         $text = Get-Content -LiteralPath (Join-Path $caseDirectory 'page-script-text.txt') -Raw
         $layout = Get-Content -LiteralPath (Join-Path $caseDirectory 'page-script-layout.json') -Raw | ConvertFrom-Json
         $transportLog = Get-Content -LiteralPath $log -Raw
-        $callback = if ($case -eq 'pass') { $text.Contains('TEST_ONLY|pass|success|dummy=true') }
-                    else { $text -match 'TEST_ONLY\|fail\|error\|code=\d+' }
-        $event = if ($case -eq 'pass') { 'complete' } else { 'fail' }
+        $callback = if ($case -eq 'fail') { $text -match 'TEST_ONLY\|fail\|error\|code=\d+' }
+                    else { $text.Contains('TEST_ONLY|' + $case + '|success|dummy=true') }
+        $event = if ($case -eq 'fail') { 'fail' } else { 'complete' }
         if (!$callback -or $layout.runtime.receivedMessages -notcontains $event -or
             $layout.runtime.pendingPromises -ne 0 -or $transportLog -notmatch '(?m)^RUNTIME_ERROR\s*$' -or
             $transportLog -notmatch '(?m)^EXECUTION_TIME_LIMIT 0\s*$') {
             throw ($case + ' integration did not produce the expected callback and message; see ' + $log)
+        }
+        if ($case -eq 'interactive') {
+            $before = Get-Content -LiteralPath (Join-Path $caseDirectory 'page-script-before-click.json') -Raw | ConvertFrom-Json
+            if ($before.runtime.receivedMessages -notcontains 'interactiveBegin' -or
+                $before.runtime.receivedMessages -contains 'complete' -or
+                $layout.runtime.receivedMessages -notcontains 'interactiveEnd' -or
+                $transportLog -notmatch '(?m)^POINTER_CLICK 48,150 error=\s*$') {
+                throw ('Interactive test-key completion must follow the native pointer click; see ' + $log)
+            }
         }
         Write-Output ('PASS: native Turnstile test-key ' + $case + ' callback and iframe message')
     }

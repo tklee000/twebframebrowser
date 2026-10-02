@@ -7530,6 +7530,33 @@ int wmain(int argc,wchar_t** argv) {
                 L"unobscured iframe contents retain pointer routing and native focus");
             Check(inputView->ExecuteScript(L"return document.querySelector('nav:hover')===null;",
                 &selectionResult,&selectionError)&&selectionResult==L"true",L"moving out of popup into iframe clears its ancestor hover state");
+            Check(inputView->NavigateToString(LR"HTML(<style>html,body{margin:0}</style><body><script>
+                var shadowClicks=[],shadowRoot=document.body.attachShadow({mode:'closed'});
+                shadowRoot.innerHTML='<style>input{display:block;width:24px;height:24px;margin:0}</style><input type="checkbox">';
+                var shadowCheckbox=shadowRoot.querySelector('input');
+                shadowCheckbox.addEventListener('pointerdown',e=>shadowClicks.push(e.type));
+                shadowCheckbox.addEventListener('pointerup',e=>shadowClicks.push(e.type));
+                shadowCheckbox.addEventListener('click',e=>shadowClicks.push(e.type+':'+e.isTrusted+':'+e.detail));
+                </script>)HTML"),L"closed shadow checkbox pointer fixture loads");
+            SendMessageW(inputWindow,WM_LBUTTONDOWN,MK_LBUTTON,framePoint(12,12));
+            SendMessageW(inputWindow,WM_LBUTTONUP,0,framePoint(12,12));
+            Check(inputView->ExecuteScript(L"return shadowCheckbox.checked+'|'+shadowClicks.join(',')+'|'+(document.body.shadowRoot===null);",
+                &selectionResult,&selectionError)&&selectionResult==L"true|pointerdown,pointerup,click:true:1|true",
+                L"a native pointer release activates a checkbox in a closed shadow tree with a trusted click");
+            Check(inputView->ExecuteScript(L"shadowClicks=[];shadowCheckbox.addEventListener('click',e=>e.preventDefault(),{once:true});",
+                nullptr,&selectionError),selectionError.c_str());
+            SendMessageW(inputWindow,WM_LBUTTONDOWN,MK_LBUTTON,framePoint(12,12));
+            SendMessageW(inputWindow,WM_LBUTTONUP,0,framePoint(12,12));
+            Check(inputView->ExecuteScript(L"return shadowCheckbox.checked+'|'+shadowClicks.join(',');",
+                &selectionResult,&selectionError)&&selectionResult==L"true|pointerdown,pointerup,click:true:1",
+                L"canceling a shadow checkbox click restores the previous checked state");
+            Check(inputView->ExecuteScript(L"shadowClicks=[];shadowCheckbox.addEventListener('pointerup',()=>shadowCheckbox.remove(),{once:true});",
+                nullptr,&selectionError),selectionError.c_str());
+            SendMessageW(inputWindow,WM_LBUTTONDOWN,MK_LBUTTON,framePoint(12,12));
+            SendMessageW(inputWindow,WM_LBUTTONUP,0,framePoint(12,12));
+            Check(inputView->ExecuteScript(L"return shadowCheckbox.checked+'|'+shadowClicks.join(',');",
+                &selectionResult,&selectionError)&&selectionResult==L"true|pointerdown,pointerup",
+                L"a checkbox removed during pointerup remains unactivated in a shadow tree");
             Check(inputView->NavigateToString(
                 L"<style>*{margin:0}body{background:#28496a}iframe{width:160px;height:90px;border:0}</style>"
                 L"<iframe id='friendly-frame'></iframe>"),
