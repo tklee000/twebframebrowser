@@ -1,15 +1,28 @@
     Value TrustedValue(const std::wstring& kind,const Value& input){
+        const auto text=StringArgument(input);if(text.abrupt)return text;
         auto value=ObjectValue(ObjectKind::Plain);value.object->props[L"$host:trustedKind"]=Value::String(kind);
         value.object->nativeStateKind=kind==L"TrustedHTML"?Object::NativeStateKind::TrustedHTML:kind==L"TrustedScript"?Object::NativeStateKind::TrustedScript:Object::NativeStateKind::TrustedScriptURL;
-        value.object->props[L"$primitive"]=Value::String(String(input));
+        value.object->trustedTypeData=text.largeString?text.largeString:std::make_shared<const std::wstring>(text.StringText());
+        value.object->props[L"$primitive"]=Value::SharedString(value.object->trustedTypeData);
         const auto ctor=global->values.find(kind);if(ctor!=global->values.end())value.object->prototype=GetProperty(ctor->second,L"prototype").object;
-        value.object->props[L"toString"]=ObjectNative(value.object,[](RuntimeCore&,const Value& receiver,const std::vector<Value>&){return receiver.object->props[L"$primitive"];});
-        value.object->props[L"toJSON"]=value.object->props[L"toString"];return value;
+        return value;
     }
     void InstallTrustedTypes(){
         for(const auto* name:{L"TrustedHTML",L"TrustedScript",L"TrustedScriptURL"}){
             auto ctor=Native([](RuntimeCore& r,const Value&,const std::vector<Value>&){return Value::Thrown(r.ErrorValue(L"TypeError",L"Illegal constructor"));});
             ctor.native->props[L"name"]=Value::String(name);ctor.native->props[L"prototype"]=ObjectValue(ObjectKind::Plain);
+            const auto expected=std::wstring(name)==L"TrustedHTML"?Object::NativeStateKind::TrustedHTML:std::wstring(name)==L"TrustedScript"?Object::NativeStateKind::TrustedScript:Object::NativeStateKind::TrustedScriptURL;
+            for(const auto* method:{L"toString",L"toJSON"}){
+                auto stringify=Native([expected](RuntimeCore& r,const Value& receiver,const std::vector<Value>&){
+                    const auto value=r.Deref(receiver);
+                    if(!value.object||value.object->nativeStateKind!=expected||!value.object->trustedTypeData)
+                        return Value::Thrown(r.ErrorValue(L"TypeError",L"Trusted Type stringifier called on incompatible receiver"));
+                    return Value::SharedString(value.object->trustedTypeData);
+                });
+                stringify.native->props[L"name"]=Value::String(method);stringify.native->props[L"length"]=Value::Number(0);
+                stringify.native->props[L"$notConstructor"]=Value::Bool(true);
+                ctor.native->props[L"prototype"].object->props[method]=stringify;
+            }
             global->values[name]=ctor;GlobalWindowObject()->props[name]=ctor;
         }
         auto factory=ObjectValue(ObjectKind::Plain);auto policies=ObjectValue(ObjectKind::Plain);
@@ -24,7 +37,8 @@
                 policy.object->props[pair.first]=r.ObjectNative(policy.object,[method=pair.first,kind=pair.second](RuntimeCore& r,const Value& receiver,const std::vector<Value>& args){
                     const auto callback=receiver.object->props[L"$host:"+method];
                     if(!r.IsCallable(callback))return Value::Thrown(r.ErrorValue(L"TypeError",L"Policy has no rule for this type"));
-                    auto forwarded=args;if(forwarded.empty())forwarded.push_back(Value::String(L"undefined"));else forwarded[0]=Value::String(r.String(forwarded[0]));
+                    auto forwarded=args;if(forwarded.empty())forwarded.push_back(Value::String(L"undefined"));
+                    else{forwarded[0]=r.StringArgument(forwarded[0]);if(forwarded[0].abrupt)return forwarded[0];}
                     const auto result=r.Call(callback,receiver,forwarded);return r.TrustedValue(kind,result.type==Value::Type::Null||result.type==Value::Type::Undefined?Value::String(L""):result);
                 });
             }

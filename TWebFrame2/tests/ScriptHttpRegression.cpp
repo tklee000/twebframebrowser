@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -19,6 +20,23 @@ int failures=0;
 void Check(bool condition,const wchar_t* label){
     std::wcout<<(condition?L"PASS: ":L"FAIL: ")<<label<<L'\n';
     if(!condition)++failures;
+}
+void CheckInitialFrameContext(HWND host){
+    RECT bounds{0,0,320,120};
+    for(const bool parallel:{false,true})for(const bool secure:{false,true}){
+        auto view=TWebFrame::View::Create(host,bounds);
+        view->SetParallelResourceLoading(parallel);
+        const std::wstring origin=secure?L"https://frame-context.test":L"http://frame-context.test";
+        Check(view->NavigateToString(L"<body></body>",origin+L"/parent"),L"initial iframe security fixture loads");
+        const std::wstring expected=secure?L"about:blank|true|function|object":L"about:blank|false|undefined|undefined";
+        std::wstring result;
+        Check(view->ExecuteScript(LR"JS(
+            var f=document.createElement('iframe');document.body.appendChild(f);
+            var w=f.contentWindow;
+            return w.location.href+'|'+w.isSecureContext+'|'+typeof w.SubtleCrypto+'|'+typeof w.crypto.subtle;
+        )JS",&result)&&result==expected,L"new blank iframe immediately inherits its parent's secure context");
+        if(result!=expected)std::wcout<<L"  actual: "<<result<<L" expected: "<<expected<<L'\n';
+    }
 }
 class Server {
     SOCKET listener=INVALID_SOCKET;
@@ -48,6 +66,17 @@ public:
                 auto lower=request;std::transform(lower.begin(),lower.end(),lower.begin(),[](unsigned char c){return static_cast<char>(tolower(c));});
                 body=lower.find("x-test: sent\r\n")!=std::string::npos?"sent":"missing";
             }else if(path=="/missing"){status="404 Not Found";body="missing-body";}
+            else if(path=="/document-403"||path=="/document-404"||path=="/document-503"){
+                const auto code=path.substr(10);
+                status=code+(code=="403"?" Forbidden":code=="404"?" Not Found":" Service Unavailable");
+                headers="Content-Type: text/html; charset=utf-8\r\n";
+                if(code=="403")headers+="cf-mitigated: challenge\r\nSet-Cookie: document403=retained; Path=/\r\n";
+                body="<style>#http-document{width:120px;height:36px}</style>"
+                    "<link rel='stylesheet' href='/denied.css'><div id='http-document'>HTTP "+code+"</div>"
+                    "<script src='/denied-script'></script><script>window.documentStatus="+code+";</script>";
+            }else if(path=="/document-redirect"){status="302 Found";headers+="Location: /document-403\r\n";body="";}
+            else if(path=="/denied-script"){status="403 Forbidden";headers="Content-Type: application/javascript\r\n";body="window.deniedScript=true;";}
+            else if(path=="/denied.css"){status="403 Forbidden";headers="Content-Type: text/css\r\n";body="#http-document{width:999px}";}
             else if(path=="/unauthorized"){status="401 Unauthorized";body="unauthorized-body";}
             else if(path=="/cors")headers+="Access-Control-Allow-Origin: *\r\nAccess-Control-Expose-Headers: X-Result\r\n";
             else if(path=="/redirect"){status="302 Found";headers+="Location: /missing\r\n";body="";}
@@ -114,6 +143,73 @@ void Async(TWebFrame::View& view,const std::wstring& script,const std::wstring& 
     Check(accepted&&message==expected,label);if(!accepted||message!=expected)std::wcerr<<L"Expected "<<expected<<L", got "<<message<<L", error "<<error<<L'\n';
     view.SetMessageHandler({});
 }
+bool WaitFor(const std::function<bool()>& ready){
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    while(!ready()&&std::chrono::steady_clock::now()<deadline){
+        MSG event{};if(PeekMessageW(&event,nullptr,0,0,PM_REMOVE)){TranslateMessage(&event);DispatchMessageW(&event);}else Sleep(1);
+    }
+    return ready();
+}
+void CheckDocumentResponses(TWebFrame::View& view,const std::wstring& origin){
+    // Exercise the common BrowserContext transport without the host adapter.
+    view.SetResourceLoader({});view.SetNetworkResourceLoader({});view.SetPageScriptsEnabled(true);
+    Async(view,LR"JS(fetch('/document-403').then(r=>chrome.webview.postMessage(r.status+'|'+r.ok+'|'+r.headers.get('cf-mitigated')));)JS",
+        L"403|false|challenge",L"fetch retains the original 403 status independently of document rendering");
+    auto client=std::make_shared<HttpClient>();
+    for(const int status:{403,404,503}){
+        const auto response=client->Get(origin+L"/document-"+std::to_wstring(status),origin,true);
+        Check(response.status==static_cast<unsigned>(status)&&response.error.empty()&&HttpClient::DecodeText(response).find(L"HTTP "+std::to_wstring(status))!=std::wstring::npos,
+            L"browser HTTP adapter retains complete 403/404/503 HTML without a transport error");
+    }
+    const auto failed=client->Get(L"not-a-network-url");
+    Check(failed.status==0&&!failed.error.empty(),L"browser HTTP adapter still reports a failed request");
+    for(const bool adapter:{false,true}){
+        if(adapter)view.SetNetworkResourceLoader([client](const TWebFrame::NetworkRequest& request){
+            const auto source=client->Request(request);TWebFrame::NetworkResponse response;
+            response.status=source.status;response.url=source.url;response.headers=source.headers;response.contentType=source.contentType;
+            response.body=HttpClient::DecodeText(source);response.bytes=source.body;response.error=source.error;return response;
+        });
+        std::wcout<<L"Document transport: "<<(adapter?L"browser HTTP adapter":L"common BrowserContext")<<L'\n';
+        for(const bool parallel:{false,true})for(const int status:{403,404,503}){
+            view.SetParallelResourceLoading(parallel);
+            std::wstring event;view.SetMessageHandler([&](const std::wstring& value){event=value;});
+            const auto code=std::to_wstring(status);
+            Check(view.NavigateToString(L"<iframe id='http-frame' src='/document-"+code+
+                L"' onload=\"chrome.webview.postMessage('document-load')\" onerror=\"chrome.webview.postMessage('document-error')\"></iframe>",origin+L"/parent"),
+                L"HTTP error-document frame fixture starts");
+            Check(WaitFor([&]{return !event.empty();})&&event==L"document-load",L"synchronous and asynchronous 403/404/503 iframe documents dispatch load");
+            view.SetMessageHandler({});
+            Execute(view,LR"JS(var f=document.getElementById('http-frame');return f.contentWindow.documentStatus+'|'+f.contentDocument.getElementById('http-document').textContent+'|'+f.contentDocument.getElementById('http-document').getBoundingClientRect().width+'|'+typeof f.contentWindow.deniedScript;)JS",
+                code+L"|HTTP "+code+L"|120|undefined",L"error HTML renders and executes inline script while 403 script and CSS remain rejected");
+        }
+        for(const int status:{403,404,503}){
+            Check(view.NavigateToString(L"<main id='previous-document'>Previous</main>",origin+L"/before"),L"standalone navigation fixture loads");
+            bool completed=false,loaded=false;view.SetLoadHandler([&](bool ok,const std::wstring&){completed=true;loaded=ok;});
+            const auto code=std::to_wstring(status);
+            const auto path=status==403?L"/document-redirect#entry":L"/document-"+code;
+            const bool accepted=view.ExecuteScript(L"location.href='"+path+L"';");
+            Check(accepted&&WaitFor([&]{return completed;})&&loaded,L"standalone navigation commits 403/404/503 response documents");
+            view.SetLoadHandler({});
+            Execute(view,L"return location.pathname+location.hash+'|'+documentStatus+'|'+document.getElementById('http-document').getBoundingClientRect().width+'|'+typeof deniedScript;",
+                L"/document-"+code+(status==403?L"#entry":L"")+L"|"+code+L"|120|undefined",L"document navigation retains the final redirect URL and ordinary resource error rules");
+        }
+        }
+    for(const unsigned status:{0u,200u,403u}){
+        view.SetNetworkResourceLoader([status](const TWebFrame::NetworkRequest& request){
+            TWebFrame::NetworkResponse response;response.status=status;response.url=request.url;
+            response.body=L"<script>window.partialDocumentExecuted=true;</script>";
+            if(status)response.error=L"Incomplete response body";return response;
+        });
+        view.NavigateToString(L"<main id='previous-document'>Previous</main>",origin+L"/before");
+        bool completed=false,loaded=true;view.SetLoadHandler([&](bool ok,const std::wstring&){completed=true;loaded=ok;});
+        const bool accepted=view.ExecuteScript(L"location.href='/broken-document';");
+        Check(accepted&&WaitFor([&]{return completed;})&&!loaded,L"transport failures and incomplete 200/403 responses remain load failures");
+        view.SetLoadHandler({});
+        Execute(view,L"return !!document.getElementById('previous-document')+'|'+typeof partialDocumentExecuted;",L"true|undefined",
+            L"failed transport preserves the previous document and never executes a partial body");
+    }
+    view.SetNetworkResourceLoader({});view.SetParallelResourceLoading(false);
+}
 }
 int wmain(){
     WSADATA sockets{};if(WSAStartup(MAKEWORD(2,2),&sockets))return 1;
@@ -124,12 +220,23 @@ int wmain(){
         const auto origin=L"http://127.0.0.1"+suffix;
         const auto cross=L"http://localhost"+suffix;
         const auto host=CreateWindowExW(WS_EX_TOOLWINDOW,L"STATIC",L"HTTP regression",WS_POPUP,0,0,320,120,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+        CheckInitialFrameContext(host);
         {
             RECT bounds{0,0,320,120};auto view=TWebFrame::View::Create(host,bounds);
             Check(static_cast<bool>(view),L"real View is created");if(!view)return 1;
             std::atomic<unsigned> callbackRequests{0};
             view->SetResourceLoader([&](const std::wstring&,std::wstring& text){++callbackRequests;text=L"incorrect text-only response";return true;});
             view->SetParallelResourceLoading(true);Check(view->NavigateToString(L"<main>HTTP fixture</main>",origin+L"/index"),L"HTTP document fixture loads");
+            Async(*view,LR"JS(
+                var workerUrl=URL.createObjectURL(new Blob(["var p=trustedTypes.createPolicy('identity',{createScript:function(s){return s;}});onmessage=function(e){if(e.isTrusted&&e.origin===''&&e.source===null)eval(p.createScript(e.data));};postMessage('ready');"],{type:'text/javascript'}));
+                var worker=new Worker(workerUrl),workerReply='';
+                worker.onmessage=function(e){
+                    if(e.data==='ready')worker.postMessage("postMessage({same:eval('this')===self,number:eval('41')});setTimeout(function(){postMessage('timer');},20);");
+                    else if(e.data==='timer'){worker.terminate();URL.revokeObjectURL(workerUrl);chrome.webview.postMessage(workerReply+'|timer');}
+                    else workerReply=String(e.data.same&&e.isTrusted&&e.origin===''&&e.source===null)+'|'+e.data.number;
+                };
+                worker.onerror=function(e){chrome.webview.postMessage('error:'+e.message);};
+            )JS",L"true|41|timer",L"View delivers Worker wakeups and Worker timers through its Windows event loop");
             Execute(*view,LR"JS(var x=new XMLHttpRequest(),events=[];x.open('GET','/partial',false);x.setRequestHeader('X-Test','sent');x.onload=()=>events.push('load');x.onerror=()=>events.push('error');x.send();return x.status+'|'+x.statusText+'|'+x.getResponseHeader('x-result')+'|'+x.responseText+'|'+events.join(',');)JS",
                 L"206|Partial Content|retained|sent|load",L"GET XHR retains status, headers, body and request headers");
             Execute(*view,LR"JS(var denied=new XMLHttpRequest(),event='';denied.open('GET','/unauthorized',false);denied.onload=()=>event='load';denied.onerror=()=>event='error';denied.send();return denied.status+'|'+denied.responseText+'|'+event;)JS",
@@ -245,6 +352,7 @@ int wmain(){
             navigate.mode=TWebFrame::NetworkRequest::Mode::Navigation;navigate.credentials=TWebFrame::NetworkRequest::Credentials::Include;navigate.topLevelNavigation=true;
             const auto navigationCount=server.requests.load();network->Get(navigate);network->Get(navigate);
             Check(server.requests.load()==navigationCount+2,L"top-level navigations are not served from the resource cache");
+            CheckDocumentResponses(*view,origin);
         }
         DestroyWindow(host);
     }

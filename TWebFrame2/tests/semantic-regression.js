@@ -1,5 +1,6 @@
 (function(){
 var results=window.__semanticResults={cases:[],complete:false,pending:0};
+var pcre2=typeof __supportPcre2==='undefined'||__supportPcre2;
 function check(name,source){var record={name:name};results.cases.push(record);try{var value=new Function('return ('+source+')();')();if(value&&typeof value.then==='function'){++results.pending;value.then(function(v){record.value=v;if(--results.pending===0)results.complete=true;},function(e){record.error=e.name;record.message=e.message;if(--results.pending===0)results.complete=true;});}else record.value=value;}catch(e){record.error=e.name;record.message=e.message;}}
 check("unresolved-reference","function(){try{return __corpusDefinitelyMissingName;}catch(e){return e.name;}}");
 check("strict-this","function(){return (function(){'use strict';return this===undefined;})()}");
@@ -22,8 +23,8 @@ check("eval-scope","function(){var x=3;return eval('x+4');}");
 check("proxy-get","function(){return new Proxy({x:3},{get:function(o,k){return o[k]+1;}}).x;}");
 check("descriptor-getter","function(){var o={};Object.defineProperty(o,'x',{get:function(){return 3;}});return [o.x,typeof Object.getOwnPropertyDescriptor(o,'x').get];}");
 check("regexp-unicode","function(){return /^.$/u.test('😀');}");
-check("regexp-named-group","function(){return new RegExp('(?<word>a)').exec('a').groups.word;}");
-check("regexp-lookbehind","function(){return new RegExp('(?<=a)b').test('ab');}");
+check("regexp-named-group",pcre2?"function(){return new RegExp('(?<word>a)').exec('a').groups.word;}":"function(){try{new RegExp('(?<word>a)');return 'accepted';}catch(e){return e.name;}}");
+check("regexp-lookbehind",pcre2?"function(){return new RegExp('(?<=a)b').test('ab');}":"function(){try{new RegExp('(?<=a)b');return 'accepted';}catch(e){return e.name;}}");
 check("regexp-zero-width-matchall","function(){return Array.from('ab'.matchAll(/(?:)/g)).map(function(m){return m.index;});}");
 check("string-replaceall","function(){return 'abab'.replaceAll('a','x');}");
 check("typedarray-offset","function(){var a=new Uint8Array([1,2,3,4]);return Array.from(new Uint8Array(a.buffer,1,2));}");

@@ -72,6 +72,7 @@ constexpr UINT kAsyncFrameSourceReadyMessage = WM_APP + 0x5e;
 constexpr UINT kSyncChildFramesMessage = WM_APP + 0x5f;
 constexpr UINT kViewportResizeMessage = WM_APP + 0x60;
 constexpr UINT kDeferredExecutionMessage = WM_APP + 0x65;
+constexpr UINT kWorkerReadyMessage = WM_APP + 0x66;
 thread_local unsigned executionUiServiceDepth=0;
 thread_local std::vector<HWND> executionReplayWindows;
 constexpr UINT_PTR kTooltipToolId = 0x5750;
@@ -814,16 +815,18 @@ struct View::Impl {
             return loader&&loader(url,content);
         };
     }
-    std::function<bool(const std::wstring&,std::wstring&,std::wstring&)> FrameLoader()const{
+    std::function<bool(const std::wstring&,std::wstring&,std::wstring&)> DocumentLoader(bool topLevel=false)const{
         const auto loader=resourceLoader;const auto network=networkResourceLoader;
         const auto context=browserContext;const auto base=basePath;
-        const auto policy=ResourceRequest(L"",currentLocation);
+        auto policy=ResourceRequest(L"",currentLocation);policy.topLevelNavigation=topLevel;
         return [loader,network,context,base,policy](const std::wstring& source,std::wstring& html,std::wstring& finalUrl){
             const auto resolved=ResolveResourceForBase(base,source);
             if(BrowserContext::Origin(resolved)!=L"null"&&(network||!loader)){
                 auto request=policy;request.url=resolved;
                 const auto response=network?network(request):context->Request(request);
-                if(response.status<200||response.status>=300)return false;
+                // An HTTP error page is still a navigation document. Reject
+                // transport failures, rather than discarding 4xx/5xx HTML.
+                if(response.status<200||response.status>=600||!response.error.empty()||response.opaque)return false;
                 html=response.body;finalUrl=BrowserContext::Origin(response.url)==L"null"?resolved:response.url;return true;
             }
             return LoadTextResourceForBase(loader,base,source,html);
@@ -1191,7 +1194,9 @@ struct View::Impl {
         if(GetMonitorInfoW(MonitorFromWindow(hwnd,MONITOR_DEFAULTTONEAREST),&monitor)){
             const float displayWidth=(monitor.rcMonitor.right-monitor.rcMonitor.left)/scale;
             const float displayHeight=(monitor.rcMonitor.bottom-monitor.rcMonitor.top)/scale;
-            javascript.SetDisplaySize(displayWidth,displayHeight);
+            javascript.SetDisplaySize(displayWidth,displayHeight,
+                (monitor.rcWork.right-monitor.rcWork.left)/scale,
+                (monitor.rcWork.bottom-monitor.rcWork.top)/scale);
             styles.SetDisplay(displayWidth,displayHeight,scale);
         }
     }
@@ -1338,6 +1343,10 @@ struct View::Impl {
         javascript.SetTimerScheduler([this](unsigned delay){
             KillTimer(hwnd,kJavaScriptTimer);
             if(delay)SetTimer(hwnd,kJavaScriptTimer,std::max(1u,delay),nullptr);
+        });
+        javascript.SetWorkerWakeHandler([lifetime=asyncLifetime]{
+            std::lock_guard<std::mutex> lock(lifetime->mutex);
+            if(lifetime->alive&&lifetime->hwnd)PostMessageW(lifetime->hwnd,kWorkerReadyMessage,0,0);
         });
         javascript.SetResourceLoader([this](const std::wstring& resource,std::wstring& content){
             return LoadTextResource(resource,content);
@@ -1961,6 +1970,11 @@ struct View::Impl {
         };
         child->impl_->javascript.SetParentMessageSink(deliverToParent);
         child->impl_->javascript.SetEmbeddingFrame(&javascript,node);
+        // The initial about:blank realm is observable before an asynchronous
+        // document commits, including its inherited secure context.
+        child->impl_->basePath=basePath;
+        child->impl_->currentLocation=L"about:blank";
+        child->impl_->javascript.SetLocation(L"about:blank");
         if(topMessageRelay)child->impl_->javascript.SetTopMessageSink(topMessageRelay);
         child->impl_->topMessageRelay=topMessageRelay?topMessageRelay:deliverToParent;
         const auto request=++nextChildFrameRequest;
@@ -2004,7 +2018,7 @@ struct View::Impl {
                     loaded=false;
                 }else if(parallelResourceLoading){
                     deferSource=true;
-                }else loaded=FrameLoader()(source,childHtml,finalFrameUrl);
+                }else loaded=DocumentLoader()(source,childHtml,finalFrameUrl);
                 const auto resolvedSource=ResolveResourceReference(source);
                 if(resolvedSource.find(L"://")!=std::wstring::npos){
                     frameBase=resolvedSource;frameLocation=resolvedSource;
@@ -2018,7 +2032,7 @@ struct View::Impl {
                 }
                 if(!finalFrameUrl.empty())frameBase=frameLocation=finalFrameUrl;
                 if(deferSource){
-                    const auto loader=FrameLoader();
+                    const auto loader=DocumentLoader();
                     const auto generation=resourceGeneration;const auto lifetime=asyncLifetime;
                     ImageWorkers().Submit(BackgroundWorkQueue::Priority::Normal,
                         [source,node,loader,generation,lifetime,
@@ -3963,7 +3977,7 @@ struct View::Impl {
                 message==kAsyncImageReadyMessage||message==kAsyncDocumentReadyMessage||
                 message==kAsyncTextReadyMessage||message==kAsyncFrameReadyMessage||
                 message==kAsyncFrameSourceReadyMessage||message==kSyncChildFramesMessage||
-                message==kViewportResizeMessage;
+                message==kViewportResizeMessage||message==kWorkerReadyMessage;
             const bool input=(message>=WM_KEYFIRST&&message<=WM_KEYLAST)||
                 (message>=WM_MOUSEFIRST&&message<=WM_MOUSELAST)||
                 message==WM_MOUSELEAVE||message==WM_CONTEXTMENU||message==WM_CAPTURECHANGED||
@@ -3977,6 +3991,7 @@ struct View::Impl {
             }
         }
         LRESULT textResult=0;if(textInput.HandleMessage(hwnd,message,wParam,lParam,textResult))return textResult;
+        if(message==kWorkerReadyMessage){javascript.RunTimers();return 0;}
         // The document hit test, including higher stacking contexts, owns
         // pointer routing. A transparent iframe HWND must never steal an
         // overlaid menu's input; unobscured frames still receive native input.
@@ -4052,12 +4067,13 @@ struct View::Impl {
             auto target=std::move(pendingNavigation);pendingNavigation.clear();
             if(target.empty())return 0;
             if(navigationHandler){navigationHandler(target,pendingNavigationNewWindow);return 0;}
-            std::wstring html;
-            if(!LoadTextResource(target,html)){
+            std::wstring html,finalUrl;
+            if(!DocumentLoader(compositionParent==nullptr)(target,html,finalUrl)){
                 lastError=L"Cannot load HTML resource: "+target;
                 if(loadHandler)loadHandler(false,lastError);
                 return 0;
             }
+            if(!finalUrl.empty())target=finalUrl;
             LoadHtml(html,target,target);return 0;
         }
         case WM_GETOBJECT:if(lParam==static_cast<LPARAM>(UiaRootObjectId)&&accessibility)return accessibility->ReturnRawProvider(wParam,lParam);break;
@@ -4277,6 +4293,7 @@ struct View::Impl {
             if(const HCURSOR resize=ResizeCursor(hit)){SetCursor(resize);return TRUE;}
             if(hit==HTCLIENT){SetCursor(CursorAtCurrentPosition());return TRUE;}break;}
         case WM_DESTROY:{
+            javascript.SetWorkerWakeHandler({});
             javascript.SetExecutionYieldHandler({});javascript.SetExecutionCompletionHandler({});
             ReleaseDeferredExecutionMessages(false);
             if(scriptDialog)scriptDialog->active=false;

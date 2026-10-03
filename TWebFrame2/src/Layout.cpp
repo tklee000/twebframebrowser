@@ -4979,12 +4979,13 @@ Microsoft::WRL::ComPtr<ID2D1Brush> CanvasRadialBrush(ID2D1RenderTarget* target,c
 }
 
 Microsoft::WRL::ComPtr<ID2D1Brush> CanvasBrush(ID2D1RenderTarget* target,
-                                                const CanvasPaint& paint){
+                                                const CanvasPaint& paint,double opacity){
     Microsoft::WRL::ComPtr<ID2D1Brush> result;
     if(paint.gradient&&(paint.gradient->radial||paint.gradient->stops.empty())){
         if(!paint.gradient->stops.empty())result=CanvasRadialBrush(target,*paint.gradient);
         if(!result){Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
             if(SUCCEEDED(target->CreateSolidColorBrush(D2D1::ColorF(0,0.0f),&brush)))brush.As(&result);}
+        if(result)result->SetOpacity(static_cast<float>(opacity));
         return result;
     }
     if(paint.gradient&&!paint.gradient->stops.empty()){
@@ -5010,6 +5011,7 @@ Microsoft::WRL::ComPtr<ID2D1Brush> CanvasBrush(ID2D1RenderTarget* target,
                 D2DColor(StyleSheet::Color(paint.color,0xff000000)),&brush)))
             brush.As(&result);
     }
+    if(result)result->SetOpacity(static_cast<float>(opacity));
     return result;
 }
 
@@ -5235,13 +5237,13 @@ public:
     }
 };
 
-HRESULT ReplayCanvas(ID2D1RenderTarget* drawingTarget,IDWriteFactory* factory,const CanvasSurface& surface){
+HRESULT ReplayCanvas(ID2D1RenderTarget* drawingTarget,IDWriteFactory* factory,const CanvasSurface& surface,bool clearBackground=true){
     // Canvas text is also web content. Its intrinsic 96-DPI backing store must
     // use the same grayscale coverage as DOM text before the bitmap is scaled
     // to the CSS box.
     ConfigureWebTextRendering(drawingTarget,factory);
     drawingTarget->BeginDraw();drawingTarget->SetTransform(D2D1::IdentityMatrix());
-    drawingTarget->Clear(D2D1::ColorF(0,surface.alpha?0.0f:1.0f));
+    if(clearBackground)drawingTarget->Clear(D2D1::ColorF(0,surface.alpha?0.0f:1.0f));
     for(const auto& command:surface.commands){
         const bool pathCommand=command.kind==CanvasCommandKind::FillPath||
                                command.kind==CanvasCommandKind::StrokePath;
@@ -5260,12 +5262,12 @@ HRESULT ReplayCanvas(ID2D1RenderTarget* drawingTarget,IDWriteFactory* factory,co
             const float top=std::min(command.y,command.y+command.height);
             const float right=std::max(command.x,command.x+command.width);
             const float bottom=std::max(command.y,command.y+command.height);
-            const auto brush=CanvasBrush(drawingTarget,command.state.fillStyle);
+            const auto brush=CanvasBrush(drawingTarget,command.state.fillStyle,command.state.globalAlpha);
             if(brush)drawingTarget->FillRectangle(D2D1::RectF(left,top,right,bottom),brush.Get());
         }else if(pathCommand){
             const auto geometry=CanvasGeometry(drawingTarget,command.path);
             const auto brush=CanvasBrush(drawingTarget,command.kind==CanvasCommandKind::FillPath?
-                command.state.fillStyle:command.state.strokeStyle);
+                command.state.fillStyle:command.state.strokeStyle,command.state.globalAlpha);
             if(geometry&&brush){
                 if(command.kind==CanvasCommandKind::FillPath)drawingTarget->FillGeometry(geometry.Get(),brush.Get());
                 else drawingTarget->DrawGeometry(geometry.Get(),brush.Get(),command.state.lineWidth);
@@ -5282,7 +5284,7 @@ HRESULT ReplayCanvas(ID2D1RenderTarget* drawingTarget,IDWriteFactory* factory,co
                 if(align==L"center")left-=textWidth/2;
                 else if(align==L"right"||align==L"end")left-=textWidth;
                 top+=CanvasTextTop(parsed,command.text,command.state.textBaseline,layout.Get(),metrics);
-                const auto brush=CanvasBrush(drawingTarget,command.kind==CanvasCommandKind::StrokeText?command.state.strokeStyle:command.state.fillStyle);
+                const auto brush=CanvasBrush(drawingTarget,command.kind==CanvasCommandKind::StrokeText?command.state.strokeStyle:command.state.fillStyle,command.state.globalAlpha);
                 drawingTarget->SetTransform(D2D1::Matrix3x2F::Scale(horizontalScale,1)*
                     D2D1::Matrix3x2F::Translation(left,top)*CanvasMatrix(command.state.transform));
                 if(brush){
@@ -5300,6 +5302,8 @@ HRESULT ReplayCanvas(ID2D1RenderTarget* drawingTarget,IDWriteFactory* factory,co
     return drawingTarget->EndDraw();
 }
 
+#include "CanvasCompositing.inl"
+
 void PaintCanvas(ID2D1RenderTarget* target,IDWriteFactory* factory,const LayoutBox& box){
     const auto surface=box.node?box.node->canvas:nullptr;
     if(!surface||surface->width==0||surface->height==0||
@@ -5312,13 +5316,18 @@ void PaintCanvas(ID2D1RenderTarget* target,IDWriteFactory* factory,const LayoutB
     const auto intrinsicSize=D2D1::SizeF(static_cast<float>(surface->width),
                                          static_cast<float>(surface->height));
     const auto pixelSize=D2D1::SizeU(surface->width,surface->height);
-    Microsoft::WRL::ComPtr<ID2D1BitmapRenderTarget> bitmapTarget;
-    if(FAILED(target->CreateCompatibleRenderTarget(&intrinsicSize,&pixelSize,nullptr,
-            D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE,&bitmapTarget)))return;
-    bitmapTarget->SetDpi(USER_DEFAULT_SCREEN_DPI,USER_DEFAULT_SCREEN_DPI);
-    auto* drawingTarget=static_cast<ID2D1RenderTarget*>(bitmapTarget.Get());
-    if(FAILED(ReplayCanvas(drawingTarget,factory,*surface)))return;
-    Microsoft::WRL::ComPtr<ID2D1Bitmap> bitmap;if(FAILED(bitmapTarget->GetBitmap(&bitmap)))return;
+    Microsoft::WRL::ComPtr<ID2D1Bitmap> bitmap;
+    if(NeedsCanvasCompositing(*surface)){
+        Microsoft::WRL::ComPtr<IWICBitmap> pixels;
+        if(!RasterizeCanvasBitmap(*surface,pixels)||FAILED(target->CreateBitmapFromWicBitmap(pixels.Get(),nullptr,&bitmap)))return;
+    }else{
+        Microsoft::WRL::ComPtr<ID2D1BitmapRenderTarget> bitmapTarget;
+        if(FAILED(target->CreateCompatibleRenderTarget(&intrinsicSize,&pixelSize,nullptr,
+                D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE,&bitmapTarget)))return;
+        bitmapTarget->SetDpi(USER_DEFAULT_SCREEN_DPI,USER_DEFAULT_SCREEN_DPI);
+        auto* drawingTarget=static_cast<ID2D1RenderTarget*>(bitmapTarget.Get());
+        if(FAILED(ReplayCanvas(drawingTarget,factory,*surface))||FAILED(bitmapTarget->GetBitmap(&bitmap)))return;
+    }
     target->PushAxisAlignedClip(D2D1::RectF(box.content.x,box.content.y,
         box.content.x+box.content.width,box.content.y+box.content.height),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     target->DrawBitmap(bitmap.Get(),D2D1::RectF(box.content.x,box.content.y,
@@ -5470,20 +5479,8 @@ bool ReadCanvasPixels(const CanvasSurface& surface,std::vector<unsigned char>& r
     if(surface.width==0||surface.height==0)return true;
     const auto bytes=static_cast<std::uint64_t>(surface.width)*surface.height*4;
     if(bytes>64*1024*1024)return false;
-    Microsoft::WRL::ComPtr<IWICImagingFactory> imaging;
     Microsoft::WRL::ComPtr<IWICBitmap> bitmap;
-    Microsoft::WRL::ComPtr<ID2D1Factory> drawing;
-    Microsoft::WRL::ComPtr<IDWriteFactory> text;
-    Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
-    if(FAILED(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&imaging)))||
-       FAILED(imaging->CreateBitmap(surface.width,surface.height,GUID_WICPixelFormat32bppPBGRA,WICBitmapCacheOnLoad,&bitmap))||
-       FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,drawing.GetAddressOf()))||
-       FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),reinterpret_cast<IUnknown**>(text.GetAddressOf()))))return false;
-    const auto properties=D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED),96,96);
-    if(FAILED(drawing->CreateWicBitmapRenderTarget(bitmap.Get(),properties,&target))||
-       FAILED(ReplayCanvas(target.Get(),text.Get(),surface)))return false;
-    target.Reset();
+    if(!RasterizeCanvasBitmap(surface,bitmap))return false;
     Microsoft::WRL::ComPtr<IWICBitmapLock> lock;
     const WICRect bounds{0,0,static_cast<INT>(surface.width),static_cast<INT>(surface.height)};
     if(FAILED(bitmap->Lock(&bounds,WICBitmapLockRead,&lock)))return false;

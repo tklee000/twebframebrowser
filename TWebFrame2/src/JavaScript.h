@@ -1,5 +1,11 @@
 #pragma once
 
+// Uncomment to enable WebAssembly, or define it in the library build settings.
+// #define SUPPORT_WEB_ASSEMBLY
+
+// Uncomment to use PCRE2 instead of the C++ standard regular expression library.
+// #define SUPPORT_PCRE2
+
 #include "EditingCommand.h"
 #include "ScriptRequest.h"
 
@@ -126,6 +132,9 @@ public:
     void SetMutationSink(MutationSink sink);
     void SetFrameScheduler(FrameScheduler scheduler);
     void SetTimerScheduler(TimerScheduler scheduler);
+    // Called from a Worker thread; schedule host work only, without throwing
+    // or entering the realm. Empty handler retains timer polling for embedders.
+    void SetWorkerWakeHandler(std::function<void()> handler);
     void SetExecutionYieldHandler(ExecutionYieldHandler handler);
     // Scheduling only: called when the last interpreter frame unwinds.
     // The callback must not throw or enter/mutate a JavaScript realm.
@@ -172,6 +181,7 @@ public:
     void SetViewportSize(double width, double height);
     void SetDevicePixelRatio(double ratio);
     void SetDisplaySize(double width,double height);
+    void SetDisplaySize(double width,double height,double availableWidth,double availableHeight);
     void SetLocation(const std::wstring& location);
     void SetWindowName(const std::wstring& name);
     void SetCurrentScript(const std::shared_ptr<Node>& script);

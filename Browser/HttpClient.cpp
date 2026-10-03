@@ -38,7 +38,10 @@ HttpResponse HttpClient::Request(const TWebFrame::NetworkRequest& request) {
     const auto result=context_->Request(request);
     HttpResponse response;response.status=result.status;response.url=result.url;
     response.contentType=result.contentType;response.headers=result.headers;response.body=result.bytes;
-    if(!response.Ok())response.error=result.error.empty()?L"HTTP "+std::to_wstring(response.status):result.error;
+    // HTTP 4xx/5xx responses can carry complete navigation documents. Keep
+    // transport errors separate from the server's HTTP status.
+    response.error=result.error;
+    if(!response.status&&response.error.empty())response.error=L"Network request failed";
     return response;
 }
 std::wstring HttpClient::DecodeText(const HttpResponse& response) {

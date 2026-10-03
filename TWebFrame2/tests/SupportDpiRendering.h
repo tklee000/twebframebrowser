@@ -2,6 +2,27 @@
 #include "../src/Layout.h"
 #include <cmath>
 
+bool CheckSupportScreenMetrics(double scale){
+    Document document;document.Parse(L"<html></html>");JavaScriptRuntime runtime(document);
+    runtime.SetViewportSize(400,240);runtime.SetDevicePixelRatio(scale);
+    std::wstring result,error;
+    runtime.SetDisplaySize(1920/scale,1080/scale,1880/scale,1040/scale);
+    const auto check=[&]{return runtime.Execute(
+        L"return Math.abs(screen.width*devicePixelRatio-1920)<0.001&&"
+        L"Math.abs(screen.height*devicePixelRatio-1080)<0.001&&"
+        L"Math.abs(screen.availWidth*devicePixelRatio-1880)<=devicePixelRatio/2+0.001&&"
+        L"Math.abs(screen.availHeight*devicePixelRatio-1040)<=devicePixelRatio/2+0.001&&"
+        L"Number.isInteger(screen.width)&&Number.isInteger(screen.height)&&"
+        L"Number.isInteger(screen.availWidth)&&Number.isInteger(screen.availHeight)&&"
+        L"innerWidth===400&&innerHeight===240;",&result,&error)&&result==L"true";};
+    bool ok=check();runtime.SetViewportSize(400,240);ok=check()&&ok;
+    runtime.Clear();ok=check()&&ok;
+    // Hosts without a separate work area retain the original two-argument API.
+    runtime.SetDisplaySize(1600/scale,900/scale);
+    return ok&&runtime.Execute(L"return screen.width===screen.availWidth&&screen.height===screen.availHeight;",
+        &result,&error)&&result==L"true";
+}
+
 bool CheckSupportDpiRendering(double scale){
     const auto width=static_cast<LONG>(400*scale),height=static_cast<LONG>(240*scale);
     HDC dc=CreateCompatibleDC(nullptr);BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
@@ -38,5 +59,5 @@ bool CheckSupportDpiRendering(double scale){
         if(const auto* box=layout.BoxFor(left))ok=ok&&std::abs(box->rect.width-120)<0.01&&layout.HitTest(box->rect.x+20,box->rect.y+20)==left;
         else ok=false;layout.DiscardDeviceResources();
     }
-    target.Reset();if(previous)SelectObject(dc,previous);if(bitmap)DeleteObject(bitmap);DeleteDC(dc);return ok;
+    target.Reset();if(previous)SelectObject(dc,previous);if(bitmap)DeleteObject(bitmap);DeleteDC(dc);return CheckSupportScreenMetrics(scale)&&ok;
 }

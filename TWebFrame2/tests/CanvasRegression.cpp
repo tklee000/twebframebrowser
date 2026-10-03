@@ -81,11 +81,40 @@ void CheckCheckmarkRaster(float scale){
     Check(saved,L"checkmark raster evidence saves successfully");
 }
 
+void CheckCompositingRaster(float scale){
+    Document document;std::wstring error,result;
+    Check(document.Parse(L"<style>html,body{margin:0}canvas{width:40px;height:40px}</style><canvas id='blend' width='4' height='4'></canvas>",&error),error.c_str());
+    JavaScriptRuntime runtime(document);runtime.SetDevicePixelRatio(scale);
+    Check(runtime.Execute(L"var c=document.getElementById('blend'),x=c.getContext('2d');"
+        L"x.fillStyle='red';x.fillRect(0,0,4,4);x.globalCompositeOperation='screen';"
+        L"x.fillStyle='blue';x.fillRect(0,0,4,4);return Array.from(x.getImageData(2,2,1,1).data).join(',');",
+        &result,&error)&&result==L"255,0,255,255",L"script readback returns the composited intrinsic pixel");
+    StyleSheet styles;styles.Parse(document.StyleText());LayoutEngine layout(document,styles);layout.Layout(40,40,scale);
+    const auto dimension=static_cast<UINT>(40*scale);
+    ComPtr<IWICImagingFactory> imaging;ComPtr<IWICBitmap> bitmap;
+    ComPtr<ID2D1Factory> drawing;ComPtr<ID2D1RenderTarget> target;ComPtr<IDWriteFactory> writing;
+    const bool ready=SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&imaging)))&&
+        SUCCEEDED(imaging->CreateBitmap(dimension,dimension,GUID_WICPixelFormat32bppPBGRA,WICBitmapCacheOnLoad,&bitmap))&&
+        SUCCEEDED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,drawing.GetAddressOf()))&&
+        SUCCEEDED(drawing->CreateWicBitmapRenderTarget(bitmap.Get(),D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED),96*scale,96*scale),&target))&&
+        SUCCEEDED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),reinterpret_cast<IUnknown**>(writing.GetAddressOf())));
+    Check(ready,L"compositing raster resources exist");if(!ready)return;
+    target->BeginDraw();target->Clear(D2D1::ColorF(D2D1::ColorF::White));layout.Paint(target.Get(),writing.Get());
+    Check(SUCCEEDED(target->EndDraw()),L"compositing page painting succeeds");target.Reset();
+    std::vector<unsigned char> pixels(static_cast<size_t>(dimension)*dimension*4);
+    Check(SUCCEEDED(bitmap->CopyPixels(nullptr,dimension*4,static_cast<UINT>(pixels.size()),pixels.data())),L"composited page pixels are readable");
+    const auto* pixel=pixels.data()+(static_cast<size_t>(dimension/2)*dimension+dimension/2)*4;
+    Check(pixel[0]==255&&pixel[1]==0&&pixel[2]==255&&pixel[3]==255,
+        L"page painting and script readback share composited colors at 100% and 150% DPI");
+}
+
 void CheckExport(JavaScriptRuntime& runtime,float scale){
     runtime.SetDevicePixelRatio(scale);std::wstring result,error;
     Check(runtime.Execute(LR"JS(
         var exportedCanvas=document.createElement('canvas');exportedCanvas.width=3;exportedCanvas.height=2;
         var exportedContext=exportedCanvas.getContext('2d');exportedContext.fillStyle='red';exportedContext.fillRect(0,0,1,1);
+        exportedContext.globalCompositeOperation='screen';exportedContext.fillStyle='blue';exportedContext.fillRect(0,0,1,1);
         var encodedPng=atob(exportedCanvas.toDataURL().split(',')[1]);
         var exportedBlob=null,exportedEmpty='unset',exportOrder=[];
         exportedCanvas.toBlob(function(blob){exportedBlob=blob;exportOrder.push('blob');});
@@ -106,8 +135,8 @@ void CheckExport(JavaScriptRuntime& runtime,float scale){
         Check(SUCCEEDED(frame->GetSize(&width,&height))&&width==3&&height==2,L"PNG stores intrinsic dimensions at both screen scales");
         Check(SUCCEEDED(frame->GetResolution(&dpiX,&dpiY))&&std::abs(dpiX-96)<.1&&std::abs(dpiY-96)<.1,L"PNG pixel density stays at 96 DPI");
         Check(SUCCEEDED(converted->CopyPixels(nullptr,12,sizeof(pixels),pixels))&&
-            pixels[0]==255&&pixels[1]==0&&pixels[2]==0&&pixels[3]==255&&pixels[7]==0,
-            L"PNG preserves the drawn red pixel and transparent neighboring pixel");
+            pixels[0]==255&&pixels[1]==0&&pixels[2]==255&&pixels[3]==255&&pixels[7]==0,
+            L"PNG preserves the blended magenta pixel and transparent neighboring pixel");
     }
     Check(runtime.Execute(L"return exportOrder.join(',');",&result,&error)&&result==L"sync",L"PNG Blob callbacks wait for the next task");
     for(unsigned attempt=0;attempt<4;++attempt)runtime.RunTimers();
@@ -330,6 +359,7 @@ int wmain() {
               L"CSS canvas geometry stays in DIPs at 100% and 150% DPI");
         CheckRaster(layout, scale);
         CheckExport(javascript,scale);
+        CheckCompositingRaster(scale);
         CheckCheckmarkRaster(scale);
     }
 

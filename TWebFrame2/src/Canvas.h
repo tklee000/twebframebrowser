@@ -62,9 +62,35 @@ struct CanvasPathSegment {
     CanvasTransform transform;
 };
 
+enum class CanvasCompositeOperation {
+    SourceOver,SourceIn,SourceOut,SourceAtop,DestinationOver,DestinationIn,
+    DestinationOut,DestinationAtop,Lighter,Copy,Xor,Multiply,Screen,Overlay,
+    Darken,Lighten,ColorDodge,ColorBurn,HardLight,SoftLight,Difference,
+    Exclusion,Hue,Saturation,Color,Luminosity
+};
+
+inline const wchar_t* CanvasCompositeName(CanvasCompositeOperation operation){
+    static const wchar_t* names[]={L"source-over",L"source-in",L"source-out",L"source-atop",
+        L"destination-over",L"destination-in",L"destination-out",L"destination-atop",
+        L"lighter",L"copy",L"xor",L"multiply",L"screen",L"overlay",L"darken",L"lighten",
+        L"color-dodge",L"color-burn",L"hard-light",L"soft-light",L"difference",L"exclusion",
+        L"hue",L"saturation",L"color",L"luminosity"};
+    return names[static_cast<unsigned>(operation)];
+}
+
+inline bool ParseCanvasComposite(const std::wstring& name,CanvasCompositeOperation& operation){
+    for(unsigned index=0;index<=static_cast<unsigned>(CanvasCompositeOperation::Luminosity);++index)
+        if(name==CanvasCompositeName(static_cast<CanvasCompositeOperation>(index))){
+            operation=static_cast<CanvasCompositeOperation>(index);return true;
+        }
+    return false;
+}
+
 struct CanvasDrawingState {
     CanvasPaint fillStyle;
     CanvasPaint strokeStyle;
+    double globalAlpha = 1.0;
+    CanvasCompositeOperation composite=CanvasCompositeOperation::SourceOver;
     float lineWidth = 1.0f;
     std::wstring font = L"10px sans-serif";
     std::wstring textAlign = L"start";

@@ -24,6 +24,11 @@ constexpr wchar_t kHomeUrl[] = L"https://www.ppomppu.co.kr/zboard/login.php?s_ur
 constexpr UINT kFetchFinished = WM_APP + 1;
 constexpr UINT kDeferredTabSelection = WM_APP + 2;
 
+bool HasDocumentResponse(const ResourceScheduler::Response& response) {
+    return response && response->status >= 200 && response->status < 600 &&
+           response->error.empty();
+}
+
 enum ControlId : int {
     ID_TABS = 100, ID_BACK, ID_FORWARD, ID_REFRESH, ID_HOME,
     ID_ADDRESS, ID_GO, ID_NEW_TAB, ID_CLOSE_TAB, ID_STATUS,
@@ -596,7 +601,7 @@ private:
              pageScriptsEnabled](ResourceScheduler::Response response) {
                 auto initial = std::make_unique<FetchResult>();
                 initial->tabId = id;initial->sequence = sequence;initial->response = response;
-                if (!response || !response->Ok() || !alive->load()) {
+                if (!HasDocumentResponse(response) || !alive->load()) {
                     publish(std::move(initial));return;
                 }
                 initial->html = HttpClient::DecodeText(*response);
@@ -643,7 +648,7 @@ private:
         auto tab = *found;
         if (tab->sequence != result->sequence || !tab->view) return;
         const auto response = result->response;
-        if (!response || !response->Ok()) {
+        if (!HasDocumentResponse(response)) {
             tab->loading = false;
             tab->status = !response || response->error.empty() ? L"페이지 로드 실패" : response->error;
             std::wstring html = L"<html><head><title>페이지 로드 실패</title></head>"

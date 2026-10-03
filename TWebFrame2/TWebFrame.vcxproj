@@ -36,6 +36,9 @@
     <ClInclude Include="src\WasmRuntime.h" />
     <ClInclude Include="src\RuntimeWasm.inl" />
     <ClInclude Include="src\RuntimePlatform.inl" />
+    <ClInclude Include="src\NativeLoop.inl" />
+    <ClInclude Include="src\NativeLoopCache.inl" />
+    <ClInclude Include="src\CanvasCompositing.inl" />
     <ClInclude Include="src\TrustedTypes.inl" />
     <ClInclude Include="include\TWebFrame\BrowserContext.h" />
     <ClInclude Include="src\CookieJar.h" />
@@ -93,6 +96,9 @@
     <ClCompile Include="vendor\wasm3\m3_module.c"><CompileAs>CompileAsC</CompileAs><WarningLevel>TurnOffAllWarnings</WarningLevel><SDLCheck>false</SDLCheck><PrecompiledHeader>NotUsing</PrecompiledHeader><PreprocessorDefinitions>d_m3MaxLinearMemoryPages=4096;d_m3HasWASI=0;d_m3HasMetaWASI=0;d_m3HasUVWASI=0;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions><AdditionalIncludeDirectories>$(ProjectDir)vendor\wasm3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ClCompile>
     <ClCompile Include="vendor\wasm3\m3_parse.c"><CompileAs>CompileAsC</CompileAs><WarningLevel>TurnOffAllWarnings</WarningLevel><SDLCheck>false</SDLCheck><PrecompiledHeader>NotUsing</PrecompiledHeader><PreprocessorDefinitions>d_m3MaxLinearMemoryPages=4096;d_m3HasWASI=0;d_m3HasMetaWASI=0;d_m3HasUVWASI=0;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions><AdditionalIncludeDirectories>$(ProjectDir)vendor\wasm3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ClCompile>
   </ItemGroup>
+  <ItemGroup><ClInclude Include="src\StringTransform.inl" /></ItemGroup>
+  <ItemGroup><ClInclude Include="src\ByteCopy.inl" /></ItemGroup>
+  <ItemGroup><ClInclude Include="src\WorkerRuntime.inl" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
 </Project>

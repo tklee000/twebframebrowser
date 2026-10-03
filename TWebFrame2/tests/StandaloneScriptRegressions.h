@@ -22,6 +22,23 @@ static int RunStandaloneRegressions(){
         {L"regrouping cancellation guard",LR"((function(){var a=['a','bb'];function pick(x){return a[x];}var s=-9007199254740991;for(var i=0;i<300;i++)s+=pick(i&1).length;return i+'|'+s;})())",true},
     };
     unsigned failures=0;
+    struct EvalCase {const wchar_t* name;const wchar_t* script;const wchar_t* expected;};
+    const EvalCase trustedEvalCases[]={
+        {L"TrustedScript eval installs a callable global",LR"(var p=trustedTypes.createPolicy('eval-global',{createScript:function(s){return s;}});(0,eval)(p.createScript('function trustedEvalHelper(v){return v+1;}'));return window.trustedEvalHelper.call(null,41);)",L"42"},
+        {L"TrustedScript direct eval keeps caller bindings",LR"(var p=trustedTypes.createPolicy('eval-direct',{createScript:function(s){return s;}});return (function(){var x=40;return eval(p.createScript('x+2'));})();)",L"42"},
+        {L"TrustedScript eval ignores mutable stringifiers",LR"(var p=trustedTypes.createPolicy('eval-data',{createScript:function(s){return s;}}),s=p.createScript('40+2');s.toString=function(){throw new Error('coercion');};s.$primitive='0';return eval(s);)",L"42"},
+        {L"eval only unwraps actual TrustedScript values",LR"(var calls=0,o={toString:function(){calls++;return 'throw 1';}},p=trustedTypes.createPolicy('eval-other',{createHTML:function(s){return s;},createScript:function(s){return s;},createScriptURL:function(s){return s;}}),h=p.createHTML('throw 1'),u=p.createScriptURL('throw 1'),fake=Object.create(TrustedScript.prototype),proxy=new Proxy(p.createScript('throw 1'),{});return eval(o)===o&&eval(h)===h&&eval(u)===u&&eval(fake)===fake&&eval(proxy)===proxy&&eval(42)===42&&eval(null)===null&&eval(undefined)===undefined&&calls===0;)",L"true"},
+        {L"TrustedScript strict eval preserves exceptions and declarations",LR"(var p=trustedTypes.createPolicy('eval-strict',{createScript:function(s){return s;}});return (function(){'use strict';var x=1;eval(p.createScript('var localOnly=2;x=3;'));var thrown=false;try{eval(p.createScript('throw new RangeError("trusted");'));}catch(e){thrown=e instanceof RangeError&&e.message==='trusted';}return x===3&&typeof localOnly==='undefined'&&thrown;})();)",L"true"},
+        {L"TrustedScript empty eval completes with undefined",LR"(return eval(trustedTypes.emptyScript)===undefined;)",L"true"},
+    };
+    for(const auto& test:trustedEvalCases)for(unsigned mode=0;mode<2;++mode){
+        InstructionLimitScope limit(!mode);
+        Document document;document.Parse(L"<html></html>");JavaScriptRuntime runtime(document);
+        runtime.SetCompatibilityBridgeEnabled(false);runtime.SetJitCompilationThreshold(mode?64:0);
+        std::wstring answer,error;const bool ok=runtime.Execute(test.script,&answer,&error)&&answer==test.expected;
+        std::wcout<<(ok?L"PASS ":L"FAIL ")<<test.name<<L" JIT="<<mode<<L" result="<<answer<<L" error="<<error<<L'\n';
+        if(!ok)++failures;
+    }
     for(const auto& test:cases){
         std::wstring answers[2],errors[2];bool success[2]{};bool reduced=false;
         for(unsigned mode=0;mode<2;++mode){

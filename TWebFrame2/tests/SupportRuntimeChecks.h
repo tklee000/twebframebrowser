@@ -12,9 +12,17 @@ unsigned CheckSupportRuntimeLifetime(){
     for(unsigned i=0;i<6000;++i)ok=runtime.Execute(L"(function(){var object={};object.self=object;})();",nullptr,&error)&&ok;
     runtime.RunTimers();ok=runtime.Execute(L"return cleaned.join(',');",&result,&error)&&ok;
     check(ok&&result==L"released",L"FinalizationRegistry schedules a cleanup for a collected cycle");
+#ifdef SUPPORT_WEB_ASSEMBLY
+    ok=runtime.Execute(L"return typeof WebAssembly==='object'&&window.WebAssembly===WebAssembly;",&result,&error);
+    check(ok&&result==L"true",L"WebAssembly is available when SUPPORT_WEB_ASSEMBLY is defined");
     unsigned polls=0;runtime.SetExecutionYieldHandler([&]{return ++polls<3;});
     ok=runtime.Execute(L"new WebAssembly.Instance(new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0,1,4,1,96,0,0,3,2,1,0,8,1,0,10,9,1,7,0,3,64,12,0,11,11])));",nullptr,&error);
     runtime.SetExecutionYieldHandler({});check(!ok&&polls>=3&&error.find(L"interrupted")!=std::wstring::npos,L"Host can interrupt an infinite WebAssembly start function");
+#else
+    ok=runtime.Execute(L"return typeof WebAssembly==='undefined'&&typeof window.WebAssembly==='undefined'&&"
+        L"!('WebAssembly' in window)&&!Object.getOwnPropertyDescriptor(window,'WebAssembly');",&result,&error);
+    check(ok&&result==L"true",L"WebAssembly is absent when SUPPORT_WEB_ASSEMBLY is not defined");
+#endif
     const auto profile=std::filesystem::absolute(L"TWebFrame2/tests/artifacts/opfs-profile-"+std::to_wstring(GetCurrentProcessId()));
     {TWebFrame::BrowserContext context(profile.wstring());const auto files=context.OriginFiles(L"HTTPS://PERSIST.EXAMPLE:443/path");
         auto child=std::make_shared<OriginFileEntry>();child->directory=false;child->name=L"record";child->bytes={1,2,3};child->parent=files->root;files->root->children[child->name]=child;files->Save();}

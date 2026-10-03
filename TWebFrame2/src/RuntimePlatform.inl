@@ -6,7 +6,7 @@
         const auto data=port->items.front();port->items.erase(port->items.begin());
         auto event=CreateObject(ObjectKind::Event);event->props[L"type"]=Value::String(L"message");event->props[L"data"]=data;
         event->props[L"target"]=event->props[L"currentTarget"]=Value::FromObject(port);event->props[L"ports"]=ArrayValue({});
-        event->props[L"origin"]=Value::String(L"");event->props[L"source"]=Value::Null();event->props[L"isTrusted"]=Value::Bool(true);
+        event->props[L"origin"]=Value::String(L"");event->props[L"source"]=Value::Null();event->eventTrusted=true;
         const auto callback=GetProperty(Value::FromObject(port),L"onmessage");
         if(IsCallable(callback))InvokeCallback(callback,Value::FromObject(port),{Value::FromObject(event)});
         const auto listeners=objectListeners.find(port.get());
@@ -160,5 +160,9 @@
                 else{r.requestLoader(request);r.beaconBytes-=size;}
             });return Value::Bool(true);
         });
-        InstallTrustedTypes();InstallFeaturePolicy();InstallWasm();InstallAudio();
+        InstallTrustedTypes();InstallFeaturePolicy();
+#ifdef SUPPORT_WEB_ASSEMBLY
+        InstallWasm();
+#endif
+        InstallAudio();
     }

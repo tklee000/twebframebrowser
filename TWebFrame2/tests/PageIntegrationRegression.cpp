@@ -38,12 +38,13 @@ void SaveLayoutSnapshot(TWebFrame::View& view,const std::filesystem::path& filen
 }
 
 int wmain(int argc,wchar_t** argv){
-    if(argc<2){std::wcerr<<L"Usage: PageIntegrationRegression https://host/path [observation-seconds] [output-directory] [--visible] [--native] [--click=x,y]\n";return 2;}
-    bool visible=false,native=false,clickRequested=false;int clickX=0,clickY=0;
+    if(argc<2){std::wcerr<<L"Usage: PageIntegrationRegression https://host/path [observation-seconds] [output-directory] [--visible] [--native] [--security-budget] [--click=x,y]\n";return 2;}
+    bool visible=false,native=false,clickRequested=false,securityBudget=false;int clickX=0,clickY=0;
     for(int i=4;i<argc;++i){
         const std::wstring option=argv[i];
         if(option==L"--visible")visible=true;
         else if(option==L"--native")native=true;
+        else if(option==L"--security-budget")securityBudget=true;
         else if(option.rfind(L"--click=",0)==0&&swscanf_s(option.c_str()+8,L"%d,%d",&clickX,&clickY)==2&&clickX>=0&&clickY>=0&&clickX<32768&&clickY<32768)clickRequested=true;
         else {std::wcerr<<L"Unknown or invalid option\n";return 2;}
     }
@@ -107,7 +108,10 @@ int wmain(int argc,wchar_t** argv){
         const auto response=client.Get(target,page.url);if(response.Ok())data=response.body;
         return response.Ok();
     });
-    auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(observationSeconds);
+    // The security run is bounded from login navigation, including preparation.
+    // Its deadline never moves when a callback yields or catches AbortError.
+    auto deadline=securityBudget?observationStart+std::chrono::seconds(10):
+        std::chrono::steady_clock::now()+std::chrono::seconds(observationSeconds);
     bool executionTimeLimit=false;
     view->SetExecutionYieldHandler([&]{
         if(std::chrono::steady_clock::now()<deadline)return true;
@@ -115,7 +119,8 @@ int wmain(int argc,wchar_t** argv){
     });
     auto html=HttpClient::DecodeText(page);
     const bool started=view->NavigateToStringAsync(html,page.url);
-    bool settling=false,clicked=false;
+    bool settling=false,clicked=false,securitySuccess=false;
+    auto nextSecuritySnapshot=std::chrono::steady_clock::now();
     while(started&&std::chrono::steady_clock::now()<deadline){
         MSG message{};while(std::chrono::steady_clock::now()<deadline&&PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){
             TranslateMessage(&message);DispatchMessageW(&message);
@@ -130,17 +135,37 @@ int wmain(int argc,wchar_t** argv){
             std::wcout<<L"POINTER_CLICK "<<clickX<<L','<<clickY<<L" error="<<view->LastError()<<L'\n';
             SaveLayoutSnapshot(*view,outputDirectory/L"page-script-after-click.json");
         }
+        if(securityBudget&&std::chrono::steady_clock::now()<deadline&&
+           std::chrono::steady_clock::now()>=nextSecuritySnapshot){
+            const auto snapshot=view->DumpLayoutJson(true);
+            SaveTextSnapshot(snapshot,outputDirectory/L"page-script-layout.json");
+            nextSecuritySnapshot=std::chrono::steady_clock::now()+std::chrono::milliseconds(250);
+            const auto messages=snapshot.find(L"\"receivedMessages\":[");
+            if(messages!=std::wstring::npos){
+                const auto end=snapshot.find(L']',messages);
+                const auto complete=snapshot.find(L"\"complete\"",messages);
+                securitySuccess=std::chrono::steady_clock::now()<deadline&&end!=std::wstring::npos&&complete<end;
+                if(securitySuccess)break;
+            }
+        }
         // A long script job may finish after the initial observation period.
         // Allow its ordinary queued frame messages to reach the parent view.
-        if(!settling&&std::chrono::steady_clock::now()>=deadline){
+        if(!securityBudget&&!settling&&std::chrono::steady_clock::now()>=deadline){
             deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);settling=true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     std::wcout<<L"RUNTIME_ERROR "<<view->LastError()<<L'\n';
     std::wcout<<L"EXECUTION_TIME_LIMIT "<<executionTimeLimit<<L'\n';
+    if(securityBudget)std::wcout<<L"SECURITY_RESULT "<<(securitySuccess?L"complete":L"timeout")<<L" elapsed_ms="<<elapsed()<<L'\n';
     SaveLayoutSnapshot(*view,outputDirectory/L"page-script-layout.json");
     SaveViewPixels(view->Window(),(outputDirectory/L"page-script-render.bmp").c_str());
+    // Do not run another page script, deliver timers, or extend observation
+    // after a security timeout. The snapshot above is native diagnostic data.
+    if(securityBudget){
+        view.reset();DestroyWindow(host);if(SUCCEEDED(com))CoUninitialize();
+        return !started?1:securitySuccess?0:4;
+    }
     view->SetExecutionYieldHandler({});
     std::wstring result;
     const bool textInspected=view->ExecuteScript(LR"JS(

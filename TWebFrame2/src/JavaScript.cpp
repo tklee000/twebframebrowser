@@ -18,7 +18,9 @@
 #include "RuntimeRegex.h"
 #include "OriginFileSystem.h"
 #include "AudioRuntime.h"
+#ifdef SUPPORT_WEB_ASSEMBLY
 #include "WasmRuntime.h"
+#endif
 
 #include <windows.h>
 #include <emmintrin.h>
@@ -438,6 +440,9 @@ struct Value {
     // property and array reads do not allocate another character buffer.
     std::wstring smallString;
     std::shared_ptr<const std::wstring> largeString;
+    // Only String() allocates mutable backing storage. SharedString() may
+    // receive genuinely const data and can never reuse its buffer for +=.
+    bool appendableString=false;
     const std::wstring& StringText()const{return largeString?*largeString:smallString;}
     std::shared_ptr<Object> object;
     std::shared_ptr<Function> function;
@@ -454,7 +459,7 @@ struct Value {
     // Only one payload is active for a JavaScript value. Avoid copying the
     // empty string and every inactive shared_ptr on numeric and object reads.
     Value(const Value& source):type(source.type),boolean(source.boolean),abrupt(source.abrupt),
-        number(source.number),realm(source.realm),realmOwner(source.realmOwner),realmLifetime(source.realmLifetime){
+        number(source.number),appendableString(source.appendableString),realm(source.realm),realmOwner(source.realmOwner),realmLifetime(source.realmLifetime){
         switch(type){
         case Type::String:if(source.largeString)largeString=source.largeString;else smallString=source.smallString;break;
         case Type::Object:object=source.object;break;
@@ -478,6 +483,7 @@ struct Value {
         realm=source.realm;realmOwner=source.realmOwner;realmLifetime=source.realmLifetime;
         switch(type){
         case Type::String:
+            appendableString=source.appendableString;
             if(source.largeString){largeString=source.largeString;smallString.clear();}
             else{smallString=source.smallString;largeString.reset();}break;
         case Type::Object:object=source.object;break;
@@ -498,8 +504,9 @@ struct Value {
     static Value Number(double n) { Value v; v.type=Type::Number; v.number=n; return v; }
     static Value BigInt(BigInteger n) { Value v; v.type=Type::BigInt; v.bigint=std::make_shared<const BigInteger>(std::move(n)); return v; }
     static Value String(std::wstring s) { Value v; v.type=Type::String;
-        if(s.size()>v.smallString.capacity())v.largeString=std::make_shared<const std::wstring>(std::move(s));
+        if(s.size()>v.smallString.capacity()){v.largeString=std::make_shared<std::wstring>(std::move(s));v.appendableString=true;}
         else v.smallString=std::move(s);return v; }
+    static Value SharedString(std::shared_ptr<const std::wstring> s) {Value v;v.type=Type::String;v.largeString=std::move(s);return v;}
     static Value FromObject(const std::shared_ptr<Object>& o) { Value v; v.type=Type::Object; v.object=o; return v; }
     static Value FromFunction(const std::shared_ptr<Function>& f);
     static Value FromNative(const std::shared_ptr<NativeFunction>& f) { Value v; v.type=Type::Native; v.native=f; return v; }
@@ -525,6 +532,7 @@ enum class ObjectKind { Plain, FunctionPrototype, Array, Map, Set, Proxy, RegExp
 struct Object {
     enum class NativeStateKind { None, FileEntry, AudioNode, AudioContext, WasmModule, WasmInstance, TrustedHTML, TrustedScript, TrustedScriptURL };
     NativeStateKind nativeStateKind=NativeStateKind::None;
+    std::shared_ptr<const std::wstring> trustedTypeData;
     std::weak_ptr<void> messageRuntimeLifetime;
     ObjectKind kind = ObjectKind::Plain;
     FastMap<std::wstring, Value> props;
@@ -538,6 +546,7 @@ struct Object {
     size_t byteOffset=0;
     // Conservatively invalidates direct numeric reads after a user descriptor.
     bool hasIndexedDescriptors=false;
+    bool eventTrusted=false;
     std::shared_ptr<Node> node;
     std::shared_ptr<Document> isolatedDocument;
     std::shared_ptr<Node> rangeStart;
@@ -558,7 +567,7 @@ struct Object {
 static bool IsInternalObjectProperty(const std::wstring& name){
     if(name.rfind(L"$get:",0)==0||name.rfind(L"$set:",0)==0||
        name.rfind(L"$method:",0)==0||name.rfind(L"$field:",0)==0||
-       name.rfind(L"$enumerable:",0)==0||name.rfind(L"$configurable:",0)==0||name.rfind(L"$writable:",0)==0||
+       name.rfind(L"$enumerable:",0)==0||name.rfind(L"$configurable:",0)==0||name.rfind(L"$writable:",0)==0||name.rfind(L"$arrayHole:",0)==0||
        name.rfind(L"$request-header:",0)==0||name.rfind(L"$documentCollection:",0)==0||name.rfind(L"$host:",0)==0||
        name.rfind(L"$eventHandler:",0)==0||name.rfind(L"$handlerSource:",0)==0||name.rfind(L"$handlerPresence:",0)==0||
        name.rfind(L"$attributeHandler:",0)==0||name.rfind(L"$attributeSource:",0)==0||name.rfind(L"$intl:",0)==0)return true;
@@ -613,7 +622,7 @@ enum class Op {
     BitwiseAnd, BitwiseOr, BitwiseXor, ShiftLeft, ShiftRight, UnsignedShiftRight, InValue, InstanceOf,
     Equal, NotEqual, StrictEqual, StrictNotEqual, Less, LessEqual, Greater, GreaterEqual,
     Not, BitwiseNot, Negate, Positive, VoidValue, TypeOf,
-    Jump, JumpFalse, JumpFalseKeep, JumpTrueKeep, JumpNotNullishKeep,
+    Jump, JumpFalse, JumpFalseKeep, JumpTrueKeep, JumpNotNullishKeep, SwitchDispatch,
     Template, TaggedTemplate, SetEvalCompletion, GetEvalCompletion, NoOp, Return
 };
 
@@ -650,6 +659,8 @@ struct Chunk {
     static std::uint64_t NewIdentity(){static std::atomic<std::uint64_t> next{0};return ++next;}
     std::uint64_t identity=NewIdentity();
     mutable std::vector<std::uint8_t> reductionEligibility;
+    mutable std::vector<std::uint8_t> transformEligibility;
+    mutable std::vector<std::uint8_t> byteCopyEligibility;
     bool isStrict = false;
     struct FunctionDeclaration {
         std::wstring name;
@@ -664,6 +675,30 @@ struct Chunk {
         bool hasCatch=false,hasFinally=false;
     };
     std::vector<Instruction> code;
+    struct SwitchTable {
+        static constexpr size_t Missing=(std::numeric_limits<size_t>::max)();
+        std::unordered_map<double,size_t> numbers;
+        std::unordered_map<std::wstring,size_t> strings;
+        size_t booleans[2]={Missing,Missing};
+        size_t nullTarget=Missing,defaultTarget=0;
+        void Add(const Value& value,size_t target){
+            // emplace keeps the first matching case, including +0/-0.
+            if(value.type==Value::Type::Number&&!std::isnan(value.number))numbers.emplace(value.number,target);
+            else if(value.type==Value::Type::String)strings.emplace(value.StringText(),target);
+            else if(value.type==Value::Type::Boolean){auto& slot=booleans[value.boolean?1:0];if(slot==Missing)slot=target;}
+            else if(value.type==Value::Type::Null&&nullTarget==Missing)nullTarget=target;
+        }
+        size_t Target(const Value& value)const{
+            if(value.type==Value::Type::Number&&!std::isnan(value.number)){
+                const auto found=numbers.find(value.number);if(found!=numbers.end())return found->second;
+            }else if(value.type==Value::Type::String){
+                const auto found=strings.find(value.StringText());if(found!=strings.end())return found->second;
+            }else if(value.type==Value::Type::Boolean&&booleans[value.boolean?1:0]!=Missing)return booleans[value.boolean?1:0];
+            else if(value.type==Value::Type::Null&&nullTarget!=Missing)return nullTarget;
+            return defaultTarget;
+        }
+    };
+    std::vector<SwitchTable> switchTables;
     std::vector<Value> constants;
     std::vector<std::shared_ptr<Chunk>> embeddedExpressions;
     std::vector<ExceptionHandler> handlers;
@@ -761,6 +796,8 @@ struct Prototype {
     bool environmentReuseChecked=false;
     bool canReuseEnvironment=false;
     bool capturedGetterChecked=false,capturedGetterSupported=false;
+    bool parameterGetterChecked=false;
+    int parameterGetterIndex=-1;
     bool fastScopeChecked=false,fastScopeSupported=false;
     std::vector<std::wstring> fastLocalNames;
     std::vector<int> fastLocalSlots;
@@ -1231,6 +1268,8 @@ struct NativeCapture {
 };
 struct ExecutionFrame;
 struct NativeFunction {
+    enum class Intrinsic { None, CharCodeAt, FromCharCode, IsNaN, ArrayPush, ArrayJoin, FunctionCall };
+    Intrinsic intrinsic=Intrinsic::None;
     NativeCallback callback;
     FastMap<std::wstring, Value> props;
     // Non-owning descriptions of the strong edges stored inside callback.
@@ -1959,7 +1998,7 @@ private:
         for(int index:context.continues)chunk_->code[index].argument=context.continueTarget;
     }
     void SwitchStatement(){
-        struct Clause { bool isDefault=false;size_t expressionStart=0,expressionEnd=0,bodyStart=0,bodyEnd=0;int entryJump=-1,bodyEntry=-1; };
+        struct Clause { bool isDefault=false;size_t expressionStart=0,expressionEnd=0,bodyStart=0,bodyEnd=0;int entryJump=-1,bodyEntry=-1;Value literal; };
         Consume(TokenKind::LeftParen,L"Expected '(' after switch");Expression();Consume(TokenKind::RightParen,L"Expected ')' after switch value");
         const auto valueName=L"$switch_value_"+std::to_wstring(hiddenVariable_++);Emit(Op::Declare,0,valueName);
         Consume(TokenKind::LeftBrace,L"Expected '{' after switch value");
@@ -1991,11 +2030,34 @@ private:
         }
         Consume(TokenKind::RightBrace,L"Expected '}' after switch");const auto afterSwitch=position_;
 
+        // Keep the ordinary comparison chain as a fallback for computed cases.
+        // A side-effect-free literal switch can jump straight to its first
+        // matching body without changing fallthrough or default placement.
+        const auto dispatch=chunk_->code.size();Emit(Op::NoOp);
+        bool literalCases=clauses.size()>=8;
         int defaultIndex=-1;
         for(size_t index=0;index<clauses.size();++index){
             auto& clause=clauses[index];if(clause.isDefault){defaultIndex=static_cast<int>(index);continue;}
-            Emit(Op::LoadReference,0,valueName);position_=clause.expressionStart;Expression();
+            Emit(Op::LoadReference,0,valueName);position_=clause.expressionStart;
+            const auto expressionCode=chunk_->code.size();Expression();
             if(position_!=clause.expressionEnd)throw Error(L"Invalid switch case expression");
+            const auto count=chunk_->code.size()-expressionCode;
+            const auto& first=chunk_->code[expressionCode];
+            bool literal=count==1||count==2;
+            if(first.op==Op::Constant){clause.literal=chunk_->constants[first.argument];
+                literal=literal&&(clause.literal.type==Value::Type::Number||clause.literal.type==Value::Type::String);
+            }else if(first.op==Op::TrueValue)clause.literal=Value::Bool(true);
+            else if(first.op==Op::FalseValue)clause.literal=Value::Bool(false);
+            else if(first.op==Op::Null)clause.literal=Value::Null();
+            else if(first.op==Op::Template&&count==1){
+                const auto& raw=chunk_->constants[first.argument].StringText();
+                literal=raw.find(L"${")==std::wstring::npos;clause.literal=Value::String(raw);
+            }else literal=false;
+            if(count==2){const auto unary=chunk_->code[expressionCode+1].op;
+                literal=literal&&clause.literal.type==Value::Type::Number&&(unary==Op::Negate||unary==Op::Positive);
+                if(literal&&unary==Op::Negate)clause.literal.number=-clause.literal.number;
+            }
+            literalCases=literalCases&&literal;
             Emit(Op::StrictEqual);const int noMatch=Jump(Op::JumpFalse);clause.entryJump=Jump(Op::Jump);Patch(noMatch);
         }
         const int noCaseMatched=Jump(Op::Jump);
@@ -2008,13 +2070,23 @@ private:
         }
         if(defaultIndex>=0)chunk_->code[noCaseMatched].argument=clauses[static_cast<size_t>(defaultIndex)].bodyEntry;
         else Patch(noCaseMatched);
+        if(literalCases){
+            Chunk::SwitchTable table;table.defaultTarget=static_cast<size_t>(chunk_->code[noCaseMatched].argument);
+            for(const auto& clause:clauses)if(!clause.isDefault)table.Add(clause.literal,static_cast<size_t>(clause.bodyEntry));
+            chunk_->code[dispatch].op=Op::SwitchDispatch;
+            chunk_->code[dispatch].argument=static_cast<int>(chunk_->switchTables.size());
+            chunk_->code[dispatch].text=valueName;chunk_->switchTables.push_back(std::move(table));
+        }
         FinishControl();position_=afterSwitch;
     }
     void WhileStatement(){
         Consume(TokenKind::LeftParen,L"Expected '('");const int condition=static_cast<int>(chunk_->code.size());
+        Emit(Op::NoOp);
         Expression();Consume(TokenKind::RightParen,L"Expected ')'");const int done=Jump(Op::JumpFalse);
         BindAttachedIterationLabels(condition);
-        controls_.push_back({condition,{}});Statement();Emit(Op::Jump,condition);Patch(done);FinishControl();
+        controls_.push_back({condition,{}});Statement();
+        chunk_->code[condition].argument=static_cast<int>(chunk_->code.size());
+        Emit(Op::Jump,condition);Patch(done);FinishControl();
     }
     void DoWhileStatement(){
         const int body=static_cast<int>(chunk_->code.size());
@@ -2085,12 +2157,15 @@ private:
             else{Expression();Emit(Op::GetValue);Emit(Op::Pop);Consume(TokenKind::Semicolon,L"Expected ';'");}
         }
         const int condition=static_cast<int>(chunk_->code.size());
+        Emit(Op::NoOp);
         if(Check(TokenKind::Semicolon))Emit(Op::TrueValue);else Expression();
         Consume(TokenKind::Semicolon,L"Expected ';'");const int done=Jump(Op::JumpFalse);
         const int enterBody=Jump(Op::Jump);
         const int increment=static_cast<int>(chunk_->code.size());
         if(!Check(TokenKind::RightParen)){Expression();Emit(Op::GetValue);Emit(Op::Pop);}
-        Consume(TokenKind::RightParen,L"Expected ')'");Emit(Op::Jump,condition);
+        Consume(TokenKind::RightParen,L"Expected ')'");
+        chunk_->code[condition].argument=static_cast<int>(chunk_->code.size());
+        Emit(Op::Jump,condition);
         Patch(enterBody);BindAttachedIterationLabels(increment);
         controls_.push_back({increment,{}});Statement();Emit(Op::Jump,increment);Patch(done);FinishControl();
     }
@@ -2743,6 +2818,12 @@ struct RuntimeCore {
     std::vector<std::shared_ptr<WorkerRealm>> workerRealms;
     Value workerGlobal;
     std::atomic<bool>* interruptionSignal=nullptr;
+    struct WorkerWakeSignal {
+        std::mutex mutex;std::function<void()> handler;
+        std::atomic<bool> enabled{false},pending{false};
+        void Notify(){std::lock_guard<std::mutex> lock(mutex);if(handler&&!pending.exchange(true))handler();}
+    };
+    std::shared_ptr<WorkerWakeSignal> workerWakeSignal=std::make_shared<WorkerWakeSignal>();
     JavaScriptRuntime::ExecutionYieldHandler executionYieldHandler;
     std::function<void()> executionCompletionHandler;
     std::function<bool()> secureContextAncestors;
@@ -2842,7 +2923,7 @@ struct RuntimeCore {
     FastMap<std::wstring,std::shared_ptr<RuntimeRegex>> runtimeRegularExpressions;
     FastMap<std::wstring,std::shared_ptr<const FiniteRegexSeparator>> finiteRegularExpressions;
     FastMap<std::wstring,AnchoredRegexPrefixes> anchoredRegexPrefixes;
-    struct CachedEval {std::shared_ptr<const std::wstring> source;bool inheritedStrict=false;Chunk chunk;};
+    struct CachedEval {std::shared_ptr<const std::wstring> source;bool inheritedStrict=false;std::shared_ptr<Chunk> chunk;};
     std::deque<CachedEval> cachedEvalPrograms;
     size_t cachedEvalBytes=0;
     std::uint64_t evalCompileCacheHits=0;
@@ -2905,6 +2986,8 @@ struct RuntimeCore {
         ++found->second.samples;
     }
     std::uint64_t fastScopeCalls=0;
+    std::uint64_t switchDispatches=0;
+    std::uint64_t stringAppendReuses=0;
     std::uint64_t readPlanCalls=0;
     std::uint64_t diagnosticInstructionLimit=0;
     size_t diagnosticSequence=0;
@@ -2930,14 +3013,17 @@ struct RuntimeCore {
     double devicePixelRatio=1;
     double displayWidth=0;
     double displayHeight=0;
+    double availableDisplayWidth=-1;
+    double availableDisplayHeight=-1;
     size_t jitCompilationThreshold=64;
     size_t jitCodeBudget=8*1024*1024;
     size_t jitAllocatedCodeBytes=0;
     JavaScriptRuntime::JitStatistics jitStatistics;
+    std::vector<std::pair<Value,size_t>>* nativeLoopIndexReads=nullptr;
     std::weak_ptr<Node> pointerCaptureNode;
     std::shared_ptr<Node> currentScript;
 
-    explicit RuntimeCore(Document& d)
+    explicit RuntimeCore(Document& d,bool initializeGlobals=true)
         :document(d),
          editingCommands(
              document,
@@ -2963,7 +3049,7 @@ struct RuntimeCore {
         traceSetting[0]=0;profileExecution=GetEnvironmentVariableW(L"TWEBFRAME_PROFILE_EXECUTION",traceSetting,2)==1&&traceSetting[0]==L'1';
         wchar_t traceLimit[32]{};if(GetEnvironmentVariableW(L"TWEBFRAME_TRACE_INSTRUCTION_LIMIT",traceLimit,32)>0)
             diagnosticInstructionLimit=std::wcstoull(traceLimit,nullptr,10);
-        global=CreateEnvironment();InstallGlobals();
+        global=CreateEnvironment();if(initializeGlobals)InstallGlobals();
         eventRuntimeLifetime->core=this;
         EventRuntimes().push_back(eventRuntimeLifetime);
     }
@@ -2972,6 +3058,7 @@ struct RuntimeCore {
         for(const auto& worker:workerRealms){worker->stopped.store(true);worker->changed.notify_all();}
         for(const auto& worker:workerRealms)if(worker->thread.joinable())worker->thread.join();
         workerRealms.clear();
+        workerWakeSignal->pending.store(false);
         eventRuntimeLifetime->core=nullptr;
         auto& runtimes=EventRuntimes();
         runtimes.erase(std::remove_if(runtimes.begin(),runtimes.end(),
@@ -3041,10 +3128,21 @@ struct RuntimeCore {
         auto object=std::make_shared<Object>();object->kind=kind;
         if(kind==ObjectKind::Event){
             object->prototype=intrinsicEventPrototype;
-            object->props[L"timeStamp"]=Value::Number(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-performanceStart).count());
+            object->props[L"timeStamp"]=Value::Number(PerformanceNow());
             object->props[L"composed"]=Value::Bool(false);
             object->props[L"bubbles"]=Value::Bool(false);object->props[L"cancelable"]=Value::Bool(false);
-            object->props[L"isTrusted"]=Value::Bool(false);object->props[L"defaultPrevented"]=Value::Bool(false);
+            object->props[L"defaultPrevented"]=Value::Bool(false);
+            auto trustGetter=Native([](RuntimeCore& r,const Value& thisValue,const std::vector<Value>&){
+                const auto receiver=r.Deref(thisValue);
+                if(!receiver.object||receiver.object->kind!=ObjectKind::Event)
+                    return Value::Thrown(r.ErrorValue(L"TypeError",L"isTrusted called on incompatible receiver"));
+                return Value::Bool(receiver.object->eventTrusted);
+            });
+            trustGetter.native->props[L"name"]=Value::String(L"get isTrusted");
+            trustGetter.native->props[L"$notConstructor"]=Value::Bool(true);
+            object->props[L"$get:isTrusted"]=trustGetter;
+            object->props[L"$enumerable:isTrusted"]=Value::Bool(true);
+            object->props[L"$configurable:isTrusted"]=Value::Bool(false);
         }
         if(kind==ObjectKind::Date)object->prototype=intrinsicDatePrototype;
         if(kind==ObjectKind::Plain&&global){
@@ -3113,6 +3211,7 @@ struct RuntimeCore {
         for(const auto& worker:workerRealms){worker->stopped.store(true);worker->changed.notify_all();}
         for(const auto& worker:workerRealms)if(worker->thread.joinable())worker->thread.join();
         workerRealms.clear();
+        workerWakeSignal->pending.store(false);
         ReleaseManagedGraph();
         finalizationRegistries.clear();runtimeRegularExpressions.clear();beaconBytes=0;
         listeners.clear();documentListeners.clear();windowListeners.clear();webViewListeners.clear();
@@ -3132,6 +3231,16 @@ struct RuntimeCore {
         orderedScriptLoads.clear();timerScheduled=false;
         microtasks.clear();possiblyUnhandledRejections.clear();templatePrograms.clear();cachedEvalPrograms.clear();cachedEvalBytes=0;evalCompileCacheHits=0;mutationTargets.clear();
         jitStatistics={};jitAllocatedCodeBytes=0;tableReductionPlans.clear();tableReductionCalls=0;tableReductionIterations=0;
+        stringTransformPlans.clear();stringTransformCalls=0;stringTransformIterations=0;
+        byteCopyPlans.clear();byteCopyCalls=0;byteCopyIterations=0;
+        simdByteCopyIterations=0;parallelByteCopyIterations=0;
+        nativeLoopPlans.clear();nativeLoopCalls=0;nativeLoopIterations=0;nativeLoopGuardExits=0;nativeLoopCompilations=0;nativeLoopCacheLimitExits=0;
+        nativeLoopHeaderEntries=0;
+        nativeLoopPlanSequence=0;nativeLoopPlanEvictions=0;
+        nativeLoopPreparedBytes=0;nativeLoopPrepareCacheHits=0;nativeLoopPrepareCacheMisses=0;
+        nativeLoopCacheLastReject=0;
+        nativeLoopLastReject=0;nativeLoopLastOperation=0;nativeLoopLastOffset=0;
+        packedStringTransformCalls=0;packedStringTransformIterations=0;
         executedInstructions=0;cycleCollectionNext=1000000;cycleCollectionPending=false;
         executionSamples.clear();nativeSamples.clear();nextProfileInstruction=0;profileNativeSequence=0;
         allocationsSinceCollection=0;collectionAllocationInterval=4096;collectionScanSize=0;collectionCount=0;
@@ -3212,7 +3321,17 @@ struct RuntimeCore {
     std::shared_ptr<RuntimeRegex> Regex(const std::wstring& pattern,const std::wstring& flags){
         const auto key=flags+L"\x1f"+pattern;const auto found=runtimeRegularExpressions.find(key);
         if(found!=runtimeRegularExpressions.end())return found->second;
-        try{auto expression=std::make_shared<RuntimeRegex>(pattern,flags);
+        try{
+#ifdef SUPPORT_PCRE2
+            auto expression=std::make_shared<RuntimeRegex>(pattern,flags);
+#else
+            std::wstring compatiblePattern;
+            if(!TranslateUnicodePropertyEscapes(pattern,flags,compatiblePattern))
+                throw std::runtime_error("Unsupported Unicode property escape");
+            if(flags.find(L'u')==std::wstring::npos)
+                compatiblePattern=NormalizeLegacyRegexBraces(compatiblePattern);
+            auto expression=std::make_shared<RuntimeRegex>(compatiblePattern,flags);
+#endif
             if(runtimeRegularExpressions.size()>256)runtimeRegularExpressions.clear();
             runtimeRegularExpressions[key]=expression;return expression;
         }catch(const std::exception& error){throw JavaScriptException{ErrorValue(L"SyntaxError",Utf8ToWide(error.what()))};}
@@ -3257,7 +3376,9 @@ struct RuntimeCore {
     #include "StringRegex.inl"
     #include "OriginFiles.inl"
     #include "TrustedTypes.inl"
+#ifdef SUPPORT_WEB_ASSEMBLY
     #include "RuntimeWasm.inl"
+#endif
     #include "RuntimeAudio.inl"
     #include "RuntimePlatform.inl"
     Value Deref(const Value& input){
@@ -3291,6 +3412,11 @@ struct RuntimeCore {
     }
     double Number(const Value& value){
         if(value.type==Value::Type::Reference)return Number(Deref(value));
+        if(value.type==Value::Type::Object||value.type==Value::Type::Function||value.type==Value::Type::Native){
+            auto converted=NumericArgument(value);
+            if(converted.abrupt){converted.abrupt=false;throw JavaScriptException{converted};}
+            return converted.number;
+        }
         const auto& v=value;if(v.type==Value::Type::Number)return v.number;if(v.type==Value::Type::Boolean)return v.boolean?1:0;if(v.type==Value::Type::Null)return 0;if(v.type==Value::Type::String){const auto text=Trim(v.StringText());if(text.empty())return 0;wchar_t* end=nullptr;const double number=std::wcstod(text.c_str(),&end);if(end==text.c_str()||!end||*end!=L'\0')return std::numeric_limits<double>::quiet_NaN();return number;}if(v.type==Value::Type::Object&&v.object&&v.object->kind==ObjectKind::Date&&v.object->props.count(L"$time"))return Number(v.object->props[L"$time"]);return std::numeric_limits<double>::quiet_NaN();
     }
     static std::uint32_t NumberUint32(double number){
@@ -3358,7 +3484,7 @@ struct RuntimeCore {
         }
         if(value.type==Value::Type::String&&(value.StringText().rfind(L"\uffffsymbol.",0)==0||value.StringText().rfind(L"\uffffsymbol:",0)==0))
             return Value::Thrown(ErrorValue(L"TypeError",L"Cannot convert Symbol to a string"));
-        return Value::String(String(value));
+        return value.type==Value::Type::String?value:Value::String(String(value));
     }
     std::int32_t Int32(const Value& value){return static_cast<std::int32_t>(Uint32(value));}
     bool OwnPropertyIsEnumerable(const Value& input,const std::wstring& key){
@@ -3373,7 +3499,7 @@ struct RuntimeCore {
         else if(value.type==Value::Type::Object&&value.object){
             if(value.object->kind==ObjectKind::Array){
                 size_t index=0;
-                if(TryParseDecimalIndex(key,index))return index<value.object->items.size();
+                if(TryParseDecimalIndex(key,index)&&!value.object->props.count(L"$get:"+key))return index<value.object->items.size()&&!value.object->props.count(L"$arrayHole:"+key);
                 if(key==L"length")return false;
             }
             const auto primitive=value.object->props.find(L"$primitive");
@@ -3402,7 +3528,7 @@ struct RuntimeCore {
         if(value.type==Value::Type::Object&&value.object&&value.object->kind==ObjectKind::Array){
             size_t index=0;
             if(key==L"length")return true;
-            if(TryParseDecimalIndex(key,index)&&index<value.object->items.size())return true;
+            if(TryParseDecimalIndex(key,index)&&index<value.object->items.size()&&!value.object->props.count(L"$arrayHole:"+key))return true;
         }
         const auto* properties=OwnPropertyStorage(value);
         return properties&&(properties->count(key)||properties->count(L"$get:"+key)||
@@ -3425,7 +3551,7 @@ struct RuntimeCore {
             size_t index=0;
             if(TryParseDecimalIndex(key,index)){
                 if(index>=target.object->items.size())target.object->items.resize(index+1);
-                target.object->items[index]=value;properties->erase(key);return;
+                target.object->items[index]=value;properties->erase(key);properties->erase(L"$arrayHole:"+key);return;
             }
         }
         (*properties)[key]=value;
@@ -3452,10 +3578,56 @@ struct RuntimeCore {
                 throw JavaScriptException{ErrorValue(L"TypeError",L"Invalid typed array element descriptor")};
             if(present[2])WriteTypedElement(target.object,typedIndex,fields[2]);return;
         }
+        // Ordinary descriptors also read inherited fields and accessors before
+        // checking the current property. Do not bypass their observable getters.
+        auto normalized=ObjectValue(ObjectKind::Plain);
+        for(const auto* field:{L"enumerable",L"configurable",L"value",L"writable",L"get",L"set"})if(HasProperty(descriptor,field)){
+            auto value=GetProperty(descriptor,field);
+            if(value.abrupt){value.abrupt=false;throw JavaScriptException{value};}
+            if((std::wstring(field)==L"get"||std::wstring(field)==L"set")&&
+               value.type!=Value::Type::Undefined&&!IsCallable(value))
+                throw JavaScriptException{ErrorValue(L"TypeError",L"Property accessor must be callable or undefined")};
+            normalized.object->props[field]=value;
+        }
+        descriptor=normalized;
+        if((descriptor.object->props.count(L"get")||descriptor.object->props.count(L"set"))&&
+           (descriptor.object->props.count(L"value")||descriptor.object->props.count(L"writable")))
+            throw JavaScriptException{ErrorValue(L"TypeError",L"Property descriptor cannot be both data and accessor")};
         if(target.object&&target.object->kind==ObjectKind::Array){
             size_t index=0;if(TryParseDecimalIndex(key,index))target.object->hasIndexedDescriptors=true;
         }
         const bool existed=HasOwnStoredProperty(target,key);
+        const auto existingConfigurable=properties->find(L"$configurable:"+key);
+        if(existed&&existingConfigurable!=properties->end()&&!Truth(existingConfigurable->second)){
+            const auto supplied=[&](const wchar_t* name){return descriptor.object->props.count(name)!=0;};
+            const auto rejects=[&]{throw JavaScriptException{ErrorValue(L"TypeError",L"Cannot redefine non-configurable property "+key)};};
+            const bool oldAccessor=properties->count(L"$get:"+key)||properties->count(L"$set:"+key);
+            const bool newAccessor=supplied(L"get")||supplied(L"set");
+            const bool newData=supplied(L"value")||supplied(L"writable");
+            if((supplied(L"configurable")&&Truth(descriptor.object->props[L"configurable"]))||
+               (supplied(L"enumerable")&&Truth(descriptor.object->props[L"enumerable"])!=OwnPropertyIsEnumerable(target,key))||
+               (newAccessor&&!oldAccessor)||(newData&&oldAccessor))rejects();
+            if(oldAccessor){
+                for(const auto* name:{L"get",L"set"})if(supplied(name)){
+                    const auto found=properties->find(L"$"+std::wstring(name)+L":"+key);
+                    const auto previous=found==properties->end()?Value::Undefined():found->second;
+                    if(!EqualValues(previous,descriptor.object->props[name]))rejects();
+                }
+            }else{
+                const auto writable=properties->find(L"$writable:"+key);
+                if(writable!=properties->end()&&!Truth(writable->second)){
+                    if(supplied(L"writable")&&Truth(descriptor.object->props[L"writable"]))rejects();
+                    if(supplied(L"value")){
+                        const auto previous=GetProperty(target,key);
+                        const auto next=Deref(descriptor.object->props[L"value"]);
+                        const bool same=previous.type==Value::Type::Number&&next.type==Value::Type::Number?
+                            (std::isnan(previous.number)&&std::isnan(next.number))||
+                            (previous.number==next.number&&(previous.number!=0||std::signbit(previous.number)==std::signbit(next.number))):EqualValues(previous,next);
+                        if(!same)rejects();
+                    }
+                }
+            }
+        }
         const bool hasValue=descriptor.object->props.count(L"value")!=0;
         const bool hasGetter=descriptor.object->props.count(L"get")!=0;
         const bool hasSetter=descriptor.object->props.count(L"set")!=0;
@@ -3531,7 +3703,7 @@ struct RuntimeCore {
         }
         if(object->kind==ObjectKind::Array){
             if(key==L"length")return true;
-            size_t index=0;if(TryParseDecimalIndex(key,index)&&index<object->items.size())return true;
+            size_t index=0;if(TryParseDecimalIndex(key,index)&&index<object->items.size()&&!object->props.count(L"$arrayHole:"+key))return true;
         }
         if(object->kind==ObjectKind::NamedNodeMap&&object->node){
             if(key==L"length"||key==L"item"||key==L"getNamedItem"||
@@ -3870,7 +4042,7 @@ struct RuntimeCore {
                     event->props[L"oldValue"]=change.hadOld?Value::String(change.oldValue):Value::Null();
                     event->props[L"newValue"]=change.hasNew?Value::String(change.newValue):Value::Null();
                     event->props[L"url"]=Value::String(change.url);event->props[L"storageArea"]=storage;
-                    event->props[L"isTrusted"]=Value::Bool(true);event->props[L"bubbles"]=Value::Bool(false);event->props[L"cancelable"]=Value::Bool(false);
+                    event->eventTrusted=true;event->props[L"bubbles"]=Value::Bool(false);event->props[L"cancelable"]=Value::Bool(false);
                     r.DispatchWindowEventObject(event);r.DrainMicrotasks();
                 });
             });
@@ -4039,7 +4211,7 @@ struct RuntimeCore {
             UpdateLocation(String(entry->props[L"url"]));
             if(sameDocumentNavigationSink)sameDocumentNavigationSink(location,false,delta);
             auto event=CreateObject(ObjectKind::Event);event->props[L"type"]=Value::String(L"popstate");
-            event->props[L"isTrusted"]=Value::Bool(true);event->props[L"state"]=history->props[L"$historyState"];
+            event->eventTrusted=true;event->props[L"state"]=history->props[L"$historyState"];
             DispatchWindowEventObject(event);
             if(String(entry->props[L"scrollRestoration"])==L"auto"){
                 ForwardCall(GetProperty(global->values[L"window"],L"scrollTo"),global->values[L"window"],
@@ -4048,7 +4220,7 @@ struct RuntimeCore {
             const auto hash=[](const std::wstring& url){const auto at=url.find(L'#');return at==std::wstring::npos?std::wstring{}:url.substr(at);};
             if(hash(oldUrl)!=hash(location)){
                 auto change=CreateObject(ObjectKind::Event);change->props[L"type"]=Value::String(L"hashchange");
-                change->props[L"isTrusted"]=Value::Bool(true);change->props[L"oldURL"]=Value::String(oldUrl);change->props[L"newURL"]=Value::String(location);
+                change->eventTrusted=true;change->props[L"oldURL"]=Value::String(oldUrl);change->props[L"newURL"]=Value::String(location);
                 DispatchWindowEventObject(change);
             }
         });return true;
@@ -4491,6 +4663,19 @@ struct RuntimeCore {
         else if(node->canvas->width!=width||node->canvas->height!=height)
             node->canvas->Reset(width,height);
         return node->canvas;
+    }
+    void SetCanvasCompositingAttribute(const std::shared_ptr<Object>& object,const std::wstring& key,const Value& value){
+        const auto surface=EnsureCanvas(object->node);if(!surface)return;
+        if(key==L"globalCompositeOperation"){
+            auto text=StringArgument(value);
+            if(text.abrupt){text.abrupt=false;throw JavaScriptException{text};}
+            ParseCanvasComposite(text.StringText(),surface->state.composite);
+        }else{
+            auto alpha=NumericArgument(value);
+            if(alpha.abrupt){alpha.abrupt=false;throw JavaScriptException{alpha};}
+            if(std::isfinite(alpha.number)&&alpha.number>=0&&alpha.number<=1)
+                surface->state.globalAlpha=alpha.number;
+        }
     }
     std::shared_ptr<CanvasSurface> ResetCanvas(const std::shared_ptr<Node>& node){
         if(!node)return {};
@@ -5045,7 +5230,7 @@ struct RuntimeCore {
             auto event=CreateObject(ObjectKind::Event);event->props[L"type"]=Value::String(L"change");
             event->props[L"matches"]=Value::Bool(matches);event->props[L"media"]=Value::String(query);
             event->props[L"target"]=Value::FromObject(media);event->props[L"currentTarget"]=Value::FromObject(media);
-            event->props[L"defaultPrevented"]=Value::Bool(false);event->props[L"isTrusted"]=Value::Bool(true);
+            event->props[L"defaultPrevented"]=Value::Bool(false);event->eventTrusted=true;
             const auto found=objectListeners.find(media.get());
             if(found!=objectListeners.end())InvokeEventListeners(found->second,L"change",false,
                 Value::FromObject(media),Value::FromObject(event),event);
@@ -5633,6 +5818,9 @@ struct RuntimeCore {
         }
         for(const auto& entry:templatePrograms)if(entry.second)
             for(const auto& expression:entry.second->expressions)markChunk(expression);
+        // Cached eval bytecode owns prototype indices even after every
+        // Function produced by a previous evaluation has been collected.
+        for(const auto& entry:cachedEvalPrograms)if(entry.chunk)markChunk(*entry.chunk);
         for(size_t index=0;index<module->prototypes.size();++index)
             if(!marked[index])module->prototypes[index].reset();
         while(!module->prototypes.empty()&&!module->prototypes.back())
@@ -5797,7 +5985,7 @@ struct RuntimeCore {
         }
         auto earliest=timers.empty()?std::chrono::steady_clock::time_point::max():
             std::min_element(timers.begin(),timers.end(),[](const auto& a,const auto& b){return a.due<b.due;})->due;
-        if(std::any_of(workerRealms.begin(),workerRealms.end(),[](const auto& worker){return !worker->terminated.load();}))
+        if(!workerWakeSignal->enabled.load()&&std::any_of(workerRealms.begin(),workerRealms.end(),[](const auto& worker){return !worker->finished.load();}))
             earliest=std::min(earliest,std::chrono::steady_clock::now()+std::chrono::milliseconds(5));
         if(earliest==std::chrono::steady_clock::time_point::max()){timerScheduled=false;if(timerScheduler)timerScheduler(0);return;}
         if(timerScheduled&&earliest>=timerWake)return;
@@ -5806,8 +5994,14 @@ struct RuntimeCore {
         const auto remaining=std::chrono::duration_cast<std::chrono::milliseconds>(earliest-now).count();
         if(timerScheduler)timerScheduler(static_cast<unsigned>(std::max<long long>(1,remaining)));
     }
+    static double CoarsenTimestamp(double milliseconds){
+        // Cross-origin isolated execution is not exposed by this engine. Use
+        // HR-Time's non-isolated 100-microsecond resolution for public clocks;
+        // native task deadlines continue to use the unmodified steady clock.
+        return std::floor(milliseconds*10)/10;
+    }
     double PerformanceNow()const{
-        return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-performanceStart).count();
+        return CoarsenTimestamp(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-performanceStart).count());
     }
     bool SupportedPerformanceType(const std::wstring& type)const{
         return type==L"mark"||type==L"measure"||type==L"resource";
@@ -5890,17 +6084,19 @@ struct RuntimeCore {
         const unsigned id=nextTimerId++;
         const auto milliseconds=static_cast<long long>(std::max(0.0,std::min(delay,2147483647.0)));
         timers.push_back({id,Deref(callback),std::chrono::steady_clock::now()+std::chrono::milliseconds(milliseconds),repeat?static_cast<unsigned>(std::max<long long>(1,milliseconds)):0,arguments});
-        ScheduleNextTimer();return id;
+        // Registering a later timer cannot change the already scheduled host
+        // wakeup. Avoid rescanning all timers on every registration.
+        if(!timerScheduled||timers.back().due<timerWake)ScheduleNextTimer();return id;
     }
     void ClearTimer(unsigned id){
         timers.erase(std::remove_if(timers.begin(),timers.end(),[&](const auto& timer){return timer.id==id;}),timers.end());
         timerScheduled=false;ScheduleNextTimer();
     }
+    #include "WorkerRuntime.inl"
     void DispatchWorkerInput(const std::wstring& json){
-        Compiler compiler(module,json);const auto parsed=RunCompletion(compiler.CompileExpressionOnly(),global);
-        if(parsed.thrown)return;
+        const auto parsed=ParseWorkerMessage(json);
         auto event=CreateObject(ObjectKind::Event);event->props[L"type"]=Value::String(L"message");
-        event->props[L"data"]=parsed.value;event->props[L"isTrusted"]=Value::Bool(true);
+        event->props[L"data"]=parsed;event->eventTrusted=true;
         event->props[L"target"]=event->props[L"currentTarget"]=workerGlobal;
         event->props[L"origin"]=Value::String(L"");event->props[L"source"]=Value::Null();
         const auto value=Value::FromObject(event);const auto callback=GetProperty(workerGlobal,L"onmessage");
@@ -5908,6 +6104,7 @@ struct RuntimeCore {
         InvokeEventListeners(windowListeners,L"message",false,workerGlobal,value,event);DrainMicrotasks();
     }
     void DrainWorkerMessages(){
+        workerWakeSignal->pending.store(false);
         const auto workers=workerRealms;
         for(const auto& worker:workers){
             std::deque<std::pair<bool,std::wstring>> messages;
@@ -5915,13 +6112,12 @@ struct RuntimeCore {
             for(const auto& message:messages){
                 if(worker->terminated.load())break;
                 auto event=CreateObject(ObjectKind::Event);const std::wstring type=message.first?L"error":L"message";
-                event->props[L"type"]=Value::String(type);event->props[L"isTrusted"]=Value::Bool(true);
+                event->props[L"type"]=Value::String(type);event->eventTrusted=true;
                 event->props[L"target"]=event->props[L"currentTarget"]=Value::FromObject(worker->owner);
                 event->props[L"origin"]=Value::String(L"");event->props[L"source"]=Value::Null();
                 if(message.first){event->props[L"message"]=Value::String(message.second);event->props[L"error"]=ErrorValue(L"Error",message.second);}
                 else{
-                    Compiler compiler(module,message.second);const auto parsed=RunCompletion(compiler.CompileExpressionOnly(),global);
-                    if(parsed.thrown)continue;event->props[L"data"]=parsed.value;
+                    event->props[L"data"]=ParseWorkerMessage(message.second);
                 }
                 const auto value=Value::FromObject(event);const auto callback=worker->owner->props.find(L"on"+type);
                 if(callback!=worker->owner->props.end()&&IsCallable(callback->second))InvokeCallback(callback->second,Value::FromObject(worker->owner),{value});
@@ -5952,14 +6148,16 @@ struct RuntimeCore {
         auto worker=std::make_shared<WorkerRealm>();worker->owner=owner;workerRealms.push_back(worker);
         const auto loader=resourceLoader;const auto requests=requestLoader;const bool isBlob=blob!=objectUrls.end();
         const auto workerLocation=isBlob?location:url;const bool creatorSecure=IsSecureContext();const auto context=browserContext;
-        worker->thread=std::thread([worker,loader,requests,source,url,isBlob,workerLocation,creatorSecure,context]{
-            struct FinishedScope {WorkerRealm& realm;~FinishedScope(){realm.finished.store(true);}} finished{*worker};
+        const auto wake=workerWakeSignal;
+        worker->thread=std::thread([worker,loader,requests,source,url,isBlob,workerLocation,creatorSecure,context,wake]{
+            struct FinishedScope {WorkerRealm& realm;std::shared_ptr<WorkerWakeSignal> wake;~FinishedScope(){realm.finished.store(true);wake->Notify();}} finished{*worker,wake};
             const auto publish=[&](bool error,const std::wstring& data){
-                std::lock_guard<std::mutex> lock(worker->mutex);worker->outgoing.emplace_back(error,data);
+                {std::lock_guard<std::mutex> lock(worker->mutex);worker->outgoing.emplace_back(error,data);}wake->Notify();
             };
             try{
                 Document document;document.Parse(L"<!doctype html><html><head></head><body></body></html>");
-                RuntimeCore child(document);child.interruptionSignal=&worker->stopped;child.location=workerLocation;
+                // Configure the realm before its single globals installation.
+                RuntimeCore child(document,false);child.interruptionSignal=&worker->stopped;child.location=workerLocation;
                 child.browserContext->ReleaseBrowsingContext(child.storageSession);
                 child.browserContext=context;child.storageSession=context->NewBrowsingContext();child.storageSource=context->NewBrowsingContext();
                 child.secureContextAncestors=[creatorSecure]{return creatorSecure;};
@@ -5975,10 +6173,10 @@ struct RuntimeCore {
                 }
                 for(const auto& name:documentNames){child.global->values.erase(name);scope->props.erase(name);}
                 const auto weak=std::weak_ptr<WorkerRealm>(worker);
-                auto send=child.Native([weak](RuntimeCore& r,const Value&,const std::vector<Value>& a){
+                auto send=child.Native([weak,wake](RuntimeCore& r,const Value&,const std::vector<Value>& a){
                     if(auto target=weak.lock())if(!target->stopped.load()){
                         const auto data=r.Json(a.empty()?Value::Undefined():a[0]);
-                        std::lock_guard<std::mutex> lock(target->mutex);target->outgoing.emplace_back(false,data);
+                        {std::lock_guard<std::mutex> lock(target->mutex);target->outgoing.emplace_back(false,data);}wake->Notify();
                     }
                     return Value::Undefined();
                 });
@@ -6293,6 +6491,13 @@ struct RuntimeCore {
             return ForeignRealmValue(base.realm->GetPropertyValue(target,key,hostMethod,
                 forwardedReceiver?&*forwardedReceiver:nullptr),base.realm,base.realmOwner);
         }
+        if(!hostMethod&&base.object&&base.object->kind==ObjectKind::Plain&&!base.object->node){
+            // Ordinary own data properties need no host-interface, buffer or
+            // primitive dispatch. Accessors erase their data entry, so a miss
+            // still takes the complete getter/prototype lookup below.
+            const auto own=base.object->props.find(key);
+            if(own!=base.object->props.end())return own->second;
+        }
         double typedIndex=0;
         if(TypedPropertyIndex(base,key,typedIndex))return ValidTypedIndex(base.object,typedIndex)?
             TypedElementRead(base.object,static_cast<size_t>(typedIndex)):Value::Undefined();
@@ -6452,6 +6657,7 @@ struct RuntimeCore {
                         if(prototype!=constructor->second.native->props.end()&&prototype->second.object){
                             const auto method=prototype->second.object->props.find(key);
                             if(method!=prototype->second.object->props.end())return method->second;
+                            return GetPropertyValue(prototype->second,key,false,&receiver);
                         }
                     }
                 }
@@ -6485,6 +6691,7 @@ struct RuntimeCore {
                         if(prototype!=constructor->second.native->props.end()&&prototype->second.object){
                             const auto method=prototype->second.object->props.find(key);
                             if(method!=prototype->second.object->props.end())return method->second;
+                            return GetPropertyValue(prototype->second,key,false,&receiver);
                         }
                     }
                 }
@@ -6510,6 +6717,7 @@ struct RuntimeCore {
                     }
                     return Value::Number(static_cast<double>(first));
                 });
+                if(key==L"charCodeAt")method.native->intrinsic=NativeFunction::Intrinsic::CharCodeAt;
                 method.native->props[L"$stringReceiverDirect"]=Value::Bool(true);return method;
             }
             if(key==L"substring")return Native([s=base.StringText()](RuntimeCore& r,const Value&,const std::vector<Value>& a){
@@ -6950,14 +7158,35 @@ struct RuntimeCore {
                         Value::Number(static_cast<double>(index)),Value::FromObject(object)}));}
                 return accumulator;
             });
-            if(key==L"join")return Native([](RuntimeCore& r,const Value& receiver,const std::vector<Value>& args){
+            if(key==L"join"){auto method=Native([](RuntimeCore& r,const Value& receiver,const std::vector<Value>& args){
                 const auto target=r.Deref(receiver);
                 if(target.type==Value::Type::Null||target.type==Value::Type::Undefined)return Value::Thrown(r.ErrorValue(L"TypeError",L"Array.join requires a receiver"));
-                const auto separator=args.empty()||r.Deref(args[0]).type==Value::Type::Undefined?L",":r.String(args[0]);
                 const auto lengthValue=r.Number(r.GetProperty(target,L"length"));
                 if(lengthValue>10000000)return Value::Thrown(r.ErrorValue(L"RangeError",L"Joined array exceeds supported allocation size"));
                 const size_t length=std::isnan(lengthValue)||lengthValue<=0?0:static_cast<size_t>(lengthValue);
+                const auto separatorValue=args.empty()||r.Deref(args[0]).type==Value::Type::Undefined?Value::String(L","):r.StringArgument(args[0]);
+                if(separatorValue.abrupt)return separatorValue;
+                const auto& separator=separatorValue.StringText();
                 std::wstring out;
+                // Dense own strings have no getters or coercion to invoke.
+                // Read them directly and allocate the output once; generic,
+                // sparse, cross-realm and descriptor-backed arrays retain the
+                // observable per-index lookup below. Separator coercion has
+                // already run, so mutations performed by it are respected.
+                if(!target.realm&&target.object&&target.object->kind==ObjectKind::Array&&
+                   target.object->props.empty()&&length==target.object->items.size()&&
+                   std::all_of(target.object->items.begin(),target.object->items.end(),
+                       [](const Value& value){return value.type==Value::Type::String&&!value.realm;})){
+                    size_t required=0;
+                    const auto reserve=[&](size_t count){if(count>out.max_size()-required)return false;required+=count;return true;};
+                    for(size_t i=0;i<length;++i){
+                        if((i&&!reserve(separator.size()))||!reserve(target.object->items[i].StringText().size()))
+                            return Value::Thrown(r.ErrorValue(L"RangeError",L"Joined string exceeds supported allocation size"));
+                    }
+                    out.reserve(required);
+                    for(size_t i=0;i<length;++i){if(i)out+=separator;out+=target.object->items[i].StringText();}
+                    return Value::String(std::move(out));
+                }
                 for(size_t i=0;i<length;++i){
                     if(i)out+=separator;
                     const auto value=r.Deref(r.GetProperty(target,std::to_wstring(i)));
@@ -6965,8 +7194,8 @@ struct RuntimeCore {
                     else if(value.type!=Value::Type::Undefined&&value.type!=Value::Type::Null)out+=r.String(value);
                 }
                 return Value::String(std::move(out));
-            });
-            size_t index=0;if(TryParseDecimalIndex(key,index)&&index<object->items.size())return object->props.count(L"$typedArrayBits")?TypedElementRead(object,index):object->items[index];
+            });method.native->intrinsic=NativeFunction::Intrinsic::ArrayJoin;return method;}
+            size_t index=0;if(TryParseDecimalIndex(key,index)&&index<object->items.size()&&!object->props.count(L"$arrayHole:"+key))return object->props.count(L"$typedArrayBits")?TypedElementRead(object,index):object->items[index];
         }
         if(object->kind==ObjectKind::RegExp&&key==L"source")return object->props[L"$pattern"];
         if(object->kind==ObjectKind::RegExp&&key==L"flags")return object->props[L"$flags"];
@@ -6993,7 +7222,7 @@ struct RuntimeCore {
                 };
                 if(source.type==Value::Type::String){for(size_t i=0;i<source.StringText().size();++i)append(std::to_wstring(i));append(L"length");}
                 if(source.type==Value::Type::Object&&source.object&&source.object->kind==ObjectKind::Array){
-                    for(size_t i=0;i<source.object->items.size();++i)append(std::to_wstring(i));append(L"length");
+                    for(size_t i=0;i<source.object->items.size();++i)if(!source.object->props.count(L"$arrayHole:"+std::to_wstring(i)))append(std::to_wstring(i));append(L"length");
                 }
                 const FastMap<std::wstring,Value>* props=source.object?&source.object->props:source.function?&source.function->props:source.native?&source.native->props:nullptr;
                 if(props)for(const auto& entry:*props){
@@ -7030,7 +7259,7 @@ struct RuntimeCore {
                 if(source.type==Value::Type::Function&&source.function)return Value::Bool(source.function->props.count(name)!=0||source.function->props.count(L"$get:"+name)!=0);
                 if(source.type==Value::Type::Native&&source.native)return Value::Bool(source.native->props.count(name)!=0||source.native->props.count(L"$get:"+name)!=0);
                 if(source.type!=Value::Type::Object||!source.object)return Value::Bool(false);
-                if(source.object->kind==ObjectKind::Array){size_t index=0;if(name==L"length")return Value::Bool(true);if(TryParseDecimalIndex(name,index))return Value::Bool(index<source.object->items.size());}
+                if(source.object->kind==ObjectKind::Array)return Value::Bool(r.HasOwnStoredProperty(source,name));
                 return Value::Bool(source.object->props.count(name)!=0);
             });
             if(key==L"create")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
@@ -7208,6 +7437,7 @@ struct RuntimeCore {
                 if(source.type==Value::Type::Object&&source.object){
                     if(source.object->kind==ObjectKind::Array)
                         for(size_t index=0;index<source.object->items.size();++index){
+                            if(source.object->props.count(L"$arrayHole:"+std::to_wstring(index)))continue;
                             auto name=Value::String(std::to_wstring(index)),value=r.Deref(source.object->items[index]);
                             result.push_back(key==L"keys"?name:key==L"values"?value:r.ArrayValue({name,value}));
                         }
@@ -7353,6 +7583,8 @@ struct RuntimeCore {
         if(object->kind==ObjectKind::CanvasContext2D){
             const auto surface=EnsureCanvas(object->node);if(!surface)return Value::Undefined();
             if(key==L"canvas")return NodeValue(object->node);
+            if(key==L"globalAlpha")return Value::Number(surface->state.globalAlpha);
+            if(key==L"globalCompositeOperation")return Value::String(CanvasCompositeName(surface->state.composite));
             if(key==L"getContextAttributes")return ObjectNative(object,[object](RuntimeCore& r,const Value&,const std::vector<Value>&){
                 const auto canvas=r.EnsureCanvas(object->node);auto result=r.ObjectValue(ObjectKind::Plain);
                 result.object->props[L"alpha"]=Value::Bool(canvas->alpha);
@@ -7521,9 +7753,13 @@ struct RuntimeCore {
             if(key==L"fillRect"||key==L"clearRect")return ObjectNative(object,[object,key](RuntimeCore& r,const Value&,const std::vector<Value>& a){
                 if(a.size()<4)return Value::Undefined();const auto value=r.EnsureCanvas(object->node);if(!value)return Value::Undefined();
                 CanvasDrawCommand command;command.kind=key==L"fillRect"?CanvasCommandKind::FillRect:CanvasCommandKind::ClearRect;
-                command.state=SnapshotCanvasState(value->state);command.x=static_cast<float>(r.Number(a[0]));
-                command.y=static_cast<float>(r.Number(a[1]));command.width=static_cast<float>(r.Number(a[2]));
-                command.height=static_cast<float>(r.Number(a[3]));
+                double coordinates[4];
+                for(size_t index=0;index<4;++index){const auto number=r.NumericArgument(a[index]);if(number.abrupt)return number;coordinates[index]=number.number;}
+                for(const auto number:coordinates)if(!std::isfinite(number))return Value::Undefined();
+                if(coordinates[2]==0||coordinates[3]==0)return Value::Undefined();
+                command.state=SnapshotCanvasState(value->state);command.x=static_cast<float>(coordinates[0]);
+                command.y=static_cast<float>(coordinates[1]);command.width=static_cast<float>(coordinates[2]);
+                command.height=static_cast<float>(coordinates[3]);
                 const auto& t=value->state.transform;
                 const bool identity=t.a==1&&t.b==0&&t.c==0&&t.d==1&&t.e==0&&t.f==0;
                 if(command.kind==CanvasCommandKind::ClearRect&&identity&&command.x<=0&&command.y<=0&&
@@ -7815,7 +8051,7 @@ struct RuntimeCore {
             if(key==L"createEvent")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>&){
                 auto event=r.CreateObject(ObjectKind::Event);event->props[L"type"]=Value::String(L"");
                 event->props[L"bubbles"]=Value::Bool(false);event->props[L"cancelable"]=Value::Bool(false);
-                event->props[L"defaultPrevented"]=Value::Bool(false);event->props[L"isTrusted"]=Value::Bool(false);
+                event->props[L"defaultPrevented"]=Value::Bool(false);event->eventTrusted=false;
                 return Value::FromObject(event);
             });
             if(key==L"createNodeIterator")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
@@ -7877,7 +8113,7 @@ struct RuntimeCore {
                 init.data=r.String(r.GetProperty(value,L"data"));
                 init.inputType=r.String(r.GetProperty(value,L"inputType"));
                 const auto root=object->isolatedDocument?object->isolatedDocument->Root():r.document.Root();
-                value.object->props[L"isTrusted"]=Value::Bool(false);
+                value.object->eventTrusted=false;
                 return Value::Bool(!r.Dispatch(root,r.String(r.GetProperty(value,L"type")),nullptr,init,nullptr,value.object));
             });
             EnsureIndex();
@@ -8581,7 +8817,7 @@ struct RuntimeCore {
                 if(value.type!=Value::Type::Object||!value.object||value.object->kind!=ObjectKind::Event)return Value::Thrown(r.ErrorValue(L"TypeError",L"dispatchEvent requires an Event"));
                 JavaScriptRuntime::EventInit init{};init.bubbles=r.Truth(r.GetProperty(value,L"bubbles"));init.cancelable=r.Truth(r.GetProperty(value,L"cancelable"));
                 init.data=r.String(r.GetProperty(value,L"data"));init.inputType=r.String(r.GetProperty(value,L"inputType"));
-                value.object->props[L"isTrusted"]=Value::Bool(false);
+                value.object->eventTrusted=false;
                 return Value::Bool(!r.Dispatch(node,r.String(r.GetProperty(value,L"type")),nullptr,init,nullptr,value.object));
             });
             if(key==L"setSelectionRange")return NodeNative(node,[node](RuntimeCore& r,const Value&,const std::vector<Value>& a){
@@ -8933,7 +9169,7 @@ struct RuntimeCore {
                 if(a.empty())return Value::Bool(false);const auto eventValue=r.Deref(a[0]);
                 if(eventValue.type!=Value::Type::Object||!eventValue.object||eventValue.object->kind!=ObjectKind::Event)
                     return Value::Thrown(r.ErrorValue(L"TypeError",L"dispatchEvent requires an Event"));
-                eventValue.object->props[L"isTrusted"]=Value::Bool(false);
+                eventValue.object->eventTrusted=false;
                 return Value::Bool(r.DispatchWindowEventObject(eventValue.object));
             });
             const auto globalProperty=global->values.find(key);
@@ -9057,8 +9293,9 @@ struct RuntimeCore {
                 const auto worker=*found;
                 if(key==L"terminate"){
                     worker->terminated.store(true);worker->stopped.store(true);worker->changed.notify_all();
-                    if(worker->thread.joinable())worker->thread.join();
-                    r.workerRealms.erase(found);r.ScheduleNextTimer();return Value::Undefined();
+                    // Stop requests must not wait for realm teardown on the
+                    // caller's UI thread. Drain joins only after finished.
+                    r.ScheduleNextTimer();return Value::Undefined();
                 }
                 if(worker->stopped.load()||worker->finished.load())return Value::Undefined();
                 const auto data=r.Json(a.empty()?Value::Undefined():a[0]);
@@ -9358,7 +9595,7 @@ struct RuntimeCore {
                     const auto self=Value::FromObject(object);
                     for(const auto* type:{L"readystatechange",loaded?L"load":L"error",L"loadend"}){
                         auto event=runtime.CreateObject(ObjectKind::Event);const auto value=Value::FromObject(event);
-                        event->props[L"type"]=Value::String(type);event->props[L"isTrusted"]=Value::Bool(true);
+                        event->props[L"type"]=Value::String(type);event->eventTrusted=true;
                         event->props[L"target"]=self;event->props[L"currentTarget"]=self;
                         const auto callback=object->props.find(L"on"+std::wstring(type));
                         if(callback!=object->props.end()&&runtime.IsCallable(callback->second))
@@ -9397,7 +9634,7 @@ struct RuntimeCore {
         }
         if(object->kind==ObjectKind::Performance||object->kind==ObjectKind::PerformanceEntryList){
             if(object->kind==ObjectKind::Performance){
-                if(key==L"timeOrigin")return Value::Number(performanceTimeOrigin);
+                if(key==L"timeOrigin")return Value::Number(CoarsenTimestamp(performanceTimeOrigin));
                 if(key==L"now")return Native([](RuntimeCore& r,const Value&,const std::vector<Value>&){return Value::Number(r.PerformanceNow());});
             }
             if(key==L"getEntries"||key==L"getEntriesByType"||key==L"getEntriesByName")
@@ -9833,7 +10070,7 @@ struct RuntimeCore {
             if(strict)throw JavaScriptException{ErrorValue(L"TypeError",L"Cannot assign to getter-only property "+key)};
             return;
         }
-        for(auto prototype=object->props.count(key)?nullptr:object->prototype;prototype;prototype=prototype->prototype){
+        for(auto prototype=HasOwnStoredProperty(base,key)?nullptr:object->prototype;prototype;prototype=prototype->prototype){
             const auto setter=prototype->props.find(L"$set:"+key);
             if(setter!=prototype->props.end()){Call(setter->second,base,{v});return;}
             if(prototype->props.count(L"$get:"+key)){
@@ -9883,7 +10120,7 @@ struct RuntimeCore {
                     if(!callStack.empty())write+=L"@"+std::to_wstring(callStack.back().offset);
                     if(diagnosticArrayWrites.size()==128)diagnosticArrayWrites.pop_front();diagnosticArrayWrites.push_back(std::move(write));
                 }
-                if(i>=object->items.size())object->items.resize(i+1);object->items[i]=v;return;
+                if(i>=object->items.size())object->items.resize(i+1);object->items[i]=v;object->props.erase(L"$arrayHole:"+key);return;
             }
             if(object->props.count(L"$typedArrayBits")){
                 const auto numeric=Number(Value::String(key));
@@ -10009,6 +10246,8 @@ struct RuntimeCore {
                 if(v.type==Value::Type::Object&&v.object&&v.object->kind==ObjectKind::CanvasGradient&&v.object->canvasGradient){
                     paint.gradient=v.object->canvasGradient;paint.color.clear();
                 }else{paint.color=String(v);paint.gradient.reset();}
+            }else if(key==L"globalCompositeOperation"||key==L"globalAlpha"){
+                SetCanvasCompositingAttribute(object,key,v);
             }else if(key==L"lineWidth"){
                 const double width=Number(v);if(std::isfinite(width)&&width>0)state.lineWidth=static_cast<float>(width);
             }else if(key==L"font")state.font=String(v);
@@ -10018,6 +10257,45 @@ struct RuntimeCore {
             return;
         }
         object->props[key]=v;
+    }
+    Value ReflectSet(Value target,const std::wstring& key,const Value& value,Value receiver){
+        if(target.object&&target.object->kind==ObjectKind::Proxy){
+            const auto stored=target.object->props.find(L"$target"),handler=target.object->props.find(L"$handler");
+            if(stored==target.object->props.end())return Value::Bool(false);
+            if(handler!=target.object->props.end()){
+                const auto trap=GetProperty(handler->second,L"set");
+                if(trap.abrupt)return trap;
+                if(IsCallable(trap)){
+                    const auto result=ForwardCall(trap,handler->second,{stored->second,Value::String(key),value,receiver});
+                    return result.abrupt?result:Value::Bool(Truth(result));
+                }
+            }
+            return ReflectSet(stored->second,key,value,receiver);
+        }
+        for(auto current=target;;){
+            auto* properties=OwnPropertyStorage(current);if(!properties)break;
+            const auto getter=properties->find(L"$get:"+key),setter=properties->find(L"$set:"+key);
+            if(getter!=properties->end()||setter!=properties->end()){
+                if(setter==properties->end()||!IsCallable(setter->second))return Value::Bool(false);
+                const auto result=ForwardCall(setter->second,receiver,{value});
+                return result.abrupt?result:Value::Bool(true);
+            }
+            if(HasOwnStoredProperty(current,key)){
+                const auto writable=properties->find(L"$writable:"+key);
+                if(writable!=properties->end()&&!Truth(writable->second))return Value::Bool(false);
+                break;
+            }
+            const auto prototype=current.object?current.object->prototype:
+                (current.type==Value::Type::Function||current.type==Value::Type::Native?intrinsicFunctionPrototype:nullptr);
+            if(!prototype)break;current=Value::FromObject(prototype);
+        }
+        auto* properties=OwnPropertyStorage(receiver);if(!properties)return Value::Bool(false);
+        if(properties->count(L"$get:"+key)||properties->count(L"$set:"+key))return Value::Bool(false);
+        const auto writable=properties->find(L"$writable:"+key);
+        if(writable!=properties->end()&&!Truth(writable->second))return Value::Bool(false);
+        if(EqualValues(target,receiver))SetProperty(receiver,key,value);
+        else DefineOwnDataProperty(receiver,key,value);
+        return Value::Bool(true);
     }
     void Assign(const Value& reference,const Value& value,bool strict=false){
         if(reference.type!=Value::Type::Reference)return;auto ref=reference.reference;
@@ -10032,6 +10310,24 @@ struct RuntimeCore {
                 }
             }else if(global)SetEnvironmentValue(global,ref->name,value,true);
         }else SetProperty(ref->base,ref->name,value,strict);
+    }
+    bool TryAppendBindingString(Value& left,const Value& right,const Value& reference){
+        if(traceFunctions)return false;
+        if(left.type!=Value::Type::String||right.type!=Value::Type::String||
+           !left.appendableString||!left.largeString||left.realm||right.realm||
+           reference.type!=Value::Type::Reference||!reference.reference||
+           reference.reference->kind!=Reference::Kind::Variable)return false;
+        const auto& ref=*reference.reference;
+        const auto owner=ref.env?ref.env->Find(ref.name):nullptr;
+        if(!owner||owner->immutableBindings.count(ref.name))return false;
+        const auto binding=owner->values.find(ref.name);
+        if(binding==owner->values.end()||binding->second.type!=Value::Type::String||
+           binding->second.largeString!=left.largeString||left.largeString.use_count()!=2)return false;
+        // Exactly the binding and the already evaluated left operand own this
+        // buffer. Saved values, constants, caches, aliases and the RHS would
+        // add an owner and require an ordinary immutable concatenation.
+        std::const_pointer_cast<std::wstring>(left.largeString)->append(right.StringText());
+        ++stringAppendReuses;return true;
     }
     bool Delete(const Value& reference){
         if(reference.type!=Value::Type::Reference)return true;const auto ref=reference.reference;
@@ -10056,6 +10352,13 @@ struct RuntimeCore {
         auto* properties=OwnPropertyStorage(base);if(!properties)return true;
         const auto configurable=properties->find(L"$configurable:"+ref->name);
         if(configurable!=properties->end()&&!Truth(configurable->second))return false;
+        if(base.object&&base.object->kind==ObjectKind::Array){
+            size_t index=0;if(TryParseDecimalIndex(ref->name,index)&&index<base.object->items.size()){
+                base.object->items[index]=Value::Undefined();
+                (*properties)[L"$arrayHole:"+ref->name]=Value::Bool(true);
+                base.object->hasIndexedDescriptors=true;
+            }
+        }
         if(base.object&&base.object->kind==ObjectKind::Dataset&&base.object->node){base.object->node->RemoveAttribute(DatasetAttributeName(ref->name));Mutated(base.object->node,JavaScriptRuntime::MutationKind::Style);return true;}
         properties->erase(ref->name);properties->erase(L"$get:"+ref->name);properties->erase(L"$set:"+ref->name);
         properties->erase(L"$enumerable:"+ref->name);properties->erase(L"$configurable:"+ref->name);properties->erase(L"$writable:"+ref->name);return true;
@@ -10065,36 +10368,76 @@ struct RuntimeCore {
         *completion={false,value,true};return Value::Undefined();
     }
     Value EvalProgram(const Value& input,const std::shared_ptr<Environment>& caller,bool inheritedStrict){
-        const auto source=Deref(input);if(source.type!=Value::Type::String)return source;
+        auto source=Deref(input);
+        // HostGetCodeForEval unwraps only a genuine TrustedScript's immutable
+        // associated data. Ordinary objects (including proxies and lookalikes)
+        // still pass through eval without invoking their stringifiers.
+        if(source.object&&source.object->nativeStateKind==Object::NativeStateKind::TrustedScript&&
+           source.object->trustedTypeData)
+            source=Value::SharedString(source.object->trustedTypeData);
+        if(source.type!=Value::Type::String)return source;
         if(traceFunctions&&diagnosticEvaluations.size()<16)diagnosticEvaluations.push_back(std::to_wstring(source.StringText().size())+L": "+source.StringText().substr(0,500));
         try{
-            Chunk chunk;bool cached=false;
-            // Repeated eval of the same immutable large string can reuse its
-            // bytecode. Retain at most 8 MiB of source and exclude nested function/module
-            // dependencies. Every execution still gets a fresh environment.
-            if(source.largeString&&source.StringText().size()>=4096){
-                for(const auto& entry:cachedEvalPrograms)if(entry.source==source.largeString&&entry.inheritedStrict==inheritedStrict){chunk=entry.chunk;cached=true;++evalCompileCacheHits;break;}
-            }
-            if(!cached){Compiler compiler(module,source.StringText());chunk=compiler.CompileEvalProgram(inheritedStrict);
+            std::shared_ptr<Chunk> compiled;
+            // Bytecode belongs to this realm's Module. Reuse compilation for
+            // equal text and strictness, never an execution environment or a
+            // Function object. Reset clears the cache before replacing Module.
+            for(const auto& entry:cachedEvalPrograms)
+                if(entry.inheritedStrict==inheritedStrict&&
+                   (entry.source==source.largeString||*entry.source==source.StringText())){
+                    compiled=entry.chunk;++evalCompileCacheHits;break;
+                }
+            if(!compiled){Compiler compiler(module,source.StringText());compiled=std::make_shared<Chunk>(compiler.CompileEvalProgram(inheritedStrict));
                 const auto bytes=source.StringText().size()*sizeof(wchar_t);
-                if(source.largeString&&source.StringText().size()>=4096&&bytes<=8*1024*1024&&chunk.code.size()<=128&&chunk.handlers.empty()&&chunk.functionDeclarations.empty()&&chunk.embeddedExpressions.empty()&&
-                   std::none_of(chunk.code.begin(),chunk.code.end(),[](const auto& in){return in.op==Op::MakeFunction||in.op==Op::Template||in.op==Op::TaggedTemplate;})){
-                    while(!cachedEvalPrograms.empty()&&(cachedEvalPrograms.size()>=16||cachedEvalBytes+bytes>8*1024*1024)){cachedEvalBytes-=cachedEvalPrograms.front().source->size()*sizeof(wchar_t);cachedEvalPrograms.pop_front();}
-                    cachedEvalPrograms.push_back({source.largeString,inheritedStrict,chunk});cachedEvalBytes+=bytes;
+                if(bytes<=8*1024*1024&&compiled->code.size()<=2048&&EvalCacheConstantsSafe(*compiled)){
+                    while(!cachedEvalPrograms.empty()&&(cachedEvalPrograms.size()>=64||cachedEvalBytes+bytes>8*1024*1024)){cachedEvalBytes-=cachedEvalPrograms.front().source->size()*sizeof(wchar_t);cachedEvalPrograms.pop_front();}
+                    cachedEvalPrograms.push_back({source.largeString?source.largeString:std::make_shared<const std::wstring>(source.StringText()),inheritedStrict,compiled});cachedEvalBytes+=bytes;
                 }
             }
+            // Any single literal/binding read can complete without an empty
+            // eval scope and interpreter frame. Keep normal Reference lookup,
+            // errors and live caller bindings; no source spelling is special.
+            const auto& code=compiled->code;
+            if(!diagnosticInstructionLimit&&!profileExecution&&!traceFunctions&&!traceErrors&&
+               compiled->handlers.empty()&&compiled->variableDeclarations.empty()&&compiled->functionDeclarations.empty()){
+                size_t at=0;while(at<code.size()&&code[at].op==Op::NoOp)++at;
+                if(at<code.size()){
+                    const auto& operand=code[at++];if(at<code.size()&&code[at].op==Op::GetValue)++at;
+                    if(at+3==code.size()&&code[at].op==Op::SetEvalCompletion&&code[at+1].op==Op::GetEvalCompletion&&code[at+2].op==Op::Return){
+                        std::optional<Value> value;
+                        switch(operand.op){
+                        case Op::Constant:{
+                            const auto& literal=compiled->constants[operand.argument];
+                            // Object literals still need RunFrame's fresh
+                            // materialization, notably RegExp.lastIndex = 0.
+                            if(literal.type!=Value::Type::Object&&literal.type!=Value::Type::Function&&
+                               literal.type!=Value::Type::Native&&literal.type!=Value::Type::Reference)value=literal;
+                            break;
+                        }
+                        case Op::LoadReference:{auto reference=CreateReference();reference->env=caller;reference->name=operand.text;value=Deref(Value::FromReference(reference));break;}
+                        case Op::Undefined:value=Value::Undefined();break;case Op::Null:value=Value::Null();break;
+                        case Op::TrueValue:case Op::FalseValue:value=Value::Bool(operand.op==Op::TrueValue);break;
+                        default:break;
+                        }
+                        if(value){executedInstructions+=code.size();return std::move(*value);}
+                    }
+                }
+            }
+            // Sloppy declarations belong to the live caller. Install them
+            // there without copying or modifying cached bytecode, then skip
+            // declaration instantiation in the otherwise fresh eval scope.
+            const auto& chunk=*compiled;
             auto environment=CreateEnvironment();environment->parent=caller;
             environment->variableScope=chunk.isStrict;
             if(!chunk.isStrict){
                 auto owner=caller;while(owner->parent&&!owner->variableScope)owner=owner->parent;
-                InstantiateVariableDeclarations(chunk,owner);chunk.variableDeclarations.clear();
+                InstantiateVariableDeclarations(chunk,owner);
                 for(const auto& declaration:chunk.functionDeclarations){
                     auto function=CreateFunction();function->prototype=module->prototypes[declaration.prototype];
                     function->closure=environment;SetEnvironmentValue(owner,declaration.name,Value::FromFunction(function),true);
                 }
-                chunk.functionDeclarations.clear();
             }
-            const auto result=RunCompletion(chunk,environment);
+            const auto result=RunCompletion(chunk,environment,false,chunk.isStrict);
             return result.thrown?Value::Thrown(result.value):result.value;
         }catch(const std::exception& exception){
             return Value::Thrown(ErrorValue(L"SyntaxError",Utf8ToWide(exception.what())));
@@ -10146,6 +10489,24 @@ struct RuntimeCore {
                 code[0].text!=L"this"&&code[0].text!=L"arguments"&&code[0].text!=prototype.selfBindingName;
         }
         return prototype.capturedGetterSupported;
+    }
+    static int PrepareParameterGetter(Prototype& prototype){
+        if(!prototype.parameterGetterChecked){
+            prototype.parameterGetterChecked=true;
+            const auto& code=prototype.chunk.code;
+            if(!prototype.isAsync&&!prototype.isGenerator&&prototype.restParameter.empty()&&
+               prototype.bindings.empty()&&prototype.chunk.handlers.empty()&&
+               prototype.chunk.variableDeclarations.empty()&&prototype.chunk.functionDeclarations.empty()&&
+               prototype.chunk.embeddedExpressions.empty()&&
+               std::none_of(prototype.parameterDefaults.begin(),prototype.parameterDefaults.end(),
+                   [](const auto& value){return static_cast<bool>(value);})&&
+               (code.size()==2||(code.size()==4&&code[2].op==Op::Undefined&&code[3].op==Op::Return))&&
+               code[0].op==Op::LoadReference&&code[1].op==Op::Return&&
+               code[0].text!=L"this"&&code[0].text!=L"arguments")
+                for(size_t index=0;index<prototype.parameters.size();++index)
+                    if(prototype.parameters[index]==code[0].text)prototype.parameterGetterIndex=static_cast<int>(index);
+        }
+        return prototype.parameterGetterIndex;
     }
     static bool PollBaselineJit(BaselineJitFrame* frame)noexcept{
         auto& runtime=*static_cast<RuntimeCore*>(frame->pollData);frame->pollBudget=frame->pollInterval;
@@ -10335,6 +10696,17 @@ struct RuntimeCore {
             constexpr size_t kMaximumInterpreterCallDepth=104;
             if(callStack.size()>=kMaximumInterpreterCallDepth)
                 return CompleteThrow(ErrorValue(L"RangeError",L"Maximum call stack size exceeded"),completion);
+            // A simple parameter return has no observable local scope or
+            // receiver. Preserve objects and strings directly; defaults,
+            // destructuring, rest, suspension and diagnostics use normal calls.
+            if(!diagnosticInstructionLimit&&!profileExecution&&!traceFunctions&&!traceErrors&&
+               !hostInterrupted&&(!interruptionSignal||!interruptionSignal->load(std::memory_order_relaxed))){
+                const auto index=PrepareParameterGetter(*prototype);
+                if(index>=0&&std::none_of(args.begin(),args.end(),[](const Value& argument){return argument.type==Value::Type::Reference;})){
+                    executedInstructions+=2;
+                    return static_cast<size_t>(index)<args.size()?LocalRealmValue(args[index]):Value::Undefined();
+                }
+            }
             // Check the bytecode shape once, but resolve the captured binding
             // on every call. A simple captured read cannot observe the unused
             // receiver or need a local environment or native stack entry.
@@ -10904,6 +11276,9 @@ struct RuntimeCore {
                        !std::isfinite(key.number)||key.number<0||key.number>=4294967295.0||
                        std::floor(key.number)!=key.number)return false;
                     const auto at=static_cast<size_t>(key.number);
+                    if(nativeLoopIndexReads&&base.type==Value::Type::Object&&base.value->object&&
+                       base.value->object->kind==ObjectKind::Array&&at<base.value->object->items.size())
+                        nativeLoopIndexReads->push_back({*base.value,at});
                     if(base.type==Value::Type::Object&&base.value->object&&
                        base.value->object->kind==ObjectKind::Array&&base.value->object->props.empty()&&
                        at<base.value->object->items.size())result=base.value->object->items[at];
@@ -10931,7 +11306,7 @@ struct RuntimeCore {
         prototype.fastScopeChecked=true;
         for(const auto& instruction:prototype.chunk.code)
             if((instruction.op==Op::Declare&&instruction.argument==3)||instruction.op==Op::TypeOf)return false;
-        if(prototype.chunk.code.size()>128)return false;
+        if(prototype.chunk.code.size()>512)return false;
         const auto local=[&](const std::wstring& name){
             auto found=std::find(prototype.fastLocalNames.begin(),prototype.fastLocalNames.end(),name);
             if(found!=prototype.fastLocalNames.end())return static_cast<int>(found-prototype.fastLocalNames.begin());
@@ -10941,9 +11316,10 @@ struct RuntimeCore {
         if(!prototype.selfBindingName.empty())prototype.fastSelfSlot=local(prototype.selfBindingName);
         for(const auto& name:prototype.parameters)prototype.fastParameterSlots.push_back(local(name));
         for(const auto& name:prototype.chunk.variableDeclarations)local(name);
-        if(prototype.fastLocalNames.size()>16)return false;
+        if(prototype.fastLocalNames.size()>32)return false;
         // Verify stack shape once. Property calls keep their receiver separately;
-        // writes to properties, dynamic scopes and suspension use the full VM.
+        // delayed reads and writes retain real references. Dynamic scopes,
+        // exception handlers and suspension use the full VM.
         std::vector<int> stack;
         prototype.fastLocalSlots.assign(prototype.chunk.code.size(),-1);
         for(size_t ip=0;ip<prototype.chunk.code.size();++ip){
@@ -10959,7 +11335,12 @@ struct RuntimeCore {
             case Op::PrepareCall:if(stack.empty())return false;stack.back()=-1;break;
             case Op::Duplicate:if(stack.empty())return false;stack.push_back(stack.back());break;
             case Op::Pop:if(stack.empty())return false;stack.pop_back();break;
-            case Op::Assign:if(stack.size()<2||stack[stack.size()-2]<0)return false;stack.pop_back();stack.back()=-1;break;
+            case Op::Assign:
+                if(stack.size()<2||(stack[stack.size()-2]<0&&stack[stack.size()-2]!=-3))return false;
+                stack.pop_back();stack.back()=-1;break;
+            case Op::PostIncrement:case Op::PostDecrement:case Op::PreIncrement:case Op::PreDecrement:
+                if(stack.empty()||(stack.back()<0&&stack.back()!=-3))return false;
+                stack.back()=-1;break;
             case Op::Declare:if(stack.empty()||slot<0)return false;stack.pop_back();break;
             case Op::GetProperty:if(stack.empty())return false;stack.back()=-3;break;
             case Op::GetIndex:if(stack.size()<2)return false;stack.pop_back();stack.back()=-3;break;
@@ -10976,7 +11357,7 @@ struct RuntimeCore {
             case Op::Return:prototype.fastScopeSupported=true;return true;
             default:return false;
             }
-            if(stack.size()>16)return false;
+            if(stack.size()>32)return false;
         }
         return false;
     }
@@ -10984,9 +11365,12 @@ struct RuntimeCore {
         const auto& prototype=*callee.function->prototype;
         // References carry a slot or binding name without constructing a Value.
         // Values are only needed after a read or computation materializes one.
-        struct Slot {std::optional<Value> value;int local=-1;const std::wstring* globalName=nullptr;int receiver=-1;};
-        std::array<std::optional<Value>,16> locals;
-        std::array<std::optional<Slot>,16> stack;size_t size=0;
+        struct Slot {
+            std::optional<Value> value;int local=-1;const std::wstring* globalName=nullptr;int receiver=-1;
+            Value::Type scalar=Value::Type::Undefined;double number=0;bool boolean=false;
+        };
+        std::array<std::optional<Value>,32> locals;
+        std::array<std::optional<Slot>,32> stack;size_t size=0;
         std::vector<Value> callReceivers;
         for(size_t index=0;index<prototype.fastLocalNames.size();++index)locals[index].emplace(Value::Undefined());
         if(prototype.fastThisSlot>=0)*locals[prototype.fastThisSlot]=thisValue;
@@ -10994,6 +11378,8 @@ struct RuntimeCore {
         for(size_t index=0;index<prototype.parameters.size();++index)
             *locals[prototype.fastParameterSlots[index]]=index<arguments.size()?Deref(arguments[index]):Value::Undefined();
         const auto read=[&](const Slot& slot)->Value{
+            if(slot.scalar==Value::Type::Number)return Value::Number(slot.number);
+            if(slot.scalar==Value::Type::Boolean)return Value::Bool(slot.boolean);
             if(slot.local>=0)return *locals[slot.local];
             if(slot.globalName){
                 const auto value=callee.function->closure?callee.function->closure->FindValue(*slot.globalName):nullptr;
@@ -11002,13 +11388,27 @@ struct RuntimeCore {
                 if(window&&HasProperty(Value::FromObject(window),*slot.globalName))return GetProperty(Value::FromObject(window),*slot.globalName);
                 throw JavaScriptException{ErrorValue(L"ReferenceError",*slot.globalName+L" is not defined")};
             }
-            return slot.value?*slot.value:Value::Undefined();
+            return slot.value?Deref(*slot.value):Value::Undefined();
         };
         const auto take=[&](Slot slot)->Value{
+            if(slot.scalar==Value::Type::Number)return Value::Number(slot.number);
+            if(slot.scalar==Value::Type::Boolean)return Value::Bool(slot.boolean);
             if(slot.local>=0||slot.globalName)return read(slot);
-            return slot.value?std::move(*slot.value):Value::Undefined();
+            return slot.value?Deref(std::move(*slot.value)):Value::Undefined();
         };
-        const auto push=[&](Value value){stack[size++].emplace(Slot{std::move(value)});};
+        const auto pushNumber=[&](double value){auto& slot=stack[size++].emplace();slot.scalar=Value::Type::Number;slot.number=value;};
+        const auto pushBoolean=[&](bool value){auto& slot=stack[size++].emplace();slot.scalar=Value::Type::Boolean;slot.boolean=value;};
+        const auto push=[&](Value value){
+            if(!value.realm&&!value.realmOwner&&!value.abrupt&&value.type==Value::Type::Number)pushNumber(value.number);
+            else if(!value.realm&&!value.realmOwner&&!value.abrupt&&value.type==Value::Type::Boolean)pushBoolean(value.boolean);
+            else stack[size++].emplace(Slot{std::move(value)});
+        };
+        const auto readNumber=[&](const Slot& slot,double& number){
+            if(slot.scalar==Value::Type::Number){number=slot.number;return true;}
+            const auto* value=slot.local>=0?&*locals[slot.local]:slot.value?&*slot.value:nullptr;
+            if(!value||value->type!=Value::Type::Number||value->realm||value->realmOwner||value->abrupt)return false;
+            number=value->number;return true;
+        };
         const auto pop=[&](){auto value=std::move(*stack[--size]);stack[size].reset();return value;};
         if(activeExecutionFrames==0){hostInterrupted=false;nextExecutionYield=0;nextExecutionYieldInstruction=executedInstructions;}
         struct ActiveScope{
@@ -11037,29 +11437,59 @@ struct RuntimeCore {
             MaybeCollectManagedCycles();
             switch(instruction.op){
             case Op::NoOp:break;
-            case Op::Constant:push(prototype.chunk.constants[instruction.argument]);break;
+            case Op::Constant:{const auto& value=prototype.chunk.constants[instruction.argument];
+                if(value.type==Value::Type::Number)pushNumber(value.number);else push(value);break;}
             case Op::Undefined:push(Value::Undefined());break;case Op::Null:push(Value::Null());break;
             case Op::TrueValue:case Op::FalseValue:push(Value::Bool(instruction.op==Op::TrueValue));break;
             case Op::LoadReference:{Slot slot;slot.local=prototype.fastLocalSlots[ip];if(slot.local<0)slot.globalName=&instruction.text;
                 if(ip+1<prototype.chunk.code.size()&&(prototype.chunk.code[ip+1].op==Op::GetValue||prototype.chunk.code[ip+1].op==Op::PrepareCall)){
-                    push(read(slot));++ip;++executedInstructions;
+                    double number=0;if(readNumber(slot,number))pushNumber(number);else push(read(slot));++ip;++executedInstructions;
                 }else stack[size++].emplace(std::move(slot));break;}
-            case Op::GetValue:{auto value=take(pop());push(std::move(value));break;}
+            case Op::GetValue:{
+                if(stack[size-1]->scalar==Value::Type::Number||stack[size-1]->scalar==Value::Type::Boolean)break;
+                double number=0;if(readNumber(*stack[size-1],number)){stack[size-1].emplace();stack[size-1]->scalar=Value::Type::Number;stack[size-1]->number=number;}
+                else{auto value=take(pop());push(std::move(value));}break;
+            }
             case Op::PrepareCall:{auto value=read(*stack[size-1]);const auto receiver=stack[size-1]->receiver;
                 stack[size-1].emplace(Slot{std::move(value)});stack[size-1]->receiver=receiver;break;}
             case Op::Duplicate:stack[size].emplace(*stack[size-1]);++size;break;
             case Op::Pop:take(pop());break;
-            case Op::Assign:{auto value=take(pop());const auto target=pop();*locals[target.local]=value;
+            case Op::Assign:{auto value=take(pop());const auto target=pop();
+                if(target.local>=0)*locals[target.local]=value;
+                else Assign(*target.value,value,prototype.isStrict);
                 if(ip+1<prototype.chunk.code.size()&&prototype.chunk.code[ip+1].op==Op::Pop){++ip;++executedInstructions;}
                 else push(std::move(value));break;}
+            case Op::PostIncrement:case Op::PostDecrement:case Op::PreIncrement:case Op::PreDecrement:{
+                const auto target=pop();const auto previous=read(target);
+                const bool increment=instruction.op==Op::PostIncrement||instruction.op==Op::PreIncrement;
+                auto next=previous.type==Value::Type::BigInt?
+                    Value::BigInt(increment?previous.bigint->Add(BigInteger(1)):previous.bigint->Subtract(BigInteger(1))):
+                    Value::Number(Number(previous)+(increment?1:-1));
+                if(target.local>=0)*locals[target.local]=next;else Assign(*target.value,next,prototype.isStrict);
+                push(instruction.op==Op::PostIncrement||instruction.op==Op::PostDecrement?previous:std::move(next));break;
+            }
             case Op::Declare:{*locals[prototype.fastLocalSlots[ip]]=take(pop());break;}
             case Op::GetProperty:case Op::GetIndex:{
                 auto key=instruction.op==Op::GetIndex?take(pop()):Value::Undefined();auto object=take(pop());
-                RequireScriptPropertyReceiver(object);
-                push(instruction.op==Op::GetIndex?GetIndexedValue(object,key):GetProperty(object,instruction.text));
-                if(ip+1<prototype.chunk.code.size()&&prototype.chunk.code[ip+1].op==Op::PrepareCall){
+                const auto following=ip+1<prototype.chunk.code.size()?prototype.chunk.code[ip+1].op:Op::NoOp;
+                if(ReadsTopOperand(following)||following==Op::PrepareCall){
+                    RequireScriptPropertyReceiver(object);
+                    push(instruction.op==Op::GetIndex?GetIndexedValue(object,key):GetProperty(object,instruction.text));
+                }else{
+                    // Keep a real reference for a delayed read, write or update.
+                    // Its key is converted now, before the RHS can run user code.
+                    auto reference=CreateReference();reference->kind=Reference::Kind::Property;
+                    reference->base=std::move(object);
+                    if(instruction.op==Op::GetIndex){
+                        auto property=PropertyKeyArgument(key);
+                        if(property.abrupt){property.abrupt=false;return CompleteThrow(property,completion);}
+                        reference->name=property.StringText();
+                    }else reference->name=instruction.text;
+                    push(Value::FromReference(reference));
+                }
+                if(following==Op::PrepareCall){
                     stack[size-1]->receiver=static_cast<int>(callReceivers.size());callReceivers.push_back(std::move(object));
-                }else if(ip+1<prototype.chunk.code.size()&&prototype.chunk.code[ip+1].op==Op::GetValue){++ip;++executedInstructions;}
+                }else if(following==Op::GetValue){++ip;++executedInstructions;}
                 break;
             }
             case Op::Call:{
@@ -11078,7 +11508,13 @@ struct RuntimeCore {
             }
             case Op::Add:case Op::Subtract:case Op::Multiply:case Op::Divide:case Op::Modulo:case Op::Power:
             case Op::BitwiseAnd:case Op::BitwiseOr:case Op::BitwiseXor:case Op::ShiftLeft:case Op::ShiftRight:case Op::UnsignedShiftRight:{
+                double a=0,b=0;
+                if(readNumber(*stack[size-2],a)&&readNumber(*stack[size-1],b)){
+                    stack[--size].reset();stack[size-1].emplace();stack[size-1]->scalar=Value::Type::Number;
+                    stack[size-1]->number=NumberBinary(instruction.op,a,b);++scalarOperations;break;
+                }
                 auto right=take(pop()),left=take(pop());
+                if(ApplyPlainNumber(left,instruction.op,right)){push(std::move(left));++scalarOperations;break;}
                 if(instruction.op==Op::Add){left=PrimitiveForAddition(left);right=PrimitiveForAddition(right);
                     if(left.type==Value::Type::String||right.type==Value::Type::String){push(Value::String(String(left)+String(right)));break;}}
                 auto value=NumericBinary(instruction.op,left,right);
@@ -11205,13 +11641,25 @@ struct RuntimeCore {
         catch(const std::exception& exception){RejectPromise(frame->asyncPromise,ErrorValue(L"Error",Utf8ToWide(exception.what())));}
     }
     #include "LoopReduction.inl"
+    #include "StringTransform.inl"
+    #include "ByteCopy.inl"
+    #include "NativeLoop.inl"
     void FoldNumericConstants(const std::shared_ptr<ExecutionFrame>& frame){
         if(diagnosticInstructionLimit||profileExecution||traceFunctions||traceErrors||frame->stack.empty())return;
         const auto& chunk=*frame->chunk;
         for(unsigned fused=0;fused<4&&frame->ip+1<chunk.code.size();++fused){
-            const auto& operand=chunk.code[frame->ip];if(operand.op!=Op::Constant)break;
-            if(!ApplyPlainNumber(frame->stack.back(),chunk.code[frame->ip+1].op,chunk.constants[operand.argument]))break;
-            frame->ip+=2;executedInstructions+=2;++fusedNumericOperations;
+            const auto& operand=chunk.code[frame->ip];
+            const Value* value=nullptr;size_t operation=frame->ip+1;
+            if(operand.op==Op::Constant)value=&chunk.constants[operand.argument];
+            else if(operand.op==Op::LoadReference&&frame->env!=global){
+                // Only borrow a materialized local number. No getter, coercion,
+                // realm crossing or host callback runs in this short sequence.
+                value=frame->env->values.find_cached(operand.text,operand.localSlot);
+                if(operation<chunk.code.size()&&chunk.code[operation].op==Op::GetValue)++operation;
+            }else break;
+            if(!value||operation>=chunk.code.size()||
+               !ApplyPlainNumber(frame->stack.back(),chunk.code[operation].op,*value))break;
+            executedInstructions+=operation+1-frame->ip;frame->ip=operation+1;++fusedNumericOperations;
         }
     }
     FrameResult RunFrame(const std::shared_ptr<ExecutionFrame>& frame){
@@ -11284,7 +11732,15 @@ struct RuntimeCore {
             case Op::Undefined:stack.push_back(Value::Undefined());break;case Op::Null:stack.push_back(Value::Null());break;case Op::TrueValue:stack.push_back(Value::Bool(true));break;case Op::FalseValue:stack.push_back(Value::Bool(false));break;
             case Op::BeginBlock:{auto environment=CreateEnvironment();environment->variableScope=false;environment->parent=frame->env;frame->blockOuters.push_back(frame->env);frame->env=environment;break;}
             case Op::EndBlock:if(!frame->blockOuters.empty()){frame->env=frame->blockOuters.back();frame->blockOuters.pop_back();}break;
-            case Op::NoOp:break;
+            case Op::NoOp:
+                // Enter a warmed native loop before interpreting its body.
+                // Every invocation still prepares and guards its live data.
+                if(ins.argument>static_cast<int>(current)&&
+                   static_cast<size_t>(ins.argument)<frame->chunk->code.size()&&
+                   frame->chunk->code[ins.argument].op==Op::Jump&&
+                   frame->chunk->code[ins.argument].argument==static_cast<int>(current))
+                    TryNativeLoop(frame,static_cast<size_t>(ins.argument),true);
+                break;
             case Op::LoadReference:{
                 if(!diagnosticInstructionLimit&&!profileExecution&&!traceFunctions&&!traceErrors&&frame->env!=global&&frame->ip<frame->chunk->code.size()){
                     const auto operation=frame->chunk->code[frame->ip].op;
@@ -11302,11 +11758,13 @@ struct RuntimeCore {
                     }
                 }
                 // Plain identifier calls also consume the value before their
-                // arguments and use an undefined receiver. Keep eval references
-                // for direct-eval detection and preserve property/super calls.
+                // arguments and use an undefined receiver. Direct eval is
+                // identified by the call opcode and the saved intrinsic, so
+                // bare eval calls need no allocated Variable Reference either.
+                // Property and super calls retain their normal receivers.
                 const bool readNext=frame->ip<frame->chunk->code.size()&&
                     ((ReadsTopOperand(frame->chunk->code[frame->ip].op)&&frame->chunk->code[frame->ip].op!=Op::TypeOf)||
-                     (frame->chunk->code[frame->ip].op==Op::PrepareCall&&ins.text!=L"eval"));
+                     frame->chunk->code[frame->ip].op==Op::PrepareCall);
                 if(!diagnosticInstructionLimit&&readNext){
                     if(frame->chunk->code[frame->ip].op==Op::GetValue||
                        frame->chunk->code[frame->ip].op==Op::PrepareCall){++frame->ip;++executedInstructions;}
@@ -11324,8 +11782,8 @@ struct RuntimeCore {
             case Op::Declare:{
                 auto value=Deref(pop());
                 if(value.type==Value::Type::Function&&value.function&&value.function->prototype&&
-                   value.function->prototype->name.empty()){
-                    value.function->prototype->name=ins.text;
+                   value.function->prototype->name.empty()&&value.function->props[L"name"].type==Value::Type::String&&
+                   value.function->props[L"name"].StringText().empty()){
                     value.function->props[L"name"]=Value::String(ins.text);
                 }
                 if(ins.argument==2){
@@ -11391,6 +11849,17 @@ struct RuntimeCore {
                     }
                     auto reference=CreateReference();reference->kind=Reference::Kind::Property;
                     reference->base=receiver;reference->name=key;reference->callValue=method;reference->callPrepared=true;
+                    stack.push_back(Value::FromReference(reference));break;
+                }
+                if(!diagnosticInstructionLimit&&!profileExecution&&!traceFunctions&&!traceErrors&&
+                   frame->ip<frame->chunk->code.size()&&frame->chunk->code[frame->ip].op==Op::PrepareCall){
+                    // GetValue of a member callee precedes its arguments.
+                    // Prepare it now and retain the receiver without repeating
+                    // the property lookup at the next dispatch.
+                    auto reference=CreateReference();reference->kind=Reference::Kind::Property;
+                    reference->base=std::move(base);reference->name=std::move(key);
+                    reference->callValue=GetProperty(reference->base,reference->name);reference->callPrepared=true;
+                    ++frame->ip;++executedInstructions;
                     stack.push_back(Value::FromReference(reference));break;
                 }
                 // A following GetValue consumes the property reference without
@@ -11584,7 +12053,17 @@ struct RuntimeCore {
                     }
                 }
                 auto b=Deref(pop()),a=Deref(pop());
-                if(ins.op==Op::Add){a=PrimitiveForAddition(a);b=PrimitiveForAddition(b);if(a.type==Value::Type::String||b.type==Value::Type::String){auto text=String(a)+String(b);
+                if(ins.op==Op::Add){
+                    if(a.type==Value::Type::Object||a.type==Value::Type::Function||a.type==Value::Type::Native)a=PrimitiveForAddition(a);
+                    if(b.type==Value::Type::Object||b.type==Value::Type::Function||b.type==Value::Type::Native)b=PrimitiveForAddition(b);
+                    if(!stack.empty()&&frame->ip<frame->chunk->code.size()&&frame->chunk->code[frame->ip].op==Op::Assign&&
+                       TryAppendBindingString(a,b,stack.back())){
+                        // Fuse the following write, so no host safepoint can
+                        // observe a changed binding before the assignment.
+                        auto reference=pop();Assign(reference,a,frame->chunk->isStrict);
+                        ++frame->ip;++executedInstructions;stack.push_back(std::move(a));break;
+                    }
+                    if(a.type==Value::Type::String||b.type==Value::Type::String){auto text=String(a)+String(b);
                     if(traceFunctions&&text.rfind(L"function ",0)==0){if(diagnosticFunctionStrings.size()==24)diagnosticFunctionStrings.pop_front();diagnosticFunctionStrings.push_back(std::to_wstring(text.size())+L": "+text.substr(0,200));}
                     stack.push_back(Value::String(std::move(text)));break;}}
                 auto result=NumericBinary(ins.op,a,b);if(result.abrupt){result.abrupt=false;if(!DispatchException(frame,result,current))return {false,result,true};}else stack.push_back(std::move(result));break;
@@ -11636,8 +12115,19 @@ struct RuntimeCore {
                     stack.push_back(Value::String(L"undefined"));
                 else stack.push_back(Value::String(TypeName(value)));break;}
             case Op::Jump:{const auto target=static_cast<size_t>(ins.argument);
+                if(target<current&&TryNativeLoop(frame,current))break;
+                if(target<current&&TryByteCopy(frame,current))break;
+                if(target<current&&TryStringTransform(frame,current))break;
                 if(target<current&&TryTableReduction(frame,current))break;
                 if(!BeginAbrupt(frame,CompletionKind::Jump,Value::Undefined(),target,current))JumpFrame(frame,target);break;}
+            case Op::SwitchDispatch:{
+                const auto value=frame->env?frame->env->FindValue(ins.text,ins.localSlot):nullptr;
+                // The compiler declared this private binding immediately before
+                // dispatch. Its value is already materialized, so StrictEqual
+                // needs no coercion or observable property access here.
+                const auto target=frame->chunk->switchTables[ins.argument].Target(value?*value:Value::Undefined());
+                ++switchDispatches;JumpFrame(frame,target);break;
+            }
             case Op::JumpFalse:if(!Truth(pop()))JumpFrame(frame,static_cast<size_t>(ins.argument));break;
             case Op::JumpFalseKeep:if(!Truth(stack.back()))JumpFrame(frame,static_cast<size_t>(ins.argument));else pop();break;case Op::JumpTrueKeep:if(Truth(stack.back()))JumpFrame(frame,static_cast<size_t>(ins.argument));else pop();break;
             case Op::JumpNotNullishKeep:{const auto value=Deref(stack.back());if(value.type!=Value::Type::Undefined&&value.type!=Value::Type::Null)JumpFrame(frame,static_cast<size_t>(ins.argument));else pop();break;}
@@ -11710,7 +12200,7 @@ struct RuntimeCore {
             });
         return generator;
     }
-    FrameResult RunCompletion(const Chunk& chunk,const std::shared_ptr<Environment>& env,bool trackCurrentCall=false){
+    FrameResult RunCompletion(const Chunk& chunk,const std::shared_ptr<Environment>& env,bool trackCurrentCall=false,bool instantiateDeclarations=true){
         if(activeExecutionFrames==0){hostInterrupted=false;nextExecutionYield=0;nextExecutionYieldInstruction=executedInstructions;}
         auto frame=idleExecutionFrames.empty()?std::make_shared<ExecutionFrame>():std::move(idleExecutionFrames.back());
         if(!idleExecutionFrames.empty())idleExecutionFrames.pop_back();
@@ -11729,8 +12219,10 @@ struct RuntimeCore {
         } recycle{idleExecutionFrames,frame};
         frame->chunk=&chunk;frame->env=env;
         if(trackCurrentCall&&!callStack.empty())frame->callStackIndex=callStack.size()-1;
-        InstantiateVariableDeclarations(chunk,env);
-        InstantiateFunctionDeclarations(chunk,env);
+        if(instantiateDeclarations){
+            InstantiateVariableDeclarations(chunk,env);
+            InstantiateFunctionDeclarations(chunk,env);
+        }
         frame->stack.reserve(std::min<size_t>(chunk.code.size(),64));
         return RunFrame(frame);
     }
@@ -11771,30 +12263,36 @@ struct RuntimeCore {
         global->values[L"globalThis"]=Value::FromObject(window);
         window->props[L"globalThis"]=Value::FromObject(window);
         const auto atob=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
-            const auto input=a.empty()?L"undefined":r.String(a[0]);std::wstring text;
-            for(const auto c:input)if(c!=L' '&&c!=L'\t'&&c!=L'\n'&&c!=L'\r'&&c!=L'\f')text+=c;
+            const auto input=a.empty()?Value::String(L"undefined"):r.StringArgument(a[0]);if(input.abrupt)return input;
+            std::wstring text;text.reserve(input.StringText().size());
+            for(const auto c:input.StringText())if(c!=L' '&&c!=L'\t'&&c!=L'\n'&&c!=L'\r'&&c!=L'\f')text+=c;
             if(text.size()%4==0){if(!text.empty()&&text.back()==L'=')text.pop_back();if(!text.empty()&&text.back()==L'=')text.pop_back();}
             if(text.size()%4==1)return Value::Thrown(r.ErrorValue(L"InvalidCharacterError",L"Invalid Base64 input"));
-            constexpr std::wstring_view alphabet=L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-            std::wstring result;std::uint32_t bits=0;unsigned count=0;
-            for(const auto c:text){const auto digit=alphabet.find(c);
-                if(digit==std::wstring_view::npos)return Value::Thrown(r.ErrorValue(L"InvalidCharacterError",L"Invalid Base64 input"));
+            static const auto digits=[]{
+                std::array<int,128> table{};table.fill(-1);
+                constexpr wchar_t alphabet[]=L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+                for(int index=0;index<64;++index)table[alphabet[index]]=index;return table;
+            }();
+            std::wstring result;result.reserve(text.size()/4*3+2);std::uint32_t bits=0;unsigned count=0;
+            for(const auto c:text){const int digit=static_cast<unsigned>(c)<digits.size()?digits[c]:-1;
+                if(digit<0)return Value::Thrown(r.ErrorValue(L"InvalidCharacterError",L"Invalid Base64 input"));
                 bits=(bits<<6)|static_cast<std::uint32_t>(digit);count+=6;
                 if(count>=8){count-=8;result+=static_cast<wchar_t>((bits>>count)&255u);}
             }
-            return Value::String(result);
+            return Value::String(std::move(result));
         });
         const auto btoa=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
-            const auto input=a.empty()?L"undefined":r.String(a[0]);
+            const auto supplied=a.empty()?Value::String(L"undefined"):r.StringArgument(a[0]);if(supplied.abrupt)return supplied;
+            const auto& input=supplied.StringText();
             constexpr wchar_t alphabet[]=L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-            std::wstring result;std::uint32_t bits=0;unsigned count=0;
+            std::wstring result;result.reserve((input.size()+2)/3*4);std::uint32_t bits=0;unsigned count=0;
             for(const auto c:input){if(static_cast<std::uint32_t>(c)>255)return Value::Thrown(r.ErrorValue(L"InvalidCharacterError",L"Base64 input contains a non-byte character"));
                 bits=(bits<<8)|static_cast<std::uint32_t>(c);count+=8;
                 while(count>=6){count-=6;result+=alphabet[(bits>>count)&63u];}
             }
             if(count)result+=alphabet[(bits<<(6-count))&63u];
             while(result.size()%4)result+=L'=';
-            return Value::String(result);
+            return Value::String(std::move(result));
         });
         global->values[L"atob"]=atob;window->props[L"atob"]=atob;
         global->values[L"btoa"]=btoa;window->props[L"btoa"]=btoa;
@@ -12129,6 +12627,33 @@ struct RuntimeCore {
         canvasGetter.native->props[L"name"]=Value::String(L"get canvas");canvasGetter.native->props[L"length"]=Value::Number(0);
         domPrototype(L"CanvasRenderingContext2D")->props[L"$get:canvas"]=canvasGetter;
         domPrototype(L"CanvasRenderingContext2D")->props[L"$enumerable:canvas"]=Value::Bool(true);
+        for(const auto* attribute:{L"globalAlpha",L"globalCompositeOperation"}){
+            const std::wstring property=attribute;
+            const auto receiverFor=[property](RuntimeCore& r,const Value& thisValue){
+                const auto receiver=r.Deref(thisValue);
+                if(!receiver.object||receiver.object->kind!=ObjectKind::CanvasContext2D)
+                    throw JavaScriptException{r.ErrorValue(L"TypeError",property+L" called on incompatible receiver")};
+                return receiver;
+            };
+            auto getter=Native([property,receiverFor](RuntimeCore& r,const Value& thisValue,const std::vector<Value>&){
+                const auto receiver=receiverFor(r,thisValue);
+                const auto surface=r.EnsureCanvas(receiver.object->node);
+                if(!surface)return Value::Undefined();
+                return property==L"globalAlpha"?Value::Number(surface->state.globalAlpha):
+                    Value::String(CanvasCompositeName(surface->state.composite));
+            });
+            auto setter=Native([property,receiverFor](RuntimeCore& r,const Value& thisValue,const std::vector<Value>& args){
+                const auto receiver=receiverFor(r,thisValue);
+                r.SetCanvasCompositingAttribute(receiver.object,property,args.empty()?Value::Undefined():args[0]);
+                return Value::Undefined();
+            });
+            getter.native->props[L"name"]=Value::String(L"get "+property);
+            setter.native->props[L"name"]=Value::String(L"set "+property);setter.native->props[L"length"]=Value::Number(1);
+            for(auto* accessor:{getter.native.get(),setter.native.get()})accessor->props[L"$notConstructor"]=Value::Bool(true);
+            auto& properties=domPrototype(L"CanvasRenderingContext2D")->props;
+            properties[L"$get:"+property]=getter;properties[L"$set:"+property]=setter;
+            properties[L"$enumerable:"+property]=Value::Bool(true);properties[L"$configurable:"+property]=Value::Bool(true);
+        }
         for(const auto* interfaceName:{L"HTMLElement",L"SVGElement"}){
             const std::wstring type=interfaceName;
             const auto styleReceiver=[type](RuntimeCore& runtime,const Value& thisValue){
@@ -12201,7 +12726,7 @@ struct RuntimeCore {
                 if(!input.object||input.object->kind!=ObjectKind::Event)return Value::Thrown(runtime.ErrorValue(L"TypeError",L"dispatchEvent requires an Event"));
                 const auto event=input.object;const auto type=runtime.String(runtime.GetProperty(input,L"type"));
                 if(type.empty()||runtime.Truth(runtime.GetProperty(input,L"$dispatching")))return Value::Thrown(runtime.ErrorValue(L"InvalidStateError",L"Event is uninitialized or already dispatching"));
-                event->props[L"$dispatching"]=Value::Bool(true);event->props[L"isTrusted"]=Value::Bool(false);
+                event->props[L"$dispatching"]=Value::Bool(true);event->eventTrusted=false;
                 event->props[L"target"]=receiver;event->props[L"currentTarget"]=receiver;event->props[L"eventPhase"]=Value::Number(2);
                 runtime.InvokeEventListeners(runtime.objectListeners[object.get()],type,true,receiver,input,event);
                 runtime.InvokeEventListeners(runtime.objectListeners[object.get()],type,false,receiver,input,event);
@@ -12224,9 +12749,9 @@ struct RuntimeCore {
                 if(options.type!=Value::Type::Undefined&&options.type!=Value::Type::Null&&!options.object&&!options.function&&!options.native)
                     return Value::Thrown(runtime.ErrorValue(L"TypeError",L"Event initialization dictionary must be an object"));
                 auto event=runtime.ObjectValue(ObjectKind::Event);event.object->prototype=prototype;
-                event.object->props[L"type"]=type;event.object->props[L"isTrusted"]=Value::Bool(false);event.object->props[L"defaultPrevented"]=Value::Bool(false);
+                event.object->props[L"type"]=type;event.object->eventTrusted=false;event.object->props[L"defaultPrevented"]=Value::Bool(false);
                 event.object->props[L"target"]=event.object->props[L"currentTarget"]=Value::Null();event.object->props[L"eventPhase"]=Value::Number(0);
-                event.object->props[L"timeStamp"]=Value::Number(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-runtime.performanceStart).count());
+                event.object->props[L"timeStamp"]=Value::Number(runtime.PerformanceNow());
                 const auto read=[&](const wchar_t* property){return runtime.GetProperty(options,property);};
                 const auto boolean=[&](const wchar_t* property){event.object->props[property]=Value::Bool(runtime.Truth(read(property)));};
                 const auto text=[&](const wchar_t* property){const auto input=read(property);const auto value=input.type==Value::Type::Undefined?Value::String(L""):runtime.StringArgument(input);if(value.abrupt)throw JavaScriptException{value};event.object->props[property]=value;};
@@ -12308,9 +12833,13 @@ struct RuntimeCore {
         global->values[L"pageXOffset"]=global->values[L"pageYOffset"]=Value::Number(0);
         window->props[L"scrollX"]=window->props[L"scrollY"]=Value::Number(0);
         window->props[L"pageXOffset"]=window->props[L"pageYOffset"]=Value::Number(0);
-        auto screen=ObjectValue(ObjectKind::Plain);screen.object->props[L"width"]=innerWidth;screen.object->props[L"availWidth"]=innerWidth;
+        const auto fullScreenWidth=Value::Number(std::round(displayWidth>0?displayWidth:viewportWidth));
+        const auto fullScreenHeight=Value::Number(std::round(displayHeight>0?displayHeight:viewportHeight));
+        auto screen=ObjectValue(ObjectKind::Plain);screen.object->props[L"width"]=fullScreenWidth;
+        screen.object->props[L"availWidth"]=availableDisplayWidth>=0?Value::Number(std::round(availableDisplayWidth)):fullScreenWidth;
         screen.object->kind=ObjectKind::Screen;
-        screen.object->props[L"height"]=innerHeight;screen.object->props[L"availHeight"]=innerHeight;
+        screen.object->props[L"height"]=fullScreenHeight;
+        screen.object->props[L"availHeight"]=availableDisplayHeight>=0?Value::Number(std::round(availableDisplayHeight)):fullScreenHeight;
         screen.object->props[L"colorDepth"]=Value::Number(24);screen.object->props[L"pixelDepth"]=Value::Number(24);
         global->values[L"screen"]=screen;window->props[L"screen"]=screen;
         const auto pixelRatio=Value::Number(devicePixelRatio);
@@ -12362,7 +12891,7 @@ struct RuntimeCore {
             if(value.type==Value::Type::Function&&value.function)return Value::Bool(value.function->props.count(name)!=0);
             if(value.type==Value::Type::Native&&value.native)return Value::Bool(value.native->props.count(name)!=0);
             if(value.type!=Value::Type::Object||!value.object)return Value::Bool(false);
-            if(value.object->kind==ObjectKind::Array){size_t index=0;if(name==L"length")return Value::Bool(true);if(TryParseDecimalIndex(name,index))return Value::Bool(index<value.object->items.size());}
+            if(value.object->kind==ObjectKind::Array)return Value::Bool(r.HasOwnStoredProperty(value,name));
             return Value::Bool(value.object->props.count(name)!=0);
         });
         objectPrototype->props[L"propertyIsEnumerable"]=Native(
@@ -12420,9 +12949,14 @@ struct RuntimeCore {
         arrayToString.native->props[L"name"]=Value::String(L"toString");arrayToString.native->props[L"length"]=Value::Number(0);
         arrayPrototype->props[L"toString"]=arrayToString;arrayPrototype->props[L"$enumerable:toString"]=Value::Bool(false);
         auto arrayPush=GetPropertyValue(arrayPrototypeValue,L"push",true);
+        arrayPush.native->intrinsic=NativeFunction::Intrinsic::ArrayPush;
         arrayPush.native->props[L"name"]=Value::String(L"push");arrayPush.native->props[L"length"]=Value::Number(1);
         arrayPush.native->props[L"$arrayReceiverDirect"]=Value::Bool(true);arrayPush.native->props[L"$notConstructor"]=Value::Bool(true);
         arrayPrototype->props[L"push"]=arrayPush;arrayPrototype->props[L"$enumerable:push"]=Value::Bool(false);
+        auto arrayJoin=GetPropertyValue(arrayPrototypeValue,L"join",true);
+        arrayJoin.native->props[L"name"]=Value::String(L"join");arrayJoin.native->props[L"length"]=Value::Number(1);
+        arrayJoin.native->props[L"$arrayReceiverDirect"]=Value::Bool(true);arrayJoin.native->props[L"$notConstructor"]=Value::Bool(true);
+        arrayPrototype->props[L"join"]=arrayJoin;arrayPrototype->props[L"$enumerable:join"]=Value::Bool(false);
         auto functionConstructor=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
             std::wstring source=L"(function anonymous(";
             for(size_t index=0;index+1<a.size();++index){if(index)source+=L',';source+=r.String(a[index]);}
@@ -12458,6 +12992,7 @@ struct RuntimeCore {
             std::vector<Value> forwarded;
             if(a.size()>1)forwarded.assign(a.begin()+1,a.end());return r.ForwardCall(thisValue,receiver,forwarded);
         });
+        functionPrototype.object->props[L"call"].native->intrinsic=NativeFunction::Intrinsic::FunctionCall;
         functionPrototype.object->props[L"toString"]=Native(
             [](RuntimeCore& r,const Value& thisValue,const std::vector<Value>&){
                 const auto value=r.Deref(thisValue);
@@ -12909,11 +13444,13 @@ struct RuntimeCore {
             std::wstring result;result.reserve(a.size());
             for(const auto& value:a){
                 const auto number=r.Number(value);
-                const auto code=std::isfinite(number)?static_cast<std::uint32_t>(static_cast<std::int64_t>(number))&0xffffu:0u;
+                auto code=std::isfinite(number)?std::fmod(std::trunc(number),65536.0):0;
+                if(code<0)code+=65536.0;
                 result.push_back(static_cast<wchar_t>(code));
             }
             return Value::String(result);
         });
+        stringConstructor.native->props[L"fromCharCode"].native->intrinsic=NativeFunction::Intrinsic::FromCharCode;
         stringConstructor.native->props[L"fromCodePoint"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
             std::wstring result;
             for(const auto& value:a){
@@ -13103,6 +13640,7 @@ struct RuntimeCore {
         global->values[L"isNaN"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
             return Value::Bool(std::isnan(r.Number(a.empty()?Value::Undefined():a[0])));
         });
+        global->values[L"isNaN"].native->intrinsic=NativeFunction::Intrinsic::IsNaN;
         global->values[L"isFinite"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
             return Value::Bool(std::isfinite(r.Number(a.empty()?Value::Undefined():a[0])));
         });
@@ -13146,7 +13684,10 @@ struct RuntimeCore {
             return a.size()<2?Value::Undefined():r.GetProperty(a[0],r.String(a[1]));
         });
         reflect.object->props[L"set"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
-            if(a.size()<3)return Value::Bool(false);r.SetProperty(a[0],r.String(a[1]),a[2]);return Value::Bool(true);
+            auto target=a.empty()?Value::Undefined():r.Deref(a[0]);
+            if(!r.OwnPropertyStorage(target))return Value::Thrown(r.ErrorValue(L"TypeError",L"Reflect.set target must be an object"));
+            return r.ReflectSet(target,r.String(a.size()>1?a[1]:Value::Undefined()),
+                a.size()>2?a[2]:Value::Undefined(),a.size()>3?r.Deref(a[3]):target);
         });
         reflect.object->props[L"apply"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
             if(a.empty()||!r.IsCallable(a[0]))return Value::Thrown(r.ErrorValue(L"TypeError",L"Reflect.apply target is not callable"));
@@ -13273,6 +13814,8 @@ struct RuntimeCore {
         navigator.object->props[L"appName"]=Value::String(L"Netscape");navigator.object->props[L"appVersion"]=Value::String(L"5.0");
         navigator.object->props[L"userAgent"]=Value::String(BrowserContext::UserAgent());
         navigator.object->props[L"platform"]=Value::String(L"Win32");navigator.object->props[L"language"]=Value::String(language);
+        // This engine has no WebDriver remote-control session.
+        navigator.object->props[L"webdriver"]=Value::Bool(false);
         navigator.object->props[L"languages"]=ArrayValue({Value::String(language)});navigator.object->props[L"cookieEnabled"]=Value::Bool(browserContext->CookiesEnabled());
         navigator.object->props[L"onLine"]=Value::Bool(true);
         navigator.object->props[L"hardwareConcurrency"]=Value::Number(std::max<DWORD>(1,GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)));
@@ -13296,7 +13839,7 @@ struct RuntimeCore {
                 prototype->props[L"$get:"+property]=getter;prototype->props[L"$enumerable:"+property]=Value::Bool(true);
             }
         };
-        installHostGetters(navigator,L"Navigator",ObjectKind::Navigator,{L"appName",L"appVersion",L"userAgent",L"platform",L"language",L"languages",L"cookieEnabled",L"onLine",L"clipboard",L"hardwareConcurrency"});
+        installHostGetters(navigator,L"Navigator",ObjectKind::Navigator,{L"appName",L"appVersion",L"userAgent",L"platform",L"language",L"languages",L"cookieEnabled",L"onLine",L"clipboard",L"hardwareConcurrency",L"webdriver"});
         installHostGetters(screen,L"Screen",ObjectKind::Screen,{L"width",L"height",L"availWidth",L"availHeight",L"colorDepth",L"pixelDepth"});
         const auto performanceConstructor=domConstructor(L"Performance");const auto performancePrototype=performanceConstructor.native->props[L"prototype"].object;
         performancePrototype->prototype=eventTargetPrototype;const auto performance=global->values[L"performance"];
@@ -14035,7 +14578,7 @@ struct RuntimeCore {
         event->props[L"lastEventId"]=Value::String(L"");event->props[L"target"]=target;
         event->props[L"currentTarget"]=target;event->props[L"eventPhase"]=Value::Number(2);
         event->props[L"defaultPrevented"]=Value::Bool(false);
-        event->props[L"isTrusted"]=Value::Bool(true);
+        event->eventTrusted=true;
         InvokeEventListeners(windowListeners,L"message",true,target,eventValue,event);
         const auto immediate=event->props.find(L"$immediateStopped");
         if(immediate==event->props.end()||!Truth(immediate->second))
@@ -14060,7 +14603,7 @@ struct RuntimeCore {
             event->props[L"source"]=sourceFrame?FrameWindowValue(sourceFrame):global->values[L"parent"];
             event->props[L"origin"]=Value::String(sourceOrigin);
             event->props[L"lastEventId"]=Value::String(L"");
-            event->props[L"isTrusted"]=Value::Bool(true);
+            event->eventTrusted=true;
             event->props[L"bubbles"]=Value::Bool(false);event->props[L"cancelable"]=Value::Bool(false);
             const auto eventValue=Value::FromObject(event),target=global->values[L"window"];
             event->props[L"target"]=target;event->props[L"currentTarget"]=target;event->props[L"eventPhase"]=Value::Number(2);
@@ -14223,7 +14766,7 @@ struct RuntimeCore {
         event->props[L"detail"]=Value::Number(init.detail);event->props[L"ctrlKey"]=Value::Bool(init.ctrlKey);
         event->props[L"shiftKey"]=Value::Bool(init.shiftKey);event->props[L"altKey"]=Value::Bool(init.altKey);
         event->props[L"metaKey"]=Value::Bool(init.metaKey);event->props[L"isComposing"]=Value::Bool(init.isComposing);
-        event->props[L"defaultPrevented"]=Value::Bool(false);event->props[L"isTrusted"]=Value::Bool(init.isTrusted);
+        event->props[L"defaultPrevented"]=Value::Bool(false);event->eventTrusted=init.isTrusted;
         event->props[L"bubbles"]=Value::Bool(init.bubbles);event->props[L"cancelable"]=Value::Bool(init.cancelable);event->props[L"eventPhase"]=Value::Number(0);
         }
         if(transferredFiles||transferredText){const std::vector<Node::FileInfo> emptyFiles;
@@ -14305,7 +14848,6 @@ struct RuntimeCore {
         event->props[L"target"]=target;
         event->props[L"currentTarget"]=target;event->props[L"eventPhase"]=Value::Number(2);
         if(!event->props.count(L"defaultPrevented"))event->props[L"defaultPrevented"]=Value::Bool(false);
-        if(!event->props.count(L"isTrusted"))event->props[L"isTrusted"]=Value::Bool(false);
         InvokeEventListeners(windowListeners,eventName,true,target,eventValue,event);
         const auto immediate=event->props.find(L"$immediateStopped");
         if(immediate==event->props.end()||!Truth(immediate->second))InvokeEventListeners(windowListeners,eventName,false,target,eventValue,event);
@@ -14317,7 +14859,7 @@ struct RuntimeCore {
     }
     void DispatchWindow(const std::wstring& eventName){
         auto event=CreateObject(ObjectKind::Event);event->props[L"type"]=Value::String(eventName);
-        event->props[L"defaultPrevented"]=Value::Bool(false);event->props[L"isTrusted"]=Value::Bool(true);
+        event->props[L"defaultPrevented"]=Value::Bool(false);event->eventTrusted=true;
         DispatchWindowEventObject(event);
     }
 };
@@ -14353,6 +14895,7 @@ void JavaScriptRuntime::SetFrameScheduler(FrameScheduler scheduler){impl_->core.
 void JavaScriptRuntime::SetTimerScheduler(TimerScheduler scheduler){impl_->core.timerScheduler=std::move(scheduler);}
 void JavaScriptRuntime::SetGeometryProvider(GeometryProvider provider){impl_->core.geometryProvider=std::move(provider);}
 void JavaScriptRuntime::SetExecutionYieldHandler(ExecutionYieldHandler handler){impl_->core.executionYieldHandler=std::move(handler);impl_->core.nextExecutionYield=0;impl_->core.nextExecutionYieldInstruction=impl_->core.executedInstructions;}
+void JavaScriptRuntime::SetWorkerWakeHandler(std::function<void()> handler){auto& wake=*impl_->core.workerWakeSignal;std::lock_guard<std::mutex> lock(wake.mutex);wake.handler=std::move(handler);wake.enabled.store(bool(wake.handler));wake.pending.store(false);impl_->core.ScheduleNextTimer();}
 void JavaScriptRuntime::SetExecutionCompletionHandler(std::function<void()> handler){impl_->core.executionCompletionHandler=std::move(handler);}
 void JavaScriptRuntime::SetSecureContextAncestors(std::function<bool()> provider){impl_->core.secureContextAncestors=std::move(provider);}
 bool JavaScriptRuntime::IsSecureContext()const{return impl_->core.IsSecureContext();}
@@ -14437,10 +14980,12 @@ void JavaScriptRuntime::SetViewportSize(double width,double height){
     }
     const auto screen=impl_->core.global->values.find(L"screen");
     if(screen!=impl_->core.global->values.end()&&screen->second.object){
-        const auto screenWidth=Value::Number(impl_->core.displayWidth>0?impl_->core.displayWidth:impl_->core.viewportWidth);
-        const auto screenHeight=Value::Number(impl_->core.displayHeight>0?impl_->core.displayHeight:impl_->core.viewportHeight);
-        screen->second.object->props[L"$host:width"]=screenWidth;screen->second.object->props[L"$host:availWidth"]=screenWidth;
-        screen->second.object->props[L"$host:height"]=screenHeight;screen->second.object->props[L"$host:availHeight"]=screenHeight;
+        const auto screenWidth=Value::Number(std::round(impl_->core.displayWidth>0?impl_->core.displayWidth:impl_->core.viewportWidth));
+        const auto screenHeight=Value::Number(std::round(impl_->core.displayHeight>0?impl_->core.displayHeight:impl_->core.viewportHeight));
+        screen->second.object->props[L"$host:width"]=screenWidth;
+        screen->second.object->props[L"$host:height"]=screenHeight;
+        screen->second.object->props[L"$host:availWidth"]=impl_->core.availableDisplayWidth>=0?Value::Number(std::round(impl_->core.availableDisplayWidth)):screenWidth;
+        screen->second.object->props[L"$host:availHeight"]=impl_->core.availableDisplayHeight>=0?Value::Number(std::round(impl_->core.availableDisplayHeight)):screenHeight;
     }
     impl_->core.UpdateMediaQueries();
 }
@@ -14454,11 +14999,18 @@ void JavaScriptRuntime::SetDevicePixelRatio(double ratio){
     impl_->core.UpdateMediaQueries();
 }
 void JavaScriptRuntime::SetDisplaySize(double width,double height){
+    SetDisplaySize(width,height,width,height);
+}
+void JavaScriptRuntime::SetDisplaySize(double width,double height,double availableWidth,double availableHeight){
     auto& core=impl_->core;core.displayWidth=std::max(0.0,width);core.displayHeight=std::max(0.0,height);
+    core.availableDisplayWidth=std::max(0.0,std::min(core.displayWidth,availableWidth));
+    core.availableDisplayHeight=std::max(0.0,std::min(core.displayHeight,availableHeight));
     const auto screen=core.global->values.find(L"screen");
     if(screen!=core.global->values.end()&&screen->second.object){
-        screen->second.object->props[L"$host:width"]=Value::Number(core.displayWidth);
-        screen->second.object->props[L"$host:height"]=Value::Number(core.displayHeight);
+        screen->second.object->props[L"$host:width"]=Value::Number(std::round(core.displayWidth));
+        screen->second.object->props[L"$host:height"]=Value::Number(std::round(core.displayHeight));
+        screen->second.object->props[L"$host:availWidth"]=Value::Number(std::round(core.availableDisplayWidth));
+        screen->second.object->props[L"$host:availHeight"]=Value::Number(std::round(core.availableDisplayHeight));
     }
     core.UpdateMediaQueries();
 }
@@ -14558,8 +15110,24 @@ std::wstring JavaScriptRuntime::DiagnosticsJson()const{
         L",\"pendingPromises\":"+std::to_wstring(pending)+L",\"instructions\":"+std::to_wstring(core.executedInstructions)+
         L",\"scalarOperations\":"+std::to_wstring(core.scalarOperations)+L",\"fusedNumericOperations\":"+std::to_wstring(core.fusedNumericOperations)+L",\"evalCompileCacheHits\":"+std::to_wstring(core.evalCompileCacheHits)+
         L",\"collections\":"+std::to_wstring(core.collectionCount)+L",\"fastScopeCalls\":"+std::to_wstring(core.fastScopeCalls)+
-        L",\"readPlanCalls\":"+std::to_wstring(core.readPlanCalls)+
+        L",\"readPlanCalls\":"+std::to_wstring(core.readPlanCalls)+L",\"switchDispatches\":"+std::to_wstring(core.switchDispatches)+
+        L",\"stringAppendReuses\":"+std::to_wstring(core.stringAppendReuses)+
+        L",\"byteCopyCalls\":"+std::to_wstring(core.byteCopyCalls)+L",\"byteCopyIterations\":"+std::to_wstring(core.byteCopyIterations)+
+        L",\"simdByteCopyIterations\":"+std::to_wstring(core.simdByteCopyIterations)+L",\"parallelByteCopyIterations\":"+std::to_wstring(core.parallelByteCopyIterations)+
+        L",\"nativeLoopCalls\":"+std::to_wstring(core.nativeLoopCalls)+L",\"nativeLoopIterations\":"+std::to_wstring(core.nativeLoopIterations)+L",\"nativeLoopGuardExits\":"+std::to_wstring(core.nativeLoopGuardExits)+
+        L",\"nativeLoopCompilations\":"+std::to_wstring(core.nativeLoopCompilations)+L",\"nativeLoopCacheLimitExits\":"+std::to_wstring(core.nativeLoopCacheLimitExits)+
+        L",\"nativeLoopHeaderEntries\":"+std::to_wstring(core.nativeLoopHeaderEntries)+
+        L",\"nativeLoopPrepareCacheHits\":"+std::to_wstring(core.nativeLoopPrepareCacheHits)+
+        L",\"nativeLoopPrepareCacheMisses\":"+std::to_wstring(core.nativeLoopPrepareCacheMisses)+
+        L",\"nativeLoopPreparedBytes\":"+std::to_wstring(core.nativeLoopPreparedBytes)+
+        L",\"nativeLoopCacheLastReject\":"+std::to_wstring(core.nativeLoopCacheLastReject)+
+        L",\"nativeLoopPlanEvictions\":"+std::to_wstring(core.nativeLoopPlanEvictions)+
+        L",\"nativeLoopLastReject\":"+std::to_wstring(core.nativeLoopLastReject)+
+        L",\"nativeLoopLastOperation\":"+std::to_wstring(core.nativeLoopLastOperation)+L",\"nativeLoopLastOffset\":"+std::to_wstring(core.nativeLoopLastOffset)+
+        L",\"nativeLoopRejections\":"+core.NativeLoopRejectionsJson()+
         L",\"tableReductionCalls\":"+std::to_wstring(core.tableReductionCalls)+L",\"tableReductionIterations\":"+std::to_wstring(core.tableReductionIterations)+
+        L",\"stringTransformCalls\":"+std::to_wstring(core.stringTransformCalls)+L",\"stringTransformIterations\":"+std::to_wstring(core.stringTransformIterations)+
+        L",\"packedStringTransformCalls\":"+std::to_wstring(core.packedStringTransformCalls)+L",\"packedStringTransformIterations\":"+std::to_wstring(core.packedStringTransformIterations)+
         L",\"nativeCalls\":"+std::to_wstring(core.jitStatistics.nativeCalls)+
         L",\"scriptJobs\":"+std::to_wstring(core.scriptJobs)+
         L",\"scriptJobMs\":"+std::to_wstring(core.scriptJobMilliseconds)+
