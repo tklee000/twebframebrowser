@@ -1,0 +1,9 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Target Name="DeployTWebFrameSkia" AfterTargets="Build"
+          Condition="'$(Platform)'=='x64' and '$(ConfigurationType)'=='Application'">
+    <ItemGroup>
+      <TWebFrameSkiaRuntime Include="$(MSBuildThisFileDirectory)TWebFrame2\vendor\skia\libSkiaSharp.dll;$(MSBuildThisFileDirectory)TWebFrame2\vendor\skia\LICENSE.txt;$(MSBuildThisFileDirectory)TWebFrame2\vendor\skia\THIRD-PARTY-NOTICES.txt" />
+    </ItemGroup>
+    <Copy SourceFiles="@(TWebFrameSkiaRuntime)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "0010-position-stacking",
+  "stage": "pilot",
+  "family": "position",
+  "features": [
+    "absolute",
+    "z-index",
+    "containing-block",
+    "opacity"
+  ],
+  "seed": 20261003,
+  "generatorVersion": "1.0",
+  "scriptless": true,
+  "states": [
+    "initial"
+  ],
+  "viewports": [
+    [
+      384,
+      768
+    ],
+    [
+      800,
+      600
+    ],
+    [
+      1280,
+      800
+    ]
+  ],
+  "dpi": [
+    96,
+    144
+  ],
+  "htmlSha256": "6E54F4528EEA8A44975DCD8C6ABFDE59386E85CB0A78C362141826BD1964B041",
+  "cssSha256": "E4E179CE165C742E692CF970BEA73CA28E12FAB4DE8F3D9DF188F5636FBF8BFD"
+}

@@ -2,12 +2,16 @@
 #include "Canvas.h"
 #include "NumericParser.h"
 #include "RasterImage.h"
+#include "RenderingGlyphs.h"
+#include "RasterSurface.h"
+#include "RasterGradient.h"
 
 #include <algorithm>
 #include <numeric>
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <map>
 #include <cwctype>
 #include <functional>
 #include <iomanip>
@@ -16,6 +20,7 @@
 #include <list>
 #include <sstream>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <wrl/client.h>
 #include <wincodec.h>
@@ -68,6 +73,7 @@ struct CachedStyleMetrics {
     float borderScale=0;
     float fontSize=0;
     float lineHeight=0;
+    float lineHeightScale=0;
     bool bordersValid=false;
     bool fontSizeValid=false;
     bool lineHeightValid=false;
@@ -81,6 +87,7 @@ struct CachedStyleMetrics {
     float inlineFontHeight=0;
     float inlineFontXHeight=0;
     float inlineFontBaseline=0;
+    float inlineFontLineGap=0;
 };
 using StyleMetricsCache=FastMap<const void*,CachedStyleMetrics>;
 StyleMetricsCache& ThreadStyleMetricsCache(){
@@ -131,7 +138,19 @@ void ClearOwnerBoundThreadCaches(){
     // documents whose view has already been destroyed.
     ThreadStyleMetricsCache().clear();ThreadEdgeValuesCache().clear();
 }
-struct CornerRadii { float x=0,y=0; };
+struct CornerRadii {
+    // Clockwise from top left. x/y retain the first corner for scrollbar sizing.
+    float x=0,y=0;
+    std::array<D2D1_POINT_2F,4> corners{};
+    bool Any() const {
+        for(const auto& corner:corners)if(corner.x>0&&corner.y>0)return true;
+        return false;
+    }
+    bool Uniform() const {
+        for(const auto& corner:corners)if(corner.x!=x||corner.y!=y)return false;
+        return true;
+    }
+};
 struct BoxShadow {
     float offsetX=0,offsetY=0,blur=0,spread=0;
     unsigned int color=0;
@@ -178,6 +197,7 @@ struct HorizontalScrollbarMetrics {
 };
 
 Edges BorderValues(const ComputedStyle& style);
+Edges UsedBorderValues(const LayoutBox& box);
 
 LayoutRect PaddingBox(const LayoutBox& box) {
     if(box.viewportScrollContainer)return box.viewportScrollport;
@@ -409,7 +429,8 @@ FloatSide UsedFloatSide(const ComputedStyle& style) {
 }
 
 bool EstablishesBlockFormattingContext(const LayoutBox& box) {
-    if(!box.parent||UsedFloatSide(box.style)!=FloatSide::None)return true;
+    // body is stored at the tree root, but remains an ordinary block in html.
+    if((!box.parent&&(!box.node||box.node->tag!=L"body"))||UsedFloatSide(box.style)!=FloatSide::None)return true;
     const auto position=ToLower(Trim(box.style.Get(L"position",L"static")));
     if(position==L"absolute"||position==L"fixed")return true;
     const auto display=ToLower(Trim(box.style.Get(L"display",L"block")));
@@ -542,26 +563,115 @@ LayoutBox* SingleLineClippedTextChild(LayoutBox& box) {
     return textChild;
 }
 
-CornerRadii UniformCornerRadii(const ComputedStyle& style,float width,float height,float viewportWidth) {
-    auto raw=Trim(ToLower(style.Get(L"border-radius",L"0")));
-    if(raw.empty())return {};
+std::vector<std::wstring> Words(const std::wstring& text);
 
-    // This renderer currently paints one uniform radius. Resolve its horizontal
-    // and vertical components independently, as CSS does for percentages.
-    // Then apply CSS corner-overlap normalization. In particular, a large
-    // length such as 999px becomes a capsule, not an ellipse whose x radius is
-    // silently stretched to half the box width by the graphics backend.
+CornerRadii ResolveCornerRadii(const ComputedStyle& style,float width,float height,float viewportWidth) {
+    CornerRadii radii;
+    if(width<=0||height<=0)return radii;
+    const auto raw=Trim(style.Get(L"border-radius",L"0"));
     const auto slash=raw.find(L'/');
-    auto first=[](std::wstring value){value=Trim(value);const auto end=value.find_first_of(L" \t\r\n");return end==std::wstring::npos?value:value.substr(0,end);};
-    const auto horizontal=first(slash==std::wstring::npos?raw:raw.substr(0,slash));
-    const auto vertical=slash==std::wstring::npos?horizontal:first(raw.substr(slash+1));
-    CornerRadii radii{
-        StyleSheet::Length(horizontal,width,viewportWidth,0),
-        StyleSheet::Length(vertical,height,viewportWidth,0)};
-    if(radii.x<=0||radii.y<=0)return {};
-    const float scale=std::min({1.0f,width/(2*radii.x),height/(2*radii.y)});
-    radii.x*=scale;radii.y*=scale;
+    auto horizontal=Words(raw.substr(0,slash));
+    auto vertical=slash==std::wstring::npos?horizontal:Words(raw.substr(slash+1));
+    const auto expand=[](std::vector<std::wstring> values){
+        if(values.empty()||values.size()>4)return std::array<std::wstring,4>{L"0",L"0",L"0",L"0"};
+        return std::array<std::wstring,4>{values[0],values.size()>1?values[1]:values[0],
+            values.size()>2?values[2]:values[0],values.size()>3?values[3]:(values.size()>1?values[1]:values[0])};
+    };
+    const auto xs=expand(horizontal),ys=expand(vertical);
+    static const wchar_t* names[]={L"border-top-left-radius",L"border-top-right-radius",
+        L"border-bottom-right-radius",L"border-bottom-left-radius"};
+    for(size_t i=0;i<4;++i){
+        const auto longhand=Words(style.Get(names[i]));
+        const auto& horizontalValue=longhand.empty()?xs[i]:longhand[0];
+        const auto& verticalValue=longhand.empty()?ys[i]:(longhand.size()>1?longhand[1]:longhand[0]);
+        auto& corner=radii.corners[i];
+        corner.x=std::max(0.0f,StyleSheet::Length(horizontalValue,width,viewportWidth,0));
+        corner.y=std::max(0.0f,StyleSheet::Length(verticalValue,height,viewportWidth,0));
+        if(corner.x==0||corner.y==0)corner={0,0};
+    }
+    // One common factor preserves the relationships between all eight radii.
+    float scale=1;
+    const auto limit=[&](float length,float sum){if(sum>0)scale=std::min(scale,length/sum);};
+    const auto& c=radii.corners;
+    limit(width,c[0].x+c[1].x);limit(width,c[3].x+c[2].x);
+    limit(height,c[0].y+c[3].y);limit(height,c[1].y+c[2].y);
+    for(auto& corner:radii.corners){corner.x*=scale;corner.y*=scale;}
+    radii.x=c[0].x;radii.y=c[0].y;
     return radii;
+}
+
+CornerRadii InsetCornerRadii(CornerRadii radii,const Edges& inset) {
+    const float xs[]={inset.left,inset.right,inset.right,inset.left};
+    const float ys[]={inset.top,inset.top,inset.bottom,inset.bottom};
+    for(size_t i=0;i<4;++i){
+        auto& corner=radii.corners[i];
+        if(corner.x<=0||corner.y<=0){corner={0,0};continue;}
+        corner.x=std::max(0.0f,corner.x-xs[i]);corner.y=std::max(0.0f,corner.y-ys[i]);
+        if(corner.x==0||corner.y==0)corner={0,0};
+    }
+    radii.x=radii.corners[0].x;radii.y=radii.corners[0].y;
+    return radii;
+}
+
+Microsoft::WRL::ComPtr<ID2D1Geometry> RoundedBoxGeometry(
+        ID2D1RenderTarget* target,const D2D1_RECT_F& rect,const CornerRadii& radii) {
+    Microsoft::WRL::ComPtr<ID2D1Factory> factory;target->GetFactory(&factory);
+    Microsoft::WRL::ComPtr<ID2D1Geometry> result;
+    if(!factory)return result;
+    if(radii.Uniform()){
+        Microsoft::WRL::ComPtr<ID2D1RoundedRectangleGeometry> geometry;
+        factory->CreateRoundedRectangleGeometry(D2D1::RoundedRect(rect,radii.x,radii.y),&geometry);
+        return geometry;
+    }
+    Microsoft::WRL::ComPtr<ID2D1PathGeometry> geometry;
+    Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
+    if(FAILED(factory->CreatePathGeometry(&geometry))||FAILED(geometry->Open(&sink)))return result;
+    const auto& c=radii.corners;
+    sink->BeginFigure(D2D1::Point2F(rect.left+c[0].x,rect.top),D2D1_FIGURE_BEGIN_FILLED);
+    const auto arc=[&](D2D1_POINT_2F end,const D2D1_POINT_2F& radius){
+        if(radius.x>0&&radius.y>0)sink->AddArc(D2D1::ArcSegment(end,D2D1::SizeF(radius.x,radius.y),
+            0,D2D1_SWEEP_DIRECTION_CLOCKWISE,D2D1_ARC_SIZE_SMALL));
+        else sink->AddLine(end);
+    };
+    sink->AddLine(D2D1::Point2F(rect.right-c[1].x,rect.top));
+    arc(D2D1::Point2F(rect.right,rect.top+c[1].y),c[1]);
+    sink->AddLine(D2D1::Point2F(rect.right,rect.bottom-c[2].y));
+    arc(D2D1::Point2F(rect.right-c[2].x,rect.bottom),c[2]);
+    sink->AddLine(D2D1::Point2F(rect.left+c[3].x,rect.bottom));
+    arc(D2D1::Point2F(rect.left,rect.bottom-c[3].y),c[3]);
+    sink->AddLine(D2D1::Point2F(rect.left,rect.top+c[0].y));
+    arc(D2D1::Point2F(rect.left+c[0].x,rect.top),c[0]);
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    if(SUCCEEDED(sink->Close()))result=geometry;
+    return result;
+}
+
+void FillRoundedBox(ID2D1RenderTarget* target,const D2D1_RECT_F& rect,
+                    const CornerRadii& radius,ID2D1Brush* brush) {
+    if(!radius.Any()){target->FillRectangle(rect,brush);return;}
+    if(!radius.Uniform()&&activeRasterSurface&&activeRasterSurface->target==target){
+        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> solid;
+        if(SUCCEEDED(brush->QueryInterface(IID_PPV_ARGS(&solid)))){
+            auto color=solid->GetColor();color.a*=solid->GetOpacity();
+            const auto byte=[](float v){return static_cast<unsigned int>(std::lround(std::clamp(v,0.0f,1.0f)*255));};
+            const auto argb=(byte(color.a)<<24)|(byte(color.r)<<16)|(byte(color.g)<<8)|byte(color.b);
+            if(activeRasterSurface->PaintSkia(rect,radius.corners,argb))return;
+        }
+    }
+    if(radius.Uniform()&&std::abs(rect.right-rect.left-(rect.bottom-rect.top))<0.0001f&&
+       radius.x*2+0.0001f>=rect.right-rect.left&&radius.y*2+0.0001f>=rect.bottom-rect.top&&
+       activeRasterSurface&&activeRasterSurface->target==target&&activeRasterSurface->FillCircle(rect,brush))return;
+    if(radius.Uniform()&&radius.x==radius.y&&activeRasterSurface&&activeRasterSurface->target==target&&
+       activeRasterSurface->FillRoundedRect(rect,radius.x,brush))return;
+    if(radius.Uniform()){target->FillRoundedRectangle(D2D1::RoundedRect(rect,radius.x,radius.y),brush);return;}
+    if(auto geometry=RoundedBoxGeometry(target,rect,radius))target->FillGeometry(geometry.Get(),brush);
+}
+
+bool PaintSoftwareRoundedRect(ID2D1RenderTarget* target,const D2D1_ROUNDED_RECT& rect,
+                         ID2D1Brush* brush,float strokeWidth=0){
+    return target->GetAntialiasMode()!=D2D1_ANTIALIAS_MODE_ALIASED&&rect.radiusX==rect.radiusY&&
+        activeRasterSurface&&activeRasterSurface->target==target&&
+        activeRasterSurface->FillRoundedRect(rect.rect,rect.radiusX,brush,strokeWidth);
 }
 
 std::vector<std::wstring> Words(const std::wstring& text) {
@@ -957,12 +1067,13 @@ float FontSize(const ComputedStyle& style){
 IDWriteFactory* SharedWriteFactory();
 Microsoft::WRL::ComPtr<IDWriteTextFormat> TextFormat(IDWriteFactory* factory,
                                                       const ComputedStyle& style);
-struct FontBoxMetrics { float height=0,baseline=0,xHeight=0; };
+struct FontBoxMetrics { float height=0,baseline=0,xHeight=0,lineGap=0; };
 FontBoxMetrics NaturalFontBoxMetrics(const ComputedStyle& style);
+FontBoxMetrics InlineFontBoxMetrics(const ComputedStyle& style);
 float NaturalFontLineHeight(const ComputedStyle& style);
 
 float LineHeight(const ComputedStyle& style){
-    auto& cached=StyleMetrics(style);if(cached.lineHeightValid)return cached.lineHeight;
+    auto& cached=StyleMetrics(style);if(cached.lineHeightValid&&cached.lineHeightScale==style.deviceScale)return cached.lineHeight;
     const auto raw=style.Get(L"line-height");const float font=FontSize(style);
     // CSS normal line-height follows the selected face's ascent, descent and
     // line gap. Keep that metric in DIPs; monitor scaling belongs exclusively
@@ -973,7 +1084,7 @@ float LineHeight(const ComputedStyle& style){
         cached.lineHeight=TryParseFloat(raw,multiple,&used)&&used==raw.size()?
             font*multiple:StyleSheet::Length(raw,font,font,font*fallbackNormalLineHeight);
     }
-    cached.lineHeightValid=true;return cached.lineHeight;
+    cached.lineHeightValid=true;cached.lineHeightScale=style.deviceScale;return cached.lineHeight;
 }
 
 bool ParticipatesInEditableContent(const std::shared_ptr<Node>& node){
@@ -1104,7 +1215,8 @@ std::wstring WindowsGenericFontFamily(const std::wstring& family){
     if(generic==L"serif"||generic==L"ui-serif")return L"Times New Roman";
     if(generic==L"sans-serif"||generic==L"ui-sans-serif")return L"Arial";
     if(generic==L"system-ui")return L"Segoe UI";
-    if(generic==L"monospace"||generic==L"ui-monospace")return L"Consolas";
+    if(generic==L"monospace")return PRIMARYLANGID(GetUserDefaultUILanguage())==LANG_KOREAN?L"GulimChe":L"Consolas";
+    if(generic==L"ui-monospace")return L"Consolas";
     if(generic==L"cursive")return L"Comic Sans MS";
     if(generic==L"fantasy")return L"Impact";
     if(generic==L"math")return L"Cambria Math";
@@ -1255,11 +1367,11 @@ IDWriteFactory* SharedWriteFactory() {
 }
 
 Microsoft::WRL::ComPtr<IDWriteRenderingParams> WebTextRenderingParams(
-        IDWriteFactory* factory,bool subpixel) {
-    static thread_local FastMap<std::uintptr_t,
+        IDWriteFactory* factory,bool subpixel,DWRITE_RENDERING_MODE mode=DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC) {
+    static thread_local std::map<std::tuple<IDWriteFactory*,bool,DWRITE_RENDERING_MODE>,
         Microsoft::WRL::ComPtr<IDWriteRenderingParams>> cache;
     if(!factory)return {};
-    const auto key=reinterpret_cast<std::uintptr_t>(factory)|(subpixel?1u:0u);
+    const auto key=std::make_tuple(factory,subpixel,mode);
     if(const auto found=cache.find(key);found!=cache.end())return found->second;
     Microsoft::WRL::ComPtr<IDWriteRenderingParams> params;
     Microsoft::WRL::ComPtr<IDWriteFactory1> factory1;
@@ -1267,12 +1379,12 @@ Microsoft::WRL::ComPtr<IDWriteRenderingParams> WebTextRenderingParams(
         Microsoft::WRL::ComPtr<IDWriteRenderingParams1> params1;
         if(SUCCEEDED(factory1->CreateCustomRenderingParams(2.2f,0.0f,0.0f,subpixel?1.0f:0.0f,
            subpixel?DWRITE_PIXEL_GEOMETRY_RGB:DWRITE_PIXEL_GEOMETRY_FLAT,
-           DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,&params1)))
+           mode,&params1)))
             params=params1;
     }
     if(!params)factory->CreateCustomRenderingParams(2.2f,0.0f,subpixel?1.0f:0.0f,
         subpixel?DWRITE_PIXEL_GEOMETRY_RGB:DWRITE_PIXEL_GEOMETRY_FLAT,
-        DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,&params);
+        mode,&params);
     if(params){if(cache.size()>=8)cache.clear();cache.emplace(key,params);}
     return params;
 }
@@ -1304,19 +1416,118 @@ public:
     }
 };
 
+class WebGlyphTextRenderer final : public TextRunObserver {
+    ID2D1RenderTarget* target_;
+    IDWriteFactory* factory_;
+    ID2D1Brush* brush_;
+public:
+    WebGlyphTextRenderer(ID2D1RenderTarget* target,IDWriteFactory* factory,ID2D1Brush* brush):
+        target_(target),factory_(factory),brush_(brush){}
+    HRESULT STDMETHODCALLTYPE IsPixelSnappingDisabled(void*,BOOL* disabled) override {
+        if(!disabled)return E_POINTER;*disabled=FALSE;return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetCurrentTransform(void*,DWRITE_MATRIX* matrix) override {
+        if(!matrix)return E_POINTER;D2D1_MATRIX_3X2_F transform{};target_->GetTransform(&transform);
+        *matrix={transform._11,transform._12,transform._21,transform._22,transform._31,transform._32};return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetPixelsPerDip(void*,FLOAT* scale) override {
+        if(!scale)return E_POINTER;FLOAT x=96,y=96;target_->GetDpi(&x,&y);*scale=y/96;return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DrawGlyphRun(void*,FLOAT x,FLOAT y,DWRITE_MEASURING_MODE measuring,
+        const DWRITE_GLYPH_RUN* run,const DWRITE_GLYPH_RUN_DESCRIPTION*,IUnknown*) override {
+        if(!run)return E_INVALIDARG;
+        if(activeRasterSurface&&activeRasterSurface->target==target_&&
+           activeRasterSurface->DrawGlyphRun(factory_,x,y,*run,brush_))return S_OK;
+        FLOAT dpiX=96,dpiY=96;target_->GetDpi(&dpiX,&dpiY);
+        D2D1_MATRIX_3X2_F transform{};target_->GetTransform(&transform);
+        const float physicalSize=run->fontEmSize*dpiY/96*std::hypot(transform._21,transform._22);
+        const auto mode=FontRasterMode(run->fontFace,physicalSize);
+        Microsoft::WRL::ComPtr<IDWriteRenderingParams> previous;target_->GetTextRenderingParams(&previous);
+        const bool subpixel=target_->GetTextAntialiasMode()==D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE;
+        if(auto params=WebTextRenderingParams(factory_,subpixel,mode))target_->SetTextRenderingParams(params.Get());
+        // Browser glyph atlases have four horizontal coverage phases. Quantize
+        // the raster origin of each shaped glyph, rather than rounding the run
+        // origin and then allowing arbitrary fractional advances to select a
+        // different DirectWrite coverage phase. Advances and layout stay exact.
+        const bool axisAligned=std::abs(transform._12)<0.00001f&&
+            std::abs(transform._21)<0.00001f&&transform._11>0&&transform._22>0;
+        if(axisAligned&&!run->isSideways&&run->glyphAdvances&&run->glyphIndices){
+            const float scaleX=dpiX/96*transform._11,scaleY=dpiY/96*transform._22;
+            const float translateX=dpiX/96*transform._31,translateY=dpiY/96*transform._32;
+            const bool rtl=(run->bidiLevel&1)!=0;
+            float pen=x;
+            for(UINT32 index=0;index<run->glyphCount;++index){
+                if(rtl)pen-=run->glyphAdvances[index];
+                const DWRITE_GLYPH_OFFSET offset=run->glyphOffsets?run->glyphOffsets[index]:DWRITE_GLYPH_OFFSET{};
+                const float rawX=pen+(rtl?-offset.advanceOffset:offset.advanceOffset);
+                const float rawY=y-offset.ascenderOffset;
+                const float snappedX=(std::floor((rawX*scaleX+translateX)*4+0.5f)/4-translateX)/scaleX;
+                const float snappedY=(std::floor(rawY*scaleY+translateY+0.5f)-translateY)/scaleY;
+                const float advance=0;
+                auto glyph=*run;glyph.glyphCount=1;glyph.glyphIndices=run->glyphIndices+index;
+                glyph.glyphAdvances=&advance;glyph.glyphOffsets=nullptr;glyph.bidiLevel=0;
+                target_->DrawGlyphRun(D2D1::Point2F(snappedX,snappedY),&glyph,brush_,measuring);
+                if(!rtl)pen+=run->glyphAdvances[index];
+            }
+        }else target_->DrawGlyphRun(D2D1::Point2F(x,y),run,brush_,measuring);
+        target_->SetTextRenderingParams(previous.Get());return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DrawUnderline(void*,FLOAT x,FLOAT y,const DWRITE_UNDERLINE* line,IUnknown*) override {
+        if(!line)return E_INVALIDARG;
+        target_->FillRectangle(D2D1::RectF(x,y+line->offset,x+line->width,y+line->offset+line->thickness),brush_);return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DrawStrikethrough(void*,FLOAT x,FLOAT y,const DWRITE_STRIKETHROUGH* line,IUnknown*) override {
+        if(!line)return E_INVALIDARG;
+        target_->FillRectangle(D2D1::RectF(x,y+line->offset,x+line->width,y+line->offset+line->thickness),brush_);return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DrawInlineObject(void* context,FLOAT x,FLOAT y,IDWriteInlineObject* object,BOOL sideways,BOOL rtl,IUnknown* effect) override {
+        return object?object->Draw(context,this,x,y,sideways,rtl,effect):E_INVALIDARG;
+    }
+};
+
+void DrawWebTextLayout(ID2D1RenderTarget* target,IDWriteFactory* factory,D2D1_POINT_2F origin,
+                       IDWriteTextLayout* layout,ID2D1Brush* brush){
+    WebGlyphTextRenderer renderer(target,factory,brush);
+    layout->Draw(nullptr,&renderer,origin.x,origin.y);
+}
+
+Microsoft::WRL::ComPtr<IDWriteFontFace> MatchedFontFace(const ComputedStyle& style){
+    static thread_local FastMap<std::wstring,Microsoft::WRL::ComPtr<IDWriteFontFace>> cache;
+    const auto key=FontFamily(style)+L'\x1f'+std::to_wstring(FontWeight(style))+L'\x1f'+style.Get(L"font-style");
+    if(const auto found=cache.find(key);found!=cache.end())return found->second;
+    Microsoft::WRL::ComPtr<IDWriteFontFace> face;
+    if(auto* factory=SharedWriteFactory()){
+        Microsoft::WRL::ComPtr<IDWriteFontCollection> collection;
+        Microsoft::WRL::ComPtr<IDWriteFontFamily> family;
+        Microsoft::WRL::ComPtr<IDWriteFont> font;
+        UINT32 index=0;BOOL exists=FALSE;
+        if(SUCCEEDED(factory->GetSystemFontCollection(&collection))&&
+           SUCCEEDED(collection->FindFamilyName(FontFamily(style).c_str(),&index,&exists))&&exists&&
+           SUCCEEDED(collection->GetFontFamily(index,&family))&&
+           SUCCEEDED(family->GetFirstMatchingFont(static_cast<DWRITE_FONT_WEIGHT>(FontWeight(style)),
+                DWRITE_FONT_STRETCH_NORMAL,FontStyle(style),&font)))font->CreateFontFace(&face);
+    }
+    if(cache.size()>=256)cache.clear();cache.emplace(key,face);return face;
+}
+
 Microsoft::WRL::ComPtr<IDWriteTextFormat> TextFormat(IDWriteFactory* factory,
                                                       const ComputedStyle& style) {
     static thread_local FastMap<std::wstring,Microsoft::WRL::ComPtr<IDWriteTextFormat>> cache;
     std::wstring key=std::to_wstring(reinterpret_cast<std::uintptr_t>(factory));key+=L'\x1f';
     key+=FontFamily(style);key+=L'\x1f';key+=NumberText(FontSize(style));key+=L'\x1f';
     key+=std::to_wstring(FontWeight(style));key+=L'\x1f';key+=style.Get(L"font-style");
+    key+=L'\x1f';key+=style.Get(L"direction",L"ltr");
     if(const auto found=cache.find(key);found!=cache.end())return found->second;
     if(cache.size()>=256)cache.clear();
     Microsoft::WRL::ComPtr<IDWriteTextFormat> format;
     if(factory)factory->CreateTextFormat(FontFamily(style).c_str(),nullptr,
         static_cast<DWRITE_FONT_WEIGHT>(FontWeight(style)),FontStyle(style),
         DWRITE_FONT_STRETCH_NORMAL,FontSize(style),L"ko-kr",&format);
-    if(format)cache.emplace(std::move(key),format);
+    if(format){
+        format->SetReadingDirection(style.Is(L"direction",L"rtl")?
+            DWRITE_READING_DIRECTION_RIGHT_TO_LEFT:DWRITE_READING_DIRECTION_LEFT_TO_RIGHT);
+        cache.emplace(std::move(key),format);
+    }
     return format;
 }
 
@@ -1347,19 +1558,21 @@ FontBoxMetrics NaturalFontBoxMetrics(const ComputedStyle& style) {
 }
 
 float NaturalFontLineHeight(const ComputedStyle& style) {
-    return NaturalFontBoxMetrics(style).height;
+    const auto metrics=InlineFontBoxMetrics(style);
+    return metrics.height+metrics.lineGap;
 }
 
 FontBoxMetrics InlineFontBoxMetrics(const ComputedStyle& style) {
     const auto& cachedMetrics=StyleMetrics(style);
     if(cachedMetrics.inlineFontValid&&cachedMetrics.inlineFontScale==style.deviceScale)
         return {cachedMetrics.inlineFontHeight,cachedMetrics.inlineFontBaseline,
-                cachedMetrics.inlineFontXHeight};
+                cachedMetrics.inlineFontXHeight,cachedMetrics.inlineFontLineGap};
     const auto remember=[&](FontBoxMetrics result){
         auto& cached=StyleMetrics(style);
         cached.inlineFontValid=true;cached.inlineFontScale=style.deviceScale;
         cached.inlineFontHeight=result.height;cached.inlineFontBaseline=result.baseline;
         cached.inlineFontXHeight=result.xHeight;
+        cached.inlineFontLineGap=result.lineGap;
         return result;
     };
     static thread_local FastMap<std::wstring,FontBoxMetrics> cache;
@@ -1368,12 +1581,12 @@ FontBoxMetrics InlineFontBoxMetrics(const ComputedStyle& style) {
     key+=FontFamily(style);key+=L'\x1f';key+=NumberText(FontSize(style));key+=L'\x1f';
     key+=std::to_wstring(FontWeight(style));key+=L'\x1f';key+=style.Get(L"font-style");
     key+=genericMonospace?L"\x1fmono":L"\x1fresolved";
-    if(genericMonospace){key+=L'\x1f';key+=NumberText(style.deviceScale);}
+    key+=L'\x1f';key+=NumberText(style.deviceScale);
     if(const auto found=cache.find(key);found!=cache.end())return remember(found->second);
     if(cache.size()>=256)cache.clear();
     FontBoxMetrics result=NaturalFontBoxMetrics(style);
     result.xHeight=FontSize(style)*0.5f;
-    if(!genericMonospace){
+    {
         if(auto* factory=SharedWriteFactory()){
             Microsoft::WRL::ComPtr<IDWriteFontCollection> collection;
             Microsoft::WRL::ComPtr<IDWriteFontFamily> family;
@@ -1389,26 +1602,20 @@ FontBoxMetrics InlineFontBoxMetrics(const ComputedStyle& style) {
                     DWRITE_FONT_STRETCH_NORMAL,FontStyle(style),&font))&&
                SUCCEEDED(font->CreateFontFace(&face))){
                 DWRITE_FONT_METRICS metrics{};face->GetMetrics(&metrics);
+                const bool bitmapFont=!FontBitmapSizes(face.Get()).empty();
+                if(bitmapFont)face->GetGdiCompatibleMetrics(FontSize(style),
+                    std::max(0.01f,style.deviceScale),nullptr,&metrics);
                 if(metrics.designUnitsPerEm){
+                    const float deviceScale=std::max(0.01f,style.deviceScale);
                     const float scale=FontSize(style)/metrics.designUnitsPerEm;
-                    const float baseline=std::round(metrics.ascent*scale);
-                    const float descent=std::round(metrics.descent*scale);
+                    const float baseline=std::round(metrics.ascent*scale*deviceScale)/deviceScale;
+                    const float descent=std::round(metrics.descent*scale*deviceScale)/deviceScale;
                     if(baseline+descent>0)result={baseline+descent,baseline,
                         metrics.xHeight>0?std::round(metrics.xHeight*scale*64.0f)/64.0f:
-                            FontSize(style)*0.5f};
+                            FontSize(style)*0.5f,bitmapFont?0.0f:std::round(metrics.lineGap*scale*deviceScale)/deviceScale};
                 }
             }
         }
-    }else{
-        const float scale=std::max(0.01f,style.deviceScale);
-        // Chromium floors the generic fixed-font em box to a complete device
-        // pixel and snaps its alphabetic baseline before applying inline padding.
-        // Keep these CSS generic metrics separate from the installed face used
-        // for glyph shaping, just as the browser does for `monospace`.
-        const float fontSize=FontSize(style);
-        result={std::max(1.0f/scale,
-                         std::floor(fontSize*scale+0.0001f)/scale),
-                std::round(fontSize*0.85f*scale)/scale,fontSize*0.5f};
     }
     cache.emplace(std::move(key),result);return remember(result);
 }
@@ -1418,12 +1625,12 @@ float InlineContentBoxHeight(const ComputedStyle& style) {
 }
 
 float InlineHalfLeading(const ComputedStyle& style) {
-    // The font ascent/descent and inline content edges use CSS pixel metrics.
-    // Put an odd leading pixel below the alphabetic baseline; DPI scaling is
-    // applied when painting, without moving the CSS content edge at 150%.
+    // Round ascent/descent and odd leading in device space, then convert
+    // once to CSS coordinates. Inline backgrounds and glyph baselines must
+    // share these metrics at both 100% and 150% DPI.
     const float leading=(LineHeight(style)-InlineContentBoxHeight(style))/2.0f;
-    const auto lineHeight=style.Get(L"line-height");
-    return lineHeight.empty()||lineHeight==L"normal"?leading:std::floor(leading);
+    const float scale=std::max(0.01f,style.deviceScale);
+    return std::floor(leading*scale+0.0001f)/scale;
 }
 
 float InlineBaselineOffset(const ComputedStyle& parentStyle,
@@ -1446,16 +1653,12 @@ float TextBaselineOffset(const ComputedStyle& style) {
     key+=L'\x1f';key+=std::to_wstring(FontWeight(style));key+=L'\x1f';
     key+=style.Get(L"font-style");key+=L'\x1f';key+=style.Get(L"line-height");
     key+=L'\x1f';key+=style.Get(L"font-family");
-    if(UsesGenericMonospaceMetrics(style)){key+=L'\x1f';key+=NumberText(style.deviceScale);}
+    key+=L'\x1f';key+=NumberText(style.deviceScale);
     if(const auto found=cache.find(key);found!=cache.end())return found->second;
     if(cache.size()>=256)cache.clear();
-    const auto lineHeight=style.Get(L"line-height");
-    const bool natural=UsesGenericMonospaceMetrics(style)||lineHeight.empty()||lineHeight==L"normal";
-    const auto metrics=natural?NaturalFontBoxMetrics(style):
-        InlineFontBoxMetrics(style);
+    const auto metrics=InlineFontBoxMetrics(style);
     const float result=std::max(0.0f,metrics.baseline+
-        (natural?(LineHeight(style)-metrics.height)/2.0f:
-            InlineHalfLeading(style)));
+        InlineHalfLeading(style));
     cache.emplace(std::move(key),result);return result;
 }
 
@@ -1562,8 +1765,10 @@ InlineLineMetrics InitialInlineLineMetrics(const LayoutBox& parent) {
     const auto* document=parent.node?parent.node->ownerDocument:nullptr;
     const bool inlineContainer=parent.style.Is(L"display",L"inline")&&
         !IsAtomicInlineLevel(parent)&&!IsBlockifiedItem(parent);
+    const bool explicitBreak=std::any_of(parent.children.begin(),parent.children.end(),
+        [](const auto& child){return child->visible&&child->node->tag==L"br";});
     if(document&&(document->QuirksMode()||document->LimitedQuirksMode())&&
-       !inlineContainer)return result;
+       !inlineContainer&&!explicitBreak)return result;
     const auto& parentStyle=parent.style;
     result.baseline=TextBaselineOffset(parentStyle);
     result.descent=std::max(0.0f,LineHeight(parentStyle)-result.baseline);
@@ -1652,6 +1857,7 @@ TextCaretLineMetrics CaretLineMetrics(const ComputedStyle& style) {
     std::wstring key=FontFamily(style);key+=L'\x1f';key+=NumberText(FontSize(style));
     key+=L'\x1f';key+=std::to_wstring(FontWeight(style));key+=L'\x1f';
     key+=style.Get(L"font-style");key+=L'\x1f';key+=style.Get(L"line-height");
+    key+=L'\x1f';key+=NumberText(style.deviceScale);
     if(const auto found=cache.find(key);found!=cache.end())return found->second;
     if(cache.size()>=256)cache.clear();
     const auto metrics=NaturalFontBoxMetrics(style);
@@ -1680,7 +1886,15 @@ void ApplyFontFallback(IDWriteFactory* factory,IDWriteTextLayout* layout,
     const bool primaryProvidesKorean=primaryFamily.find(L"noto sans kr")!=std::wstring::npos||
         primaryFamily.find(L"malgun gothic")!=std::wstring::npos||
         primaryFamily.find(L"yu gothic")!=std::wstring::npos||FontFamily(style)==L"\ub9d1\uc740 \uace0\ub515";
-    if(!controlMetrics&&!primaryProvidesKorean&&ContainsHangul(text)){
+    bool missingHangul=!primaryProvidesKorean;
+    if(missingHangul&&ContainsHangul(text))if(const auto face=MatchedFontFace(style)){
+        std::vector<UINT32> characters;
+        for(const auto character:text)if(IsHangul(character))characters.push_back(character);
+        std::vector<UINT16> indices(characters.size());
+        if(SUCCEEDED(face->GetGlyphIndices(characters.data(),static_cast<UINT32>(characters.size()),indices.data())))
+            missingHangul=std::find(indices.begin(),indices.end(),0)!=indices.end();
+    }
+    if(!controlMetrics&&missingHangul&&ContainsHangul(text)){
         // A CSS family such as Segoe UI or Arial does not contain Hangul.
         // Chromium resolves the Korean runs through the installed UI fallback
         // face while DirectWrite's implicit fallback can choose a wider legacy
@@ -1725,9 +1939,34 @@ void ApplyFontFallback(IDWriteFactory* factory,IDWriteTextLayout* layout,
     }
 }
 
+void ApplyPairKerning(IDWriteTextLayout* layout,const std::wstring& text,
+                      const ComputedStyle& style) {
+    if(!layout||text.empty())return;
+    Microsoft::WRL::ComPtr<IDWriteTextLayout1> extended;
+    if(SUCCEEDED(layout->QueryInterface(IID_PPV_ARGS(&extended))))
+        extended->SetPairKerning(FALSE,
+            DWRITE_TEXT_RANGE{0,static_cast<UINT32>(text.size())});
+    // Prefer GPOS kerning. PairKerning can add legacy pairs even when GPOS
+    // already provides positioning, so enable it only on legacy-only faces.
+    static thread_local Microsoft::WRL::ComPtr<IDWriteTypography> typography[2];
+    const auto enabled=style.Is(L"font-kerning",L"none")?0:1;
+    if(!typography[enabled])if(auto* factory=SharedWriteFactory()){
+        if(SUCCEEDED(factory->CreateTypography(&typography[enabled])))
+            typography[enabled]->AddFontFeature({DWRITE_FONT_FEATURE_TAG_KERNING,static_cast<UINT32>(enabled)});
+    }
+    if(typography[enabled])layout->SetTypography(typography[enabled].Get(),
+        DWRITE_TEXT_RANGE{0,static_cast<UINT32>(text.size())});
+    if(enabled&&extended){
+        LegacyKerningRanges collector;
+        if(SUCCEEDED(layout->Draw(nullptr,&collector,0,0)))
+            for(const auto range:collector.ranges)extended->SetPairKerning(TRUE,range);
+    }
+}
+
 void ApplyCharacterSpacing(IDWriteTextLayout* layout,const std::wstring& text,
                            const ComputedStyle& style,bool controlMetrics=false) {
     if(!layout||text.empty())return;
+    ApplyPairKerning(layout,text,style);
     Microsoft::WRL::ComPtr<IDWriteTextLayout1> extended;
     if(FAILED(layout->QueryInterface(IID_PPV_ARGS(&extended))))return;
 
@@ -1735,9 +1974,13 @@ void ApplyCharacterSpacing(IDWriteTextLayout* layout,const std::wstring& text,
     const auto rawSpacing=style.Get(L"letter-spacing");
     if(!rawSpacing.empty()&&rawSpacing!=L"normal")
         authorSpacing=StyleSheet::Length(rawSpacing,FontSize(style),FontSize(style),0,FontSize(style));
+    BitmapAdvanceRanges bitmapAdvances(std::max(0.01f,style.deviceScale));
+    layout->Draw(nullptr,&bitmapAdvances,0,0);
     if(std::abs(authorSpacing)>0.001f)
         extended->SetCharacterSpacing(0,authorSpacing,0,
             DWRITE_TEXT_RANGE{0,static_cast<UINT32>(text.size())});
+    for(const auto& adjustment:bitmapAdvances.adjustments)
+        extended->SetCharacterSpacing(0,authorSpacing+adjustment.trailing,0,adjustment.range);
 
     // Chromium uses GDI-compatible metrics for native form-control text on
     // Windows. Keep those small fallback/space adjustments out of ordinary
@@ -1824,6 +2067,8 @@ float TextWidth(const std::wstring& source,const ComputedStyle& style,bool prese
     cacheKey+=L'\x1f';cacheKey+=style.Get(L"font-style");cacheKey+=L'\x1f';
     cacheKey+=style.Get(L"letter-spacing");cacheKey+=L'\x1f';cacheKey+=style.Get(L"tab-size");
     cacheKey+=L'\x1f';cacheKey+=style.Get(L"font-family");
+    cacheKey+=L'\x1f';cacheKey+=style.Get(L"font-kerning",L"auto");
+    cacheKey+=L'\x1f';cacheKey+=NumberText(style.deviceScale);
     cacheKey+=gdiCompatible?L"\x1fG":L"\x1fD";
     float cachedWidth=0;
     if(cache.Find(cacheKey,cachedWidth))return cachedWidth;
@@ -1841,23 +2086,11 @@ float TextWidth(const std::wstring& source,const ComputedStyle& style,bool prese
         }
         if(SUCCEEDED(created)){
             ApplyFontFallback(factory,layout.Get(),text,style,gdiCompatible);
+            ApplyCharacterSpacing(layout.Get(),text,style,gdiCompatible);
             ApplyTabSize(factory,layout.Get(),format.Get(),text,style,gdiCompatible);
             DWRITE_TEXT_METRICS metrics{};
             if(SUCCEEDED(layout->GetMetrics(&metrics))){
                 float width=metrics.widthIncludingTrailingWhitespace;
-                const auto rawSpacing=style.Get(L"letter-spacing");
-                if(!rawSpacing.empty()&&rawSpacing!=L"normal")
-                    width+=StyleSheet::Length(rawSpacing,FontSize(style),FontSize(style),0,FontSize(style))*text.size();
-                const float size=FontSize(style);
-                if(gdiCompatible&&UsesAutomaticHangulFallback(style))
-                    width-=size*0.08f*std::count_if(text.begin(),text.end(),IsHangul);
-                if(gdiCompatible){
-                    if(size>11.0f)
-                        width-=(size-11.0f)*0.216f*std::count(text.begin(),text.end(),L' ');
-                }
-                for(const auto character:text)
-                    width+=BrowserSymbolAdvanceAdjustment(character,size);
-                width-=static_cast<float>(std::count(text.begin(),text.end(),static_cast<wchar_t>(0x21f2)));
                 // Chromium stores inline geometry in 1/64 CSS-pixel layout
                 // units. Round the measured advance upward to that boundary so
                 // DirectWrite cannot wrap the final glyph because of a smaller
@@ -1898,6 +2131,8 @@ float TextHeight(const std::wstring& source,const ComputedStyle& style,float ava
     cacheKey+=style.Get(L"letter-spacing");cacheKey+=L'\x1f';cacheKey+=style.Get(L"tab-size");cacheKey+=L'\x1f';
     cacheKey+=style.Get(L"line-height");cacheKey+=L'\x1f';cacheKey+=whiteSpace;cacheKey+=L'\x1f';
     cacheKey+=NumberText(std::round(availableWidth*64.0f)/64.0f);
+    cacheKey+=L'\x1f';cacheKey+=style.Get(L"font-kerning",L"auto");
+    cacheKey+=L'\x1f';cacheKey+=NumberText(style.deviceScale);
     if(const auto found=cache.find(cacheKey);found!=cache.end())return found->second;
     if(cache.size()>8192)cache.clear();
     auto remember=[&](float value){cache[std::move(cacheKey)]=value;return value;};
@@ -1963,7 +2198,7 @@ std::wstring BoxText(const LayoutBox& box,bool* placeholder=nullptr) {
     if(placeholder)*placeholder=false;
     if(box.node->type==NodeType::Text)
         return NormalizeText(box.node->text,box.style.Get(L"white-space"),
-                             box.preserveLeadingWhitespace,box.preserveTrailingWhitespace);
+                             box.preserveLeadingWhitespace&&!box.trimLeadingLineWhitespace,box.preserveTrailingWhitespace);
     if((box.node->tag==L"input"&&box.node->Attribute(L"type")!=L"checkbox"&&
         box.node->Attribute(L"type")!=L"radio")||box.node->tag==L"textarea"){
         auto text=box.node->Attribute(L"value");
@@ -1979,9 +2214,9 @@ std::wstring BoxText(const LayoutBox& box,bool* placeholder=nullptr) {
 }
 
 D2D1_POINT_2F TextOrigin(const LayoutBox& box) {
-    const float selectInset=box.node->tag==L"select"?4.0f:0.0f;
-    const float selectTop=box.node->tag==L"select"?1.0f:0.0f;
-    return D2D1::Point2F(box.content.x+selectInset,box.content.y+selectTop-
+    const auto appearance=box.style.Get(L"appearance",box.style.Get(L"-webkit-appearance",L"auto"));
+    const float selectInset=box.node->tag==L"select"&&appearance!=L"none"?4.0f:0.0f;
+    return D2D1::Point2F(box.content.x+selectInset,box.content.y-
         (box.node->tag==L"textarea"?box.node->scrollTop:0.0f));
 }
 
@@ -2062,9 +2297,15 @@ std::wstring ListMarkerText(const LayoutBox& box) {
     return std::to_wstring(value)+L".";
 }
 
+std::wstring PhysicalTextAlignment(const ComputedStyle& style){
+    const auto align=style.Get(L"text-align",L"start");const bool rtl=style.Is(L"direction",L"rtl");
+    if(align==L"start")return rtl?L"right":L"left";
+    if(align==L"end")return rtl?L"left":L"right";
+    return align;
+}
+
 void EnsureTextLayout(LayoutBox& box,IDWriteFactory* factory,const std::wstring& text) {
     if(text.empty()||!factory){box.textLayout.Reset();box.textLayoutKey.clear();return;}
-    const bool formControl=IsFormControlText(box);
     const bool inlineTextRun=box.node->type==NodeType::Text&&box.parent&&box.parent->style.Is(L"display",L"inline");
     const auto whiteSpace=box.style.Get(L"white-space");
     const float nativeSelectInset=box.node->tag==L"select"?4.0f:0.0f;
@@ -2074,35 +2315,37 @@ void EnsureTextLayout(LayoutBox& box,IDWriteFactory* factory,const std::wstring&
     layoutKey+=box.style.Get(L"letter-spacing");layoutKey+=L'\x1f';
     layoutKey+=box.style.Get(L"tab-size");layoutKey+=L'\x1f';
     layoutKey+=box.style.Get(L"text-decoration-line",box.style.Get(L"text-decoration"));layoutKey+=L'\x1f';
-    layoutKey+=box.style.Get(L"text-align");layoutKey+=L'\x1f';layoutKey+=whiteSpace;layoutKey+=L'\x1f';
+    layoutKey+=box.style.Get(L"text-align");layoutKey+=L'\x1f';layoutKey+=box.style.Get(L"direction");
+    layoutKey+=L'\x1f';layoutKey+=whiteSpace;layoutKey+=L'\x1f';
     layoutKey+=inlineTextRun?L"inline-run":L"paragraph";
     const float textLayoutHeight=box.node->tag==L"textarea"?
         std::max(box.content.height,box.scrollHeight):box.content.height;
     layoutKey+=NumberText(box.content.width);layoutKey+=L',';layoutKey+=NumberText(textLayoutHeight);
-    layoutKey+=formControl?L"\x1fG":L"\x1fD";
+    layoutKey+=L'\x1f';layoutKey+=box.style.Get(L"font-kerning",L"auto");
+    layoutKey+=L'\x1f';layoutKey+=NumberText(box.style.deviceScale);
     if(box.textLayout&&box.textLayoutKey==layoutKey)return;
     box.textLayout.Reset();auto format=TextFormat(factory,box.style);if(!format)return;
-    const DWRITE_MATRIX identity{1,0,0,1,0,0};
-    const auto created=formControl?
-        factory->CreateGdiCompatibleTextLayout(text.c_str(),static_cast<UINT32>(text.size()),
-            format.Get(),std::max(1.0f,box.content.width-nativeSelectInset),
-            std::max(1.0f,textLayoutHeight),1.0f,&identity,FALSE,&box.textLayout):
-        factory->CreateTextLayout(text.c_str(),static_cast<UINT32>(text.size()),format.Get(),
-            std::max(1.0f,box.content.width),std::max(1.0f,textLayoutHeight),&box.textLayout);
+    const auto created=factory->CreateTextLayout(text.c_str(),static_cast<UINT32>(text.size()),format.Get(),
+        std::max(1.0f,box.content.width-nativeSelectInset),std::max(1.0f,textLayoutHeight),&box.textLayout);
     if(FAILED(created)){box.textLayout.Reset();return;}
     // Inline runs have already been positioned by the containing line. A
     // second paragraph alignment would shift text by its trailing spaces.
-    if(!inlineTextRun&&(box.style.Is(L"text-align",L"center")||box.style.Is(L"text-align",L"-webkit-center")))box.textLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-    else if(!inlineTextRun&&(box.style.Is(L"text-align",L"right")||box.style.Is(L"text-align",L"-webkit-right")))box.textLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+    const auto alignment=PhysicalTextAlignment(box.style);
+    const bool rtl=box.style.Is(L"direction",L"rtl");
+    if(!inlineTextRun&&(alignment==L"center"||alignment==L"-webkit-center"))box.textLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    else{
+        const bool physicalRight=!inlineTextRun&&(alignment==L"right"||alignment==L"-webkit-right");
+        box.textLayout->SetTextAlignment(physicalRight!=rtl?DWRITE_TEXT_ALIGNMENT_TRAILING:DWRITE_TEXT_ALIGNMENT_LEADING);
+    }
     box.textLayout->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM,
         LineHeight(box.style),TextBaselineOffset(box.style));
     box.textLayout->SetParagraphAlignment(box.node->tag==L"textarea"?
         DWRITE_PARAGRAPH_ALIGNMENT_NEAR:DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     if(box.node->tag==L"input"||box.node->tag==L"select"||PreventsTextWrapping(whiteSpace))
         box.textLayout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-    ApplyFontFallback(factory,box.textLayout.Get(),text,box.style,formControl);
-    ApplyCharacterSpacing(box.textLayout.Get(),text,box.style,formControl);
-    ApplyTabSize(factory,box.textLayout.Get(),format.Get(),text,box.style,formControl);
+    ApplyFontFallback(factory,box.textLayout.Get(),text,box.style);
+    ApplyCharacterSpacing(box.textLayout.Get(),text,box.style);
+    ApplyTabSize(factory,box.textLayout.Get(),format.Get(),text,box.style);
     ApplyTextDecorations(box.textLayout.Get(),text,box.style);
     box.textLayoutKey=std::move(layoutKey);
 }
@@ -2145,7 +2388,7 @@ float BlockOuterWidth(const LayoutBox& box,float availableWidth,float viewportWi
     const auto margin=EdgeValues(box.style,L"margin",availableWidth,viewportWidth);
     const auto raw=box.style.Get(L"width");
     if(ToLower(Trim(raw))==L"max-content")return NaturalWidth(box);
-    const bool borderBox=box.style.Is(L"box-sizing",L"border-box");const auto padding=EdgeValues(box.style,L"padding",availableWidth,viewportWidth);const auto border=BorderValues(box.style);
+    const bool borderBox=box.style.Is(L"box-sizing",L"border-box");const auto padding=EdgeValues(box.style,L"padding",availableWidth,viewportWidth);const auto border=UsedBorderValues(box);
     const float decoration=borderBox?0.0f:padding.left+padding.right+border.left+border.right;const bool automatic=raw.empty()||raw==L"auto";
     float width=automatic?std::max(0.0f,availableWidth-margin.left-margin.right-decoration):StyleSheet::Length(raw,availableWidth,viewportWidth,std::max(0.0f,availableWidth-margin.left-margin.right-decoration));
     width=Constrain(box.style,L"min-width",L"max-width",width,availableWidth,viewportWidth)+decoration;
@@ -2275,7 +2518,7 @@ float BlockOuterHeight(const LayoutBox& box,float availableHeight,float availabl
     const auto raw=box.style.Get(L"height");
     const bool borderBox=box.style.Is(L"box-sizing",L"border-box");
     const auto padding=EdgeValues(box.style,L"padding",availableWidth,viewportWidth);
-    const auto border=BorderValues(box.style);
+    const auto border=UsedBorderValues(box);
     const float decoration=borderBox?0.0f:padding.top+padding.bottom+border.top+border.bottom;
     float height=StyleSheet::Length(raw,availableHeight,viewportHeight,
         std::max(0.0f,availableHeight-margin.top-margin.bottom-decoration));
@@ -2403,6 +2646,113 @@ TableGridModel BuildTableGrid(LayoutBox& table){
     return model;
 }
 
+struct CollapsedEdge {
+    const ComputedStyle* style=nullptr;
+    const wchar_t* side=L"top";
+    float width=0;
+    int rank=0,ownerRank=0;
+    size_t row=0,column=0;
+};
+
+int CollapsedStyleRank(const ComputedStyle& style,const wchar_t* side){
+    const auto value=Words(style.Get(std::wstring(L"border-")+side+L"-style",
+        style.Get(L"border-style",style.Get(std::wstring(L"border-")+side,style.Get(L"border")))));
+    for(const auto& token:value){
+        if(token==L"hidden")return 100;
+        if(token==L"double")return 8;if(token==L"solid")return 7;
+        if(token==L"dashed")return 6;if(token==L"dotted")return 5;
+        if(token==L"ridge")return 4;if(token==L"outset")return 3;
+        if(token==L"groove")return 2;if(token==L"inset")return 1;
+    }
+    return 0;
+}
+
+struct CollapsedTableEdges {
+    std::vector<std::vector<CollapsedEdge>> horizontal,vertical;
+};
+
+CollapsedTableEdges ResolveCollapsedTableEdges(const LayoutBox& table,const TableGridModel& model){
+    const auto rowCount=model.rows.size(),columnCount=model.columnCount;
+    CollapsedTableEdges edges;
+    edges.horizontal.resize(rowCount+1,std::vector<CollapsedEdge>(columnCount));
+    edges.vertical.resize(rowCount,std::vector<CollapsedEdge>(columnCount+1));
+    const bool rtl=table.style.Is(L"direction",L"rtl");
+    auto choose=[&](CollapsedEdge& previous,const ComputedStyle& style,const wchar_t* side,
+                    int ownerRank,size_t row,size_t column){
+        CollapsedEdge next{&style,side,BorderWidth(style,side),CollapsedStyleRank(style,side),ownerRank,row,column};
+        if(!next.rank)return;
+        bool wins=!previous.style||next.rank==100;
+        if(previous.rank==100)wins=false;
+        else if(!wins){
+            if(next.width!=previous.width)wins=next.width>previous.width;
+            else if(next.rank!=previous.rank)wins=next.rank>previous.rank;
+            else if(next.ownerRank!=previous.ownerRank)wins=next.ownerRank>previous.ownerRank;
+            else if(next.row!=previous.row)wins=next.row<previous.row;
+            else wins=rtl?next.column>previous.column:next.column<previous.column;
+        }
+        if(wins)previous=next;
+    };
+    auto add=[&](const ComputedStyle& style,size_t row,size_t column,size_t rows,size_t columns,int rank){
+        for(size_t c=column;c<column+columns;++c){
+            choose(edges.horizontal[row][c],style,L"top",rank,row,column);
+            choose(edges.horizontal[row+rows][c],style,L"bottom",rank,row,column);
+        }
+        for(size_t r=row;r<row+rows;++r){
+            choose(edges.vertical[r][column],style,L"left",rank,row,column);
+            choose(edges.vertical[r][column+columns],style,L"right",rank,row,column);
+        }
+    };
+    if(rowCount&&columnCount)add(table.style,0,0,rowCount,columnCount,1);
+    for(size_t row=0;row<rowCount;++row){
+        add(model.rows[row].box->style,row,0,1,columnCount,5);
+        auto* group=model.rows[row].group;
+        if(group&&(row==0||model.rows[row-1].group!=group)){
+            size_t end=row+1;while(end<rowCount&&model.rows[end].group==group)++end;
+            add(group->style,row,0,end-row,columnCount,4);
+        }
+    }
+    for(const auto& cell:model.cells)add(cell.box->style,cell.row,cell.column,cell.rowSpan,cell.columnSpan,6);
+    return edges;
+}
+
+Edges UsedBorderValues(const LayoutBox& box){
+    if(box.collapsedBordersResolved)
+        return {box.collapsedTop,box.collapsedRight,box.collapsedBottom,box.collapsedLeft};
+    const LayoutBox* table=&box;
+    if(HasTableDisplay(box,L"table-cell")){
+        table=box.parent;
+        while(table&&!HasTableDisplay(*table,L"table"))table=table->parent;
+    }else if(!HasTableDisplay(box,L"table"))return BorderValues(box.style);
+    if(!table||!table->style.Is(L"border-collapse",L"collapse"))return BorderValues(box.style);
+    auto model=BuildTableGrid(*const_cast<LayoutBox*>(table));
+    const auto resolved=ResolveCollapsedTableEdges(*table,model);
+    Edges tableEdges{};
+    for(const auto& cell:model.cells){
+        Edges edges{};
+        for(size_t c=cell.column;c<cell.column+cell.columnSpan;++c){
+            edges.top=std::max(edges.top,resolved.horizontal[cell.row][c].width);
+            edges.bottom=std::max(edges.bottom,resolved.horizontal[cell.row+cell.rowSpan][c].width);
+        }
+        for(size_t r=cell.row;r<cell.row+cell.rowSpan;++r){
+            edges.left=std::max(edges.left,resolved.vertical[r][cell.column].width);
+            edges.right=std::max(edges.right,resolved.vertical[r][cell.column+cell.columnSpan].width);
+        }
+        auto& used=*cell.box;used.collapsedBordersResolved=true;
+        used.collapsedTop=edges.top/2;used.collapsedRight=edges.right/2;
+        used.collapsedBottom=edges.bottom/2;used.collapsedLeft=edges.left/2;
+        if(cell.row==0){
+            tableEdges.top=std::max(tableEdges.top,used.collapsedTop);
+            if(cell.column==0)tableEdges.left=used.collapsedLeft;
+            if(cell.column+cell.columnSpan==model.columnCount)tableEdges.right=used.collapsedRight;
+        }
+        if(cell.row+cell.rowSpan==model.rows.size())tableEdges.bottom=std::max(tableEdges.bottom,used.collapsedBottom);
+    }
+    table->collapsedBordersResolved=true;
+    table->collapsedTop=tableEdges.top;table->collapsedRight=tableEdges.right;
+    table->collapsedBottom=tableEdges.bottom;table->collapsedLeft=tableEdges.left;
+    return {box.collapsedTop,box.collapsedRight,box.collapsedBottom,box.collapsedLeft};
+}
+
 std::vector<float> ResolveTableColumns(const LayoutBox& table,const TableGridModel& model,
                                        float availableWidth,float viewportWidth);
 std::vector<float> ResolveTableRows(const TableGridModel& model,
@@ -2412,18 +2762,8 @@ float NaturalWidth(const LayoutBox& box){
     if(box.naturalWidthValid)return box.naturalWidth;
     auto remember=[&](float value){box.naturalWidth=value;box.naturalWidthValid=true;return value;};
     if(box.node->type==NodeType::Text){
-        const float advance=TextWidth(box.node->text,box.style,box.preserveLeadingWhitespace,
-                                      box.preserveTrailingWhitespace,IsFormControlText(box));
-        // Inline siblings need enough width for the final painted glyph. The
-        // compressed Hangul advance alone can leave ink over the next span.
-        if(IsFormControlText(box)&&UsesAutomaticHangulFallback(box.style)&&
-           box.parent&&box.parent->style.Is(L"display",L"inline")&&
-           box.parent->parent&&box.parent->parent->style.Is(L"display",L"inline")){
-            const auto text=NormalizeText(box.node->text,false,box.preserveLeadingWhitespace,
-                                          box.preserveTrailingWhitespace);
-            return remember(advance+FontSize(box.style)*0.08f*
-                std::count_if(text.begin(),text.end(),IsHangul));
-        }
+        const float advance=TextWidth(box.node->text,box.style,box.preserveLeadingWhitespace&&!box.trimLeadingLineWhitespace,
+                                      box.preserveTrailingWhitespace);
         return remember(advance);
     }
     if(box.node->tag==L"br")return remember(0.0f);
@@ -2437,13 +2777,20 @@ float NaturalWidth(const LayoutBox& box){
         value=ConstrainIntrinsicWidth(box.style,
             StyleSheet::Length(width,500,500,0,FontSize(box.style)),500);
         const auto padding=EdgeValues(box.style,L"padding",500,500);
-        const auto border=BorderValues(box.style);
+        const auto border=UsedBorderValues(box);
         const float decoration=padding.left+padding.right+border.left+border.right;
         value=box.style.Is(L"box-sizing",L"border-box")?std::max(decoration,value):
             decoration+std::max(0.0f,value);
     }
     else if(box.node->tag==L"input"&&(box.node->Attribute(L"type")==L"checkbox"||box.node->Attribute(L"type")==L"radio"))value=13;
-    else if(box.node->tag==L"input")value=160;
+    else if(box.node->tag==L"input"){
+        const auto type=ToLower(box.node->Attribute(L"type"));
+        if(type==L"button"||type==L"submit"||type==L"reset"){
+            const auto padding=EdgeValues(box.style,L"padding",500,500);const auto border=UsedBorderValues(box);
+            const auto label=box.node->Attribute(L"value");
+            value=TextWidth(label,box.style)+padding.left+padding.right+border.left+border.right;
+        }else value=160;
+    }
     else if(box.node->tag==L"select"){
         float optionWidth=TextWidth(SelectedOptionText(box.node),box.style);
         std::function<void(const std::shared_ptr<Node>&)> measureOptions=
@@ -2486,12 +2833,12 @@ float NaturalWidth(const LayoutBox& box){
         else value=StyleSheet::Length(box.node->Attribute(L"width"),500,500,300);
     }
     else if(box.style.Is(L"display",L"grid")||box.style.Is(L"display",L"inline-grid")){
-        const auto padding=EdgeValues(box.style,L"padding",500,500);const auto border=BorderValues(box.style);
+        const auto padding=EdgeValues(box.style,L"padding",500,500);const auto border=UsedBorderValues(box);
         value=NaturalGridWidth(box)+padding.left+padding.right+border.left+border.right;
     }
     else if(box.node->tag==L"button"&&box.style.Get(L"display")!=L"grid"&&
             box.style.Get(L"display")!=L"inline-grid"){
-        auto padding=EdgeValues(box.style,L"padding",500,500);auto border=BorderValues(box.style);
+        auto padding=EdgeValues(box.style,L"padding",500,500);auto border=UsedBorderValues(box);
         const auto display=box.style.Get(L"display");
         const bool flex=display==L"flex"||display==L"inline-flex";
         const bool row=!flex||!IsColumnFlexDirection(box.style);
@@ -2544,7 +2891,7 @@ float NaturalWidth(const LayoutBox& box){
             finishLine();
         }
         if(flex&&horizontal)value+=GapValue(box.style,true,500,500)*std::max(0,visible-1);
-        auto padding=EdgeValues(box.style,L"padding",500,500);auto border=BorderValues(box.style);value+=padding.left+padding.right+border.left+border.right;
+        auto padding=EdgeValues(box.style,L"padding",500,500);auto border=UsedBorderValues(box);value+=padding.left+padding.right+border.left+border.right;
     }
     if(!definiteWidth)value=ConstrainIntrinsicWidth(box.style,value,500);
     auto margin=EdgeValues(box.style,L"margin",500,500);return remember(value+margin.left+margin.right);
@@ -2617,14 +2964,7 @@ std::vector<float> ResolveTableColumns(const LayoutBox& table,const TableGridMod
     }
     const bool collapsedBorders=table.style.Is(L"border-collapse",L"collapse");
     if(!fixed)for(const auto& cell:model.cells){
-        float preferred=NaturalWidth(*cell.box);
-        if(collapsedBorders){
-            const auto borders=BorderValues(cell.box->style);
-            // Adjacent collapsed borders share one CSS edge. Intrinsic sizing
-            // therefore includes half of each cell edge instead of charging
-            // both complete borders to every column.
-            preferred=std::max(0.0f,preferred-(borders.left+borders.right)/2.0f);
-        }
+        const float preferred=NaturalWidth(*cell.box);
         distributeDeficit(preferredWidths,cell,preferred,&explicitWidths);
     }
 
@@ -2653,6 +2993,15 @@ std::vector<float> ResolveTableColumns(const LayoutBox& table,const TableGridMod
         const float scale=availableWidth/assigned;
         for(auto& width:result)width*=scale;
     }
+    if(collapsedBorders&&!result.empty()){
+        const float units=64.0f*std::max(0.01f,table.style.deviceScale);
+        float consumed=0;
+        for(size_t column=0;column+1<result.size();++column){
+            result[column]=std::floor(result[column]*units+0.0001f)/units;
+            consumed+=result[column];
+        }
+        result.back()=std::max(0.0f,availableWidth-consumed);
+    }
     return result;
 }
 
@@ -2663,7 +3012,7 @@ float MinContentWidth(const LayoutBox& box){
     const auto overflow=box.style.Get(L"overflow-x",box.style.Get(L"overflow",L"visible"));
     const auto explicitMinimum=Trim(box.style.Get(L"min-width"));
     if(!explicitMinimum.empty()&&explicitMinimum!=L"auto"){
-        const auto padding=EdgeValues(box.style,L"padding",500,500);const auto border=BorderValues(box.style);
+        const auto padding=EdgeValues(box.style,L"padding",500,500);const auto border=UsedBorderValues(box);
         const float decoration=box.style.Is(L"box-sizing",L"border-box")?0.0f:padding.left+padding.right+border.left+border.right;
         return remember(std::max(0.0f,StyleSheet::Length(explicitMinimum,500,500,0)+decoration+margin.left+margin.right));
     }
@@ -2671,7 +3020,7 @@ float MinContentWidth(const LayoutBox& box){
     if(box.node->type==NodeType::Text){
         const auto whiteSpace=box.style.Get(L"white-space");
         if(whiteSpace==L"pre")return remember(NaturalWidth(box));
-        const auto text=NormalizeText(box.node->text,whiteSpace,box.preserveLeadingWhitespace,box.preserveTrailingWhitespace);
+        const auto text=NormalizeText(box.node->text,whiteSpace,box.preserveLeadingWhitespace&&!box.trimLeadingLineWhitespace,box.preserveTrailingWhitespace);
         if(PreventsTextWrapping(whiteSpace))return remember(TextWidth(text,box.style));
         float longest=1;for(const auto& word:Words(text))longest=std::max(longest,TextWidth(word,box.style));return remember(longest);
     }
@@ -2689,7 +3038,7 @@ float MinContentWidth(const LayoutBox& box){
         value=horizontal&&!wraps?value+childWidth:std::max(value,childWidth);++visible;
     }
     if(flex&&horizontal&&!wraps)value+=GapValue(box.style,true,500,500)*std::max(0,visible-1);
-    const auto padding=EdgeValues(box.style,L"padding",500,500);const auto border=BorderValues(box.style);
+    const auto padding=EdgeValues(box.style,L"padding",500,500);const auto border=UsedBorderValues(box);
     value+=padding.left+padding.right+border.left+border.right+margin.left+margin.right;
     const auto maximum=Trim(box.style.Get(L"max-width"));if(!maximum.empty()&&maximum!=L"none"&&maximum!=L"auto")value=std::min(value,StyleSheet::Length(maximum,500,500,value));
     return remember(std::max(0.0f,value));
@@ -2720,14 +3069,14 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
     // size constraints. Match LayoutBoxTree's text path during intrinsic sizing.
     if(box.node->type==NodeType::Text&&!box.generatedFrom)
         return remember(TextHeight(box.node->text,box.style,availableWidth,
-            box.preserveLeadingWhitespace,box.preserveTrailingWhitespace));
+            box.preserveLeadingWhitespace&&!box.trimLeadingLineWhitespace,box.preserveTrailingWhitespace));
     auto height=box.style.Get(L"height");float value=0;
     if(box.style.Is(L"display",L"inline")&&!IsAtomicInlineLevel(box)&&!IsBlockifiedItem(box))height=L"auto";
     if(!height.empty()&&height!=L"auto"&&height.find(L'%')==std::wstring::npos){
         value=StyleSheet::Length(height,500,500,20);
         if(!box.style.Is(L"box-sizing",L"border-box")){
             const auto padding=EdgeValues(box.style,L"padding",availableWidth,availableWidth);
-            const auto border=BorderValues(box.style);
+            const auto border=UsedBorderValues(box);
             value+=padding.top+padding.bottom+border.top+border.bottom;
         }
     }
@@ -2735,7 +3084,7 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
     else if(box.node->tag==L"input"&&(box.node->Attribute(L"type")==L"checkbox"||box.node->Attribute(L"type")==L"radio"))value=13;
     else if(box.node->tag==L"textarea"){
         auto padding=EdgeValues(box.style,L"padding",availableWidth,availableWidth);
-        auto border=BorderValues(box.style);size_t rows=2;
+        auto border=UsedBorderValues(box);size_t rows=2;
         const auto rawRows=Trim(box.node->Attribute(L"rows"));
         unsigned long long parsedRows=0;size_t usedRows=0;
         if(TryParseUnsignedInteger(rawRows,parsedRows,&usedRows)&&usedRows==rawRows.size()&&
@@ -2747,9 +3096,23 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
             (box.node->tag==L"button"&&box.style.Get(L"display")!=L"grid"&&
              box.style.Get(L"display")!=L"inline-grid"&&
              box.style.Get(L"display")!=L"flex"&&box.style.Get(L"display")!=L"inline-flex")){
-        auto padding=EdgeValues(box.style,L"padding",availableWidth,availableWidth);auto border=BorderValues(box.style);
+        auto padding=EdgeValues(box.style,L"padding",availableWidth,availableWidth);auto border=UsedBorderValues(box);
         const auto text=box.node->tag==L"button"?box.node->InnerText():(box.node->tag==L"select"?SelectedOptionText(box.node):box.node->Attribute(L"value"));
-        value=ControlLineHeight(text,box.style)+padding.top+padding.bottom+border.top+border.bottom;
+        float textHeight=ControlLineHeight(text,box.style);
+        if(box.node->tag==L"select"){
+            const auto appearance=box.style.Get(L"appearance",box.style.Get(L"-webkit-appearance",L"auto"));
+            textHeight=InlineContentBoxHeight(box.style)+(appearance==L"none"?0.0f:2.0f/std::max(0.01f,box.style.deviceScale));
+        }else if(box.node->tag==L"button"){
+            const auto width=Trim(box.style.Get(L"width"));
+            float borderWidth=availableWidth;
+            const float horizontal=padding.left+padding.right+border.left+border.right;
+            if(!width.empty()&&width!=L"auto"){
+                borderWidth=StyleSheet::Length(width,availableWidth,availableWidth,availableWidth);
+                if(!box.style.Is(L"box-sizing",L"border-box"))borderWidth+=horizontal;
+            }
+            textHeight=TextHeight(text,box.style,std::max(1.0f,borderWidth-horizontal));
+        }
+        value=textHeight+padding.top+padding.bottom+border.top+border.bottom;
     }
     else if(box.node->tag==L"canvas")
         value=StyleSheet::Length(box.node->Attribute(L"height"),availableWidth,availableWidth,150);
@@ -2762,7 +3125,7 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
             value=StyleSheet::Length(authoredHeight,availableWidth,availableWidth,0);
         else if(box.node->image&&box.node->image->width){
             const auto padding=EdgeValues(box.style,L"padding",availableWidth,availableWidth);
-            const auto border=BorderValues(box.style);
+            const auto border=UsedBorderValues(box);
             const auto margin=EdgeValues(box.style,L"margin",availableWidth,availableWidth);
             const float contentWidth=std::max(0.0f,availableWidth-padding.left-padding.right-
                 border.left-border.right-margin.left-margin.right);
@@ -2776,10 +3139,10 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
         else value=StyleSheet::Length(box.node->Attribute(L"height"),availableWidth,availableWidth,150);
     }
     else if(box.node->type==NodeType::Text)value=TextHeight(box.node->text,box.style,availableWidth,
-        box.preserveLeadingWhitespace,box.preserveTrailingWhitespace);
+        box.preserveLeadingWhitespace&&!box.trimLeadingLineWhitespace,box.preserveTrailingWhitespace);
     else if(!box.children.empty()){
         const auto display=box.style.Get(L"display");const float rowGap=GapValue(box.style,false,availableWidth,availableWidth);
-        auto padding=EdgeValues(box.style,L"padding",availableWidth,availableWidth);auto border=BorderValues(box.style);const float innerWidth=std::max(1.0f,availableWidth-padding.left-padding.right-border.left-border.right);
+        auto padding=EdgeValues(box.style,L"padding",availableWidth,availableWidth);auto border=UsedBorderValues(box);const float innerWidth=std::max(1.0f,availableWidth-padding.left-padding.right-border.left-border.right);
         if(display==L"table"){
             auto& mutableBox=const_cast<LayoutBox&>(box);
             const auto model=BuildTableGrid(mutableBox);
@@ -2901,7 +3264,8 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
                                 cursor=nextBottom;
                                 AvailableFloatBand(floats,0,innerWidth,cursor,left,right,nextBottom);
                             }
-                            cursor+=NaturalHeight(*child,std::max(1.0f,right-left))+marginFlow.After(childMargins);
+                            cursor+=NaturalHeight(*child,std::max(1.0f,
+                                BlockOuterWidth(*child,right-left,availableWidth)))+marginFlow.After(childMargins);
                         }
                     }
                     if(lineWidth>0||lineHeight>0)flushLine();
@@ -2951,12 +3315,16 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
                             // therefore not collapse below the parent's line box.
                             IncludeInlineLineBox(lineMetrics,box.style,*child,childHeight,
                                                  innerWidth,availableWidth);
-                            lineHeight=lineMetrics.Height();
+                            // A text child may already contain several shaped
+                            // lines. Its full block extent must survive the
+                            // first-line baseline/strut calculation.
+                            lineHeight=std::max(lineHeight,lineMetrics.Height());
+                            if(child->node->type==NodeType::Text)lineHeight=std::max(lineHeight,childHeight);
                         }else{
                             if(lineWidth>0||lineHeight>0)flushLine();
                             const auto childMargins=CollapsedBlockMargins(*child,innerWidth);
                             value+=marginFlow.Before(childMargins,child->style.Get(L"clear",L"none")!=L"none");
-                            value+=NaturalHeight(*child,innerWidth)+marginFlow.After(childMargins);
+                            value+=NaturalHeight(*child,BlockOuterWidth(*child,innerWidth,availableWidth))+marginFlow.After(childMargins);
                         }
                     }
                     if(lineWidth>0||lineHeight>0)flushLine();
@@ -2971,7 +3339,7 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
         // caret, so formatting an empty block does not change height when the
         // first character is typed.
         const auto padding=EdgeValues(box.style,L"padding",availableWidth,availableWidth);
-        const auto border=BorderValues(box.style);
+        const auto border=UsedBorderValues(box);
         value=padding.top+padding.bottom+border.top+border.bottom+
             (ParticipatesInEditableContent(box.node)?LineHeight(box.style):0.0f);
     }
@@ -2982,7 +3350,7 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
        box.node->InnerText().find(L'\n')==std::wstring::npos&&
        NaturalWidth(box)<=availableWidth+0.5f){
         const auto padding=EdgeValues(box.style,L"padding",availableWidth,availableWidth);
-        const auto border=BorderValues(box.style);
+        const auto border=UsedBorderValues(box);
         const float decoration=padding.top+padding.bottom+border.top+border.bottom;
         if(value<=LineHeight(box.style)+decoration+0.01f)
             value=InlineContentBoxHeight(box.style)+decoration;
@@ -2995,7 +3363,7 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
         display!=L"inline-grid"&&display!=L"table"&&display!=L"table-row"&&display!=L"table-row-group";
     if(normalFlow&&!box.children.empty()){
         const auto padding=EdgeValues(box.style,L"padding",availableWidth,availableWidth);
-        const auto border=BorderValues(box.style);
+        const auto border=UsedBorderValues(box);
         const float innerWidth=std::max(1.0f,availableWidth-padding.left-padding.right-border.left-border.right);
         float cursor=0,lineWidth=0,lineHeight=0,floatBottom=0;
         std::vector<FloatArea> floats;
@@ -3010,7 +3378,8 @@ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
                 floats.push_back({placed,side});floatBottom=std::max(floatBottom,placed.y+placed.height);continue;
             }
             const bool inlineChild=IsInlineLevel(child->style.Get(L"display"))&&!HasInFlowBlockChildren(*child);
-            const auto width=inlineChild?std::min(innerWidth,NaturalWidth(*child)):innerWidth;
+            const auto width=inlineChild?std::min(innerWidth,NaturalWidth(*child)):
+                BlockOuterWidth(*child,innerWidth,availableWidth);
             const auto childHeight=NaturalHeight(*child,std::max(1.0f,width));
             if(inlineChild){
                 marginFlow.Separate();
@@ -3048,16 +3417,6 @@ std::vector<float> ResolveTableRows(const TableGridModel& model,
     };
     auto cellHeight=[&](const TableCellEntry& cell){
         float height=NaturalHeight(*cell.box,cellWidth(cell));
-        bool collapsed=false;
-        for(auto* ancestor=cell.box->parent;ancestor;ancestor=ancestor->parent)
-            if(HasTableDisplay(*ancestor,L"table")){
-                collapsed=ancestor->style.Is(L"border-collapse",L"collapse");
-                break;
-            }
-        if(collapsed){
-            const auto borders=BorderValues(cell.box->style);
-            height=std::max(0.0f,height-(borders.top+borders.bottom)/2.0f);
-        }
         return height;
     };
     for(const auto& cell:model.cells)if(cell.rowSpan==1&&cell.row<rows.size())
@@ -3671,7 +4030,21 @@ std::vector<float> ResolveGridTracks(const std::vector<std::wstring>& definition
     }
 
     std::vector<float> result;result.reserve(tracks.size());
-    for(const auto& track:tracks)result.push_back(std::max(0.0f,track.base));
+    const double units=64.0*std::max(0.01f,items.empty()?1.0f:items.front().box->style.deviceScale);
+    double accumulated=0;float assigned=0;
+    for(const auto& track:tracks){
+        accumulated+=std::max(0.0f,track.base);
+        // Fractional tracks use floats upstream. Recover exact layout-unit
+        // boundaries before flooring (e.g. 81 2/3 CSS px at 144 DPI), so
+        // representation noise cannot remove an entire 1/64 device pixel.
+        double layoutUnits=accumulated*units;
+        const double nearestUnit=std::round(layoutUnits);
+        const double representationError=std::max(0.001,
+            std::abs(layoutUnits)*std::numeric_limits<float>::epsilon());
+        if(std::abs(layoutUnits-nearestUnit)<representationError)layoutUnits=nearestUnit;
+        const float edge=static_cast<float>(std::floor(layoutUnits)/units);
+        result.push_back(edge-assigned);assigned=edge;
+    }
     return result;
 }
 
@@ -3716,6 +4089,15 @@ GridContentDistribution DistributeGridContent(const std::wstring& source,float a
     return result;
 }
 
+GridTrackDefinitions CompleteGridTracks(const GridTrackDefinitions& explicitTracks,
+    const LayoutBox& box,bool columns,size_t required,float reference){
+    auto result=explicitTracks;
+    const auto automatic=ExpandGridTracks(box.style.Get(columns?L"grid-auto-columns":L"grid-auto-rows",L"auto"),box,reference);
+    const size_t start=result.size();
+    while(result.size()<required)result.push_back(automatic->empty()?L"auto":(*automatic)[(result.size()-start)%automatic->size()]);
+    return result;
+}
+
 float NaturalGridWidth(const LayoutBox& box){
     const auto definitions=ExpandGridTracks(box.style.Get(L"grid-template-columns",L"none"),box,0);
     const auto rowDefinitions=ExpandGridTracks(box.style.Get(L"grid-template-rows"),box,0);
@@ -3723,15 +4105,16 @@ float NaturalGridWidth(const LayoutBox& box){
     size_t columns=std::max<size_t>(1,std::max(definitions->size(),areaColumns)),usedRows=0;
     const auto items=PlaceGridItems(box,areas,std::max(areaRows,rowDefinitions->size()),columns,usedRows);
     const auto gap=GapValue(box.style,true,0,500);
-    auto tracks=ResolveGridTracks(*definitions,columns,0,gap,500,items,true,{},false,false);
+    const auto complete=CompleteGridTracks(*definitions,box,true,columns,0);
+    auto tracks=ResolveGridTracks(complete,columns,0,gap,500,items,true,{},false,false);
     float fraction=0;
     for(size_t index=0;index<tracks.size();++index){
-        const auto sizing=ParseGridTrack(index<definitions->size()?(*definitions)[index]:L"auto",0,500);
+        const auto sizing=ParseGridTrack(complete[index],0,500);
         if(sizing.fraction>0)fraction=std::max(fraction,tracks[index]/sizing.fraction);
     }
     float width=gap*std::max(0,static_cast<int>(tracks.size())-1);
     for(size_t index=0;index<tracks.size();++index){
-        const auto sizing=ParseGridTrack(index<definitions->size()?(*definitions)[index]:L"auto",0,500);
+        const auto sizing=ParseGridTrack(complete[index],0,500);
         width+=sizing.fraction>0?std::max(tracks[index],fraction*sizing.fraction):tracks[index];
     }
     return width;
@@ -3748,6 +4131,8 @@ float NaturalGridHeight(const LayoutBox& box,float availableWidth) {
     const float columnGap=GapValue(box.style,true,availableWidth,availableWidth);
     const float rowGap=GapValue(box.style,false,availableWidth,availableWidth);
     const std::vector<float> provisionalRows(rowCount,20.0f);
+    const auto completeColumns=CompleteGridTracks(*columnDefinitions,box,true,columnCount,availableWidth);
+    const auto completeRows=CompleteGridTracks(*rowDefinitions,box,false,rowCount,0);
     std::function<bool(const LayoutBox&)> widthIndependentHeight=[&](const LayoutBox& item){
         const auto explicitHeight=Trim(item.style.Get(L"height"));
         if(!explicitHeight.empty()&&explicitHeight!=L"auto"&&explicitHeight.find(L'%')==std::wstring::npos)return true;
@@ -3756,6 +4141,8 @@ float NaturalGridHeight(const LayoutBox& box,float availableWidth) {
         }
         if(item.node->tag==L"input"||item.node->tag==L"select"||item.node->tag==L"button"||item.node->tag==L"br")return true;
         if(item.node->tag==L"svg"||item.node->tag==L"img")return false;
+        if((item.style.Is(L"display",L"flex")||item.style.Is(L"display",L"inline-flex"))&&
+           !IsColumnFlexDirection(item.style)&&item.style.Get(L"flex-wrap",L"nowrap")!=L"nowrap")return false;
         for(const auto& child:item.children)
             if(child->visible&&!child->style.Is(L"position",L"absolute")&&
                !child->style.Is(L"position",L"fixed")&&!widthIndependentHeight(*child))return false;
@@ -3765,8 +4152,8 @@ float NaturalGridHeight(const LayoutBox& box,float availableWidth) {
         [&](const GridItemPlacement& item){return widthIndependentHeight(*item.box);});
     const auto columns=heightDoesNotDependOnColumns?
         std::vector<float>(columnCount,std::max(1.0f,(availableWidth-columnGap*std::max(0,static_cast<int>(columnCount)-1))/columnCount)):
-        ResolveGridTracks(*columnDefinitions,columnCount,availableWidth,columnGap,availableWidth,items,true,provisionalRows,true);
-    const auto rows=ResolveGridTracks(*rowDefinitions,rowCount,0,rowGap,availableWidth,items,false,columns,false);
+        ResolveGridTracks(completeColumns,columnCount,availableWidth,columnGap,availableWidth,items,true,provisionalRows,true);
+    const auto rows=ResolveGridTracks(completeRows,rowCount,0,rowGap,availableWidth,items,false,columns,false);
     float height=rowGap*std::max(0,static_cast<int>(rows.size())-1);for(const float row:rows)height+=row;
     return height;
 }
@@ -3918,10 +4305,27 @@ void NormalizeGradientStops(std::vector<RadialGradientStop>& stops) {
     }
 }
 
+Edges BackgroundBleedInset(const ComputedStyle& style,const CornerRadii& radius){
+    Edges inset{};if(!radius.Any())return inset;
+    const auto borders=BorderValues(style);if(borders.top<=0||borders.right<=0||borders.bottom<=0||borders.left<=0)return inset;
+    float fraction=.5f;
+    for(const auto* side:{L"top",L"right",L"bottom",L"left"}){
+        const auto borderStyle=style.Get(L"border-"+std::wstring(side)+L"-style",
+            style.Get(L"border-style",style.Get(L"border-"+std::wstring(side),style.Get(L"border"))));
+        if((BorderColor(style,side)>>24)!=255)return inset;
+        if(borderStyle.find(L"double")!=std::wstring::npos)fraction=1.0f/6;
+        else if(borderStyle.find(L"solid")==std::wstring::npos)return inset;
+    }
+    return {borders.top*fraction,borders.right*fraction,borders.bottom*fraction,borders.left*fraction};
+}
+
 void PaintGradientBackgrounds(ID2D1RenderTarget* target,const ComputedStyle& style,
                               const LayoutRect& box,const CornerRadii& radius,float viewport) {
-    auto background=style.Get(L"background");if(background.empty())background=style.Get(L"background-color");
+    auto background=style.Get(L"background-image",style.Get(L"background"));
     const auto layers=CommaSeparated(background);const auto rect=PixelAlignedRect(box,style.deviceScale);
+    const auto bleed=BackgroundBleedInset(style,radius);
+    const auto fillRect=D2D1::RectF(rect.left+bleed.left,rect.top+bleed.top,rect.right-bleed.right,rect.bottom-bleed.bottom);
+    const auto fillRadius=InsetCornerRadii(radius,bleed);
     for(auto layer=layers.rbegin();layer!=layers.rend();++layer){
         const auto lowered=ToLower(Trim(*layer));
         const bool radial=lowered.find(L"radial-gradient(")!=std::wstring::npos;
@@ -3932,14 +4336,37 @@ void PaintGradientBackgrounds(ID2D1RenderTarget* target,const ComputedStyle& sty
         const auto arguments=CommaSeparated(layer->substr(open+prefixLength,layer->size()-open-prefixLength-1));
         if(arguments.size()<2)continue;
         size_t firstStop=0;
-        float centerX=box.x+box.width/2.0f,centerY=box.y+box.height/2.0f;
+        // CSS gradients are images: their default positioning area is the
+        // padding box, while background-clip defaults to the border box.
+        auto originBox=box;
+        const auto origins=CommaSeparated(style.Get(L"background-origin",L"padding-box"));
+        const size_t layerIndex=static_cast<size_t>(std::distance(layers.begin(),layer.base())-1);
+        const auto origin=origins.empty()?L"padding-box":origins[layerIndex%origins.size()];
+        if(origin!=L"border-box"){
+            const auto borders=BorderValues(style);
+            originBox.x+=borders.left;originBox.y+=borders.top;
+            originBox.width=std::max(0.0f,originBox.width-borders.left-borders.right);
+            originBox.height=std::max(0.0f,originBox.height-borders.top-borders.bottom);
+            if(origin==L"content-box"){
+                const auto padding=EdgeValues(style,L"padding",box.width,viewport);
+                originBox.x+=padding.left;originBox.y+=padding.top;
+                originBox.width=std::max(0.0f,originBox.width-padding.left-padding.right);
+                originBox.height=std::max(0.0f,originBox.height-padding.top-padding.bottom);
+            }
+        }
+        // The generated background image occupies its snapped destination
+        // tile. Use that tile for the gradient line without changing layout.
+        const auto paintOrigin=PixelAlignedRect(originBox,style.deviceScale);
+        originBox={paintOrigin.left,paintOrigin.top,paintOrigin.right-paintOrigin.left,
+            paintOrigin.bottom-paintOrigin.top};
+        float centerX=originBox.x+originBox.width/2.0f,centerY=originBox.y+originBox.height/2.0f;
         float angleDegrees=180.0f;
         const auto prelude=ToLower(Trim(arguments.front()));
         if(radial&&(prelude.find(L"circle")!=std::wstring::npos||prelude.find(L"ellipse")!=std::wstring::npos||prelude.find(L" at ")!=std::wstring::npos)){
             firstStop=1;const auto at=prelude.find(L" at ");
             if(at!=std::wstring::npos){const auto positions=Words(prelude.substr(at+4));
-                if(!positions.empty())centerX=box.x+StyleSheet::Length(positions[0],box.width,viewport,box.width/2.0f);
-                if(positions.size()>1)centerY=box.y+StyleSheet::Length(positions[1],box.height,viewport,box.height/2.0f);
+                if(!positions.empty())centerX=originBox.x+StyleSheet::Length(positions[0],originBox.width,viewport,originBox.width/2.0f);
+                if(positions.size()>1)centerY=originBox.y+StyleSheet::Length(positions[1],originBox.height,viewport,originBox.height/2.0f);
             }
         }else if(linear){
             if(prelude.find(L"deg")!=std::wstring::npos){
@@ -3964,12 +4391,11 @@ void PaintGradientBackgrounds(ID2D1RenderTarget* target,const ComputedStyle& sty
         if(FAILED(target->CreateGradientStopCollection(gradientStops.data(),static_cast<UINT32>(gradientStops.size()),
             D2D1_GAMMA_2_2,D2D1_EXTEND_MODE_CLAMP,&collection)))continue;
         auto paint=[&](ID2D1Brush* brush){
-            if(radius.x>0&&radius.y>0)target->FillRoundedRectangle(D2D1::RoundedRect(rect,radius.x,radius.y),brush);
-            else target->FillRectangle(rect,brush);
+            FillRoundedBox(target,fillRect,fillRadius,brush);
         };
         if(radial){
-            const float farX=std::max(centerX-box.x,box.x+box.width-centerX);
-            const float farY=std::max(centerY-box.y,box.y+box.height-centerY);
+            const float farX=std::max(centerX-originBox.x,originBox.x+originBox.width-centerX);
+            const float farY=std::max(centerY-originBox.y,originBox.y+originBox.height-centerY);
             const float circleRadius=std::max(1.0f,std::sqrt(farX*farX+farY*farY));
             Microsoft::WRL::ComPtr<ID2D1RadialGradientBrush> brush;
             const auto properties=D2D1::RadialGradientBrushProperties(D2D1::Point2F(centerX,centerY),D2D1::Point2F(0,0),circleRadius,circleRadius);
@@ -3978,10 +4404,40 @@ void PaintGradientBackgrounds(ID2D1RenderTarget* target,const ComputedStyle& sty
             constexpr float pi=3.14159265358979323846f;
             const float radians=angleDegrees*pi/180.0f;
             const float directionX=std::sin(radians),directionY=-std::cos(radians);
-            const float halfLength=std::max(1.0f,std::abs(directionX)*box.width/2.0f+
-                std::abs(directionY)*box.height/2.0f);
+            const float halfLength=std::max(1.0f,std::abs(directionX)*originBox.width/2.0f+
+                std::abs(directionY)*originBox.height/2.0f);
             const auto start=D2D1::Point2F(centerX-directionX*halfLength,centerY-directionY*halfLength);
             const auto end=D2D1::Point2F(centerX+directionX*halfLength,centerY+directionY*halfLength);
+            if(parsed.size()==2&&parsed.front().position==0&&parsed.back().position==1&&
+               (parsed.front().color>>24)==255&&(parsed.back().color>>24)==255){
+                FLOAT dpiX=96,dpiY=96;target->GetDpi(&dpiX,&dpiY);
+                const auto width=static_cast<UINT>(std::max(0.0f,std::round((rect.right-rect.left)*dpiX/96)));
+                const auto height=static_cast<UINT>(std::max(0.0f,std::round((rect.bottom-rect.top)*dpiY/96)));
+                std::vector<BYTE> pixels;
+                // An unscaled generated image can shade the destination
+                // directly. Scaled picture tiles retain their local grid.
+                const bool direct=dpiX==96&&dpiY==96;
+                const auto ditherOrigin=direct?D2D1::Point2F(0,0):
+                    D2D1::Point2F(paintOrigin.left*dpiX/96,paintOrigin.top*dpiY/96);
+                if(RasterLinearGradient(width,height,rect.left*dpiX/96,rect.top*dpiY/96,
+                    D2D1::Point2F(start.x*dpiX/96,start.y*dpiY/96),D2D1::Point2F(end.x*dpiX/96,end.y*dpiY/96),
+                    ditherOrigin,
+                    gradientStops.front().color,gradientStops.back().color,pixels)){
+                    const auto brushOrigin=D2D1::Point2F(rect.left,rect.top);
+                    if(!radius.Uniform()&&activeRasterSurface&&activeRasterSurface->target==target&&
+                        activeRasterSurface->PaintSkia(fillRect,fillRadius.corners,0xffffffff,0,nullptr,nullptr,&pixels,width,height,&brushOrigin))continue;
+                    Microsoft::WRL::ComPtr<ID2D1Bitmap> bitmap;
+                    const auto bitmapProperties=D2D1::BitmapProperties(
+                        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED),dpiX,dpiY);
+                    Microsoft::WRL::ComPtr<ID2D1BitmapBrush> bitmapBrush;
+                    if(SUCCEEDED(target->CreateBitmap(D2D1::SizeU(width,height),pixels.data(),width*4,bitmapProperties,&bitmap))&&
+                       SUCCEEDED(target->CreateBitmapBrush(bitmap.Get(),D2D1::BitmapBrushProperties(D2D1_EXTEND_MODE_CLAMP,
+                        D2D1_EXTEND_MODE_CLAMP,D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR),&bitmapBrush))){
+                        bitmapBrush->SetTransform(D2D1::Matrix3x2F::Translation(rect.left,rect.top));
+                        paint(bitmapBrush.Get());continue;
+                    }
+                }
+            }
             Microsoft::WRL::ComPtr<ID2D1LinearGradientBrush> brush;
             if(SUCCEEDED(target->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties(start,end),
                 collection.Get(),&brush)))paint(brush.Get());
@@ -3991,7 +4447,14 @@ void PaintGradientBackgrounds(ID2D1RenderTarget* target,const ComputedStyle& sty
 
 D2D1_RECT_F PixelAlignedRect(const LayoutRect& rect,float deviceScale) {
     const float scale=std::max(0.01f,deviceScale);
-    const auto snap=[scale](float value){return std::round(value*scale)/scale;};
+    const auto snap=[scale](float value){
+        double device=static_cast<double>(value)*scale;
+        const double half=std::round(device*2)/2;
+        // Float division by 150% DPI can put an exact half-pixel just below
+        // the rounding boundary. Correct representation noise before snapping.
+        if(std::abs(device-half)<0.0001)device=half;
+        return static_cast<float>(std::round(device)/scale);
+    };
     return D2D1::RectF(snap(rect.x),snap(rect.y),
         snap(rect.x+rect.width),snap(rect.y+rect.height));
 }
@@ -4003,9 +4466,8 @@ void FillShadowShape(ID2D1RenderTarget* target,ID2D1SolidColorBrush* brush,
         base.top+shadow.offsetY-expansion,base.right+shadow.offsetX+expansion,
         base.bottom+shadow.offsetY+expansion);
     if(rect.right<=rect.left||rect.bottom<=rect.top)return;
-    const float rx=std::max(0.0f,radius.x+expansion),ry=std::max(0.0f,radius.y+expansion);
-    if(rx>0&&ry>0)target->FillRoundedRectangle(D2D1::RoundedRect(rect,rx,ry),brush);
-    else target->FillRectangle(rect,brush);
+    const Edges inset{-expansion,-expansion,-expansion,-expansion};
+    FillRoundedBox(target,rect,InsetCornerRadii(radius,inset),brush);
 }
 
 std::array<int,3> GaussianBoxWidths(float sigma){
@@ -4070,8 +4532,21 @@ bool RoundedRectContains(float x,float y,float left,float top,float right,float 
 bool PaintBlurredShadow(ID2D1RenderTarget* target,const LayoutRect& rect,
                         const CornerRadii& radius,const BoxShadow& shadow,float deviceScale,
                         ID2D1RenderTarget*& cacheTarget,
-                        FastMap<std::wstring,Microsoft::WRL::ComPtr<ID2D1Bitmap>>& cache){
+                        FastMap<std::wstring,Microsoft::WRL::ComPtr<ID2D1Bitmap>>& cache,bool opaqueBackground){
     if(!target||shadow.blur<=0.01f||(shadow.color>>24)==0)return false;
+    if(activeRasterSurface&&activeRasterSurface->target==target){
+        const auto base=PixelAlignedRect(rect,deviceScale);
+        const auto shape=D2D1::RectF(base.left-shadow.spread,base.top-shadow.spread,
+            base.right+shadow.spread,base.bottom+shadow.spread);
+        const auto offset=D2D1::Point2F(shadow.offsetX,shadow.offsetY);
+        const auto shadowRadii=InsetCornerRadii(radius,{-shadow.spread,-shadow.spread,-shadow.spread,-shadow.spread});
+        const float inset=opaqueBackground?1.0f:0.0f;
+        const auto exclusion=D2D1::RectF(base.left+inset,base.top+inset,base.right-inset,base.bottom-inset);
+        const auto exclusionRadius=InsetCornerRadii(radius,{inset,inset,inset,inset});
+        if(shape.right<=shape.left||shape.bottom<=shape.top)return true;
+        if(activeRasterSurface->PaintSkia(shape,shadowRadii.corners,shadow.color,shadow.blur*.5f,
+            nullptr,nullptr,nullptr,0,0,nullptr,&exclusion,&exclusionRadius.corners,&offset))return true;
+    }
     FLOAT dpiX=USER_DEFAULT_SCREEN_DPI,dpiY=USER_DEFAULT_SCREEN_DPI;
     target->GetDpi(&dpiX,&dpiY);const float scale=dpiX>0?dpiX/USER_DEFAULT_SCREEN_DPI:deviceScale;
     if(scale<=0.01f)return false;
@@ -4091,20 +4566,26 @@ bool PaintBlurredShadow(ID2D1RenderTarget* target,const LayoutRect& rect,
     const UINT bitmapWidth=static_cast<UINT>(right-left),bitmapHeight=static_cast<UINT>(bottom-top);
     std::wostringstream key;key<<std::fixed<<std::setprecision(4)<<bitmapWidth<<L'x'<<bitmapHeight
         <<L':'<<sourceLeft-left<<L','<<sourceTop-top<<L','<<sourceRight-left<<L','<<sourceBottom-top
-        <<L':'<<radius.x*scale<<L','<<radius.y*scale<<L':'<<shadow.color<<L':'
+        <<L':'<<shadow.spread<<L':'<<shadow.color<<L':'
         <<widths[0]<<L','<<widths[1]<<L','<<widths[2]<<L':'<<scale;
+    for(const auto& corner:radius.corners)key<<L':'<<corner.x*scale<<L','<<corner.y*scale;
     if(cacheTarget!=target){cache.clear();cacheTarget=target;}
     auto found=cache.find(key.str());
     if(found==cache.end()){
         const size_t count=static_cast<size_t>(bitmapWidth)*bitmapHeight;
         std::vector<float> mask(count),temporary(count);
-        const float radiusX=std::max(0.0f,(radius.x+shadow.spread)*scale);
-        const float radiusY=std::max(0.0f,(radius.y+shadow.spread)*scale);
+        auto shadowRadius=InsetCornerRadii(radius,{-shadow.spread,-shadow.spread,-shadow.spread,-shadow.spread});
+        for(auto& corner:shadowRadius.corners){corner.x*=scale;corner.y*=scale;}
         constexpr std::array<float,2> samples{0.25f,0.75f};
         for(UINT y=0;y<bitmapHeight;++y)for(UINT x=0;x<bitmapWidth;++x){
             float coverage=0;for(const float sy:samples)for(const float sx:samples)
-                if(RoundedRectContains(left+x+sx,top+y+sy,sourceLeft,sourceTop,
-                                       sourceRight,sourceBottom,radiusX,radiusY))coverage+=0.25f;
+                {
+                    const float px=left+x+sx,py=top+y+sy;
+                    const size_t corner=(py<(sourceTop+sourceBottom)/2)?
+                        (px<(sourceLeft+sourceRight)/2?0:1):(px<(sourceLeft+sourceRight)/2?3:2);
+                    const auto& r=shadowRadius.corners[corner];
+                    if(RoundedRectContains(px,py,sourceLeft,sourceTop,sourceRight,sourceBottom,r.x,r.y))coverage+=0.25f;
+                }
             mask[static_cast<size_t>(y)*bitmapWidth+x]=coverage;
         }
         for(const auto width:widths){const int blurRadius=(width-1)/2;
@@ -4135,7 +4616,7 @@ bool PaintBlurredShadow(ID2D1RenderTarget* target,const LayoutRect& rect,
     target->DrawBitmap(found->second.Get(),
         D2D1::RectF(left/scale,top/scale,right/scale,bottom/scale),1.0f,
         D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-        D2D1::RectF(0,0,static_cast<float>(bitmapWidth),static_cast<float>(bitmapHeight)));
+        D2D1::RectF(0,0,found->second->GetSize().width,found->second->GetSize().height));
     return true;
 }
 
@@ -4147,7 +4628,7 @@ void PaintOuterBoxShadows(ID2D1RenderTarget* target,const ComputedStyle& style,
     // CSS paints the first listed shadow closest to the element.
     for(auto it=shadows.rbegin();it!=shadows.rend();++it){
         const auto& shadow=*it;if(shadow.inset||(shadow.color>>24)==0)continue;
-        if(PaintBlurredShadow(target,rect,radius,shadow,deviceScale,cacheTarget,cache))continue;
+        if(PaintBlurredShadow(target,rect,radius,shadow,deviceScale,cacheTarget,cache,(BackgroundColor(style)>>24)==255))continue;
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
         if(shadow.blur<=0.01f){
             target->CreateSolidColorBrush(D2DColor(shadow.color),&brush);
@@ -4169,7 +4650,7 @@ void PaintInsetBoxShadows(ID2D1RenderTarget* target,const ComputedStyle& style,
     const auto shadows=BoxShadows(style,viewport);
     const auto outer=PixelAlignedRect(rect,style.deviceScale);
     if(outer.right<=outer.left||outer.bottom<=outer.top)return;
-    target->PushAxisAlignedClip(outer,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    PushPaintClip(target,outer,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     for(auto it=shadows.rbegin();it!=shadows.rend();++it){
         const auto& shadow=*it;
         if(!shadow.inset||(shadow.color>>24)==0)continue;
@@ -4193,7 +4674,7 @@ void PaintInsetBoxShadows(ID2D1RenderTarget* target,const ComputedStyle& style,
             if(bottom<outer.bottom)fill(std::max(outer.left,left),std::max(bottom,outer.top),std::min(outer.right,right),outer.bottom);
         }
     }
-    target->PopAxisAlignedClip();
+    PopPaintClip(target);
 }
 
 void PaintOutline(ID2D1RenderTarget* target,const ComputedStyle& style,
@@ -4233,12 +4714,11 @@ void PaintOutline(ID2D1RenderTarget* target,const ComputedStyle& style,
             strokeFactory->CreateStrokeStyle(properties,nullptr,0,&stroke);
         }
     }
-    const float radiusX=std::max(0.0f,radius.x+expansion);
-    const float radiusY=std::max(0.0f,radius.y+expansion);
-    if(radiusX>0&&radiusY>0)
-        target->DrawRoundedRectangle(D2D1::RoundedRect(outline,radiusX,radiusY),
-                                     brush.Get(),width,stroke.Get());
-    else target->DrawRectangle(outline,brush.Get(),width,stroke.Get());
+    const auto outlineRadius=InsetCornerRadii(radius,{-expansion,-expansion,-expansion,-expansion});
+    if(outlineRadius.Any()){
+        if(auto geometry=RoundedBoxGeometry(target,outline,outlineRadius))
+            target->DrawGeometry(geometry.Get(),brush.Get(),width,stroke.Get());
+    }else target->DrawRectangle(outline,brush.Get(),width,stroke.Get());
 }
 
 std::wstring EscapeJson(const std::wstring& value){std::wstring o;for(wchar_t c:value){if(c==L'\\'||c==L'"')o+=L'\\';if(c==L'\n')o+=L"\\n";else o+=c;}return o;}
@@ -4612,7 +5092,9 @@ void PaintSvgShape(ID2D1RenderTarget* target,ID2D1Factory* factory,StyleSheet& s
     const auto fillMode=style.Is(L"fill-rule",L"evenodd")?D2D1_FILL_MODE_ALTERNATE:D2D1_FILL_MODE_WINDING;
     auto paintGeometry=[&](ID2D1Geometry* geometry){
         if(!geometry)return;
-        if(fillBrush)target->FillGeometry(geometry,fillBrush.Get());
+        if(fillBrush&&(!activeRasterSurface||activeRasterSurface->target!=target||
+           !activeRasterSurface->DrawGeometry(geometry,fillBrush.Get())))
+            target->FillGeometry(geometry,fillBrush.Get());
         if(strokeBrush){
             auto properties=strokeProperties;auto lengths=dashes;
             if(!lengths.empty()){
@@ -4627,7 +5109,9 @@ void PaintSvgShape(ID2D1RenderTarget* target,ID2D1Factory* factory,StyleSheet& s
             Microsoft::WRL::ComPtr<ID2D1StrokeStyle> strokeStyle;
             factory->CreateStrokeStyle(properties,lengths.empty()?nullptr:lengths.data(),
                 static_cast<UINT32>(lengths.size()),&strokeStyle);
-            target->DrawGeometry(geometry,strokeBrush.Get(),strokeWidth,strokeStyle.Get());
+            if(!activeRasterSurface||activeRasterSurface->target!=target||
+               !activeRasterSurface->DrawGeometry(geometry,strokeBrush.Get(),strokeWidth,strokeStyle.Get()))
+                target->DrawGeometry(geometry,strokeBrush.Get(),strokeWidth,strokeStyle.Get());
         }
     };
     if(node->tag==L"path"){
@@ -4674,6 +5158,11 @@ void PaintSvgShape(ID2D1RenderTarget* target,ID2D1Factory* factory,StyleSheet& s
         const float ry=node->tag==L"circle"?rx:StyleSheet::Length(node->Attribute(L"ry"),24,24,0);
         Microsoft::WRL::ComPtr<ID2D1EllipseGeometry> ellipse;
         if(rx>0&&ry>0)factory->CreateEllipseGeometry(D2D1::Ellipse(D2D1::Point2F(cx,cy),rx,ry),&ellipse);
+        if(rx>0&&rx==ry&&dashes.empty()&&activeRasterSurface&&activeRasterSurface->target==target){
+            const auto bounds=D2D1::RectF(cx-rx,cy-ry,cx+rx,cy+ry);
+            if(fillBrush&&activeRasterSurface->FillCircle(bounds,fillBrush.Get()))fillBrush.Reset();
+            if(strokeBrush&&activeRasterSurface->FillCircle(bounds,strokeBrush.Get(),strokeWidth))strokeBrush.Reset();
+        }
         paintGeometry(ellipse.Get());
     }else if(node->tag==L"line"){
         const float x1=StyleSheet::Length(node->Attribute(L"x1"),24,24,0),y1=StyleSheet::Length(node->Attribute(L"y1"),24,24,0);
@@ -4818,18 +5307,16 @@ void PaintImageBackgrounds(ID2D1RenderTarget* target,const ComputedStyle& style,
     };
 
     Microsoft::WRL::ComPtr<ID2D1Layer> clipLayer;
-    Microsoft::WRL::ComPtr<ID2D1RoundedRectangleGeometry> clipGeometry;
+    Microsoft::WRL::ComPtr<ID2D1Geometry> clipGeometry;
     bool roundedClip=false;
-    if(radius.x>0&&radius.y>0){
-        Microsoft::WRL::ComPtr<ID2D1Factory> factory;target->GetFactory(&factory);
-        if(factory&&SUCCEEDED(factory->CreateRoundedRectangleGeometry(
-                D2D1::RoundedRect(PixelAlignedRect(box,style.deviceScale),radius.x,radius.y),&clipGeometry))&&
-           SUCCEEDED(target->CreateLayer(nullptr,&clipLayer))){
-            target->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(),clipGeometry.Get()),clipLayer.Get());
+    if(radius.Any()){
+        clipGeometry=RoundedBoxGeometry(target,PixelAlignedRect(box,style.deviceScale),radius);
+        if(clipGeometry&&SUCCEEDED(target->CreateLayer(nullptr,&clipLayer))){
+            PushPaintLayer(target,D2D1::LayerParameters(D2D1::InfiniteRect(),clipGeometry.Get()),clipLayer.Get());
             roundedClip=true;
         }
     }
-    if(!roundedClip)target->PushAxisAlignedClip(PixelAlignedRect(box,style.deviceScale),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    if(!roundedClip)PushPaintClip(target,PixelAlignedRect(box,style.deviceScale),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
 
     for(size_t reversed=images.size();reversed>0;--reversed){
         const size_t index=reversed-1;std::shared_ptr<Node> svg;
@@ -4921,7 +5408,7 @@ void PaintImageBackgrounds(ID2D1RenderTarget* target,const ComputedStyle& style,
             if(!repeatY)break;
         }
     }
-    if(roundedClip)target->PopLayer();else target->PopAxisAlignedClip();
+    if(roundedClip)PopPaintLayer(target);else PopPaintClip(target);
 }
 
 D2D1_MATRIX_3X2_F CanvasMatrix(const CanvasTransform& transform){
@@ -5143,12 +5630,12 @@ void PaintRasterImage(ID2D1RenderTarget* target,const LayoutBox& box,
         box.style.Is(L"image-rendering",L"crisp-edges")?
         D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR:
         D2D1_BITMAP_INTERPOLATION_MODE_LINEAR;
-    target->PushAxisAlignedClip(D2D1::RectF(box.content.x,box.content.y,
+    PushPaintClip(target,D2D1::RectF(box.content.x,box.content.y,
         box.content.x+box.content.width,box.content.y+box.content.height),
         D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     target->DrawBitmap(bitmap,destination,1.0f,interpolation,
         D2D1::RectF(0,0,naturalWidth,naturalHeight));
-    target->PopAxisAlignedClip();
+    PopPaintClip(target);
 }
 
 CanvasFont ParseCanvasFont(const std::wstring& source){
@@ -5253,10 +5740,10 @@ HRESULT ReplayCanvas(ID2D1RenderTarget* drawingTarget,IDWriteFactory* factory,co
             const float top=std::min(command.y,command.y+command.height);
             const float right=std::max(command.x,command.x+command.width);
             const float bottom=std::max(command.y,command.y+command.height);
-            drawingTarget->PushAxisAlignedClip(D2D1::RectF(left,top,right,bottom),
+            PushPaintClip(drawingTarget,D2D1::RectF(left,top,right,bottom),
                 D2D1_ANTIALIAS_MODE_ALIASED);
             drawingTarget->Clear(D2D1::ColorF(0,surface.alpha?0.0f:1.0f));
-            drawingTarget->PopAxisAlignedClip();
+            PopPaintClip(drawingTarget);
         }else if(command.kind==CanvasCommandKind::FillRect){
             const float left=std::min(command.x,command.x+command.width);
             const float top=std::min(command.y,command.y+command.height);
@@ -5328,13 +5815,13 @@ void PaintCanvas(ID2D1RenderTarget* target,IDWriteFactory* factory,const LayoutB
         auto* drawingTarget=static_cast<ID2D1RenderTarget*>(bitmapTarget.Get());
         if(FAILED(ReplayCanvas(drawingTarget,factory,*surface))||FAILED(bitmapTarget->GetBitmap(&bitmap)))return;
     }
-    target->PushAxisAlignedClip(D2D1::RectF(box.content.x,box.content.y,
+    PushPaintClip(target,D2D1::RectF(box.content.x,box.content.y,
         box.content.x+box.content.width,box.content.y+box.content.height),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     target->DrawBitmap(bitmap.Get(),D2D1::RectF(box.content.x,box.content.y,
         box.content.x+box.content.width,box.content.y+box.content.height),1.0f,
         D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
         D2D1::RectF(0,0,static_cast<float>(surface->width),static_cast<float>(surface->height)));
-    target->PopAxisAlignedClip();
+    PopPaintClip(target);
 }
 
 std::wstring GeneratedContentText(const std::wstring& source,
@@ -5853,8 +6340,7 @@ bool LayoutEngine::AdvanceTransitions(float milliseconds){
         if(!animation.paused)animation.elapsedMs+=milliseconds;
     if(root_){
         RefreshTransitionFrame(*root_);
-        root_->rect={0,0,viewportWidth_,viewportHeight_};root_->content=root_->rect;
-        LayoutBoxTree(*root_,root_->rect,true);
+        LayoutRoot();
         UpdateTraversalMetadata(*root_);
         UpdateStackingContexts(*root_);
     }
@@ -5926,7 +6412,7 @@ void LayoutEngine::Layout(float width,float height,float deviceScale){
     root_->viewportScrollport={0,0,viewportWidth_,viewportHeight_};
     root_->viewportOverflowX=propagatedOverflow(L"overflow-x");
     root_->viewportOverflowY=propagatedOverflow(L"overflow-y");
-    root_->rect={0,0,viewportWidth_,viewportHeight_};root_->content=root_->rect;LayoutBoxTree(*root_,root_->rect,true);
+    LayoutRoot();
     UpdateTraversalMetadata(*root_);
     UpdateStackingContexts(*root_);
     UpdateTopLayer();
@@ -5934,6 +6420,7 @@ void LayoutEngine::Layout(float width,float height,float deviceScale){
 
 void LayoutEngine::InvalidateMeasurements(LayoutBox& box){
     box.naturalWidthValid=false;box.minimumWidthValid=false;box.naturalHeightValid=false;
+    box.collapsedBordersResolved=false;box.trimLeadingLineWhitespace=false;
     box.blockMarginsValid=false;
     box.stickyFlowYValid=false;
     for(auto& child:box.children)InvalidateMeasurements(*child);
@@ -5951,11 +6438,25 @@ void LayoutEngine::Relayout(float width,float height,float deviceScale){
     viewportWidth_=width;viewportHeight_=height;
     InvalidateMeasurements(*root_);
     root_->viewportScrollport={0,0,viewportWidth_,viewportHeight_};
-    root_->rect={0,0,viewportWidth_,viewportHeight_};root_->content=root_->rect;
-    LayoutBoxTree(*root_,root_->rect,true);
+    LayoutRoot();
     UpdateTraversalMetadata(*root_);
     UpdateStackingContexts(*root_);
     UpdateTopLayer();
+}
+
+void LayoutEngine::LayoutRoot(){
+    if(!root_)return;
+    if(root_->node&&root_->node->tag==L"body"){
+        const auto height=ToLower(Trim(root_->style.Get(L"height",L"auto")));
+        const bool authoredHeight=!height.empty()&&height!=L"auto";
+        const bool definiteHeight=authoredHeight||document_.QuirksMode();
+        const float outerWidth=BlockOuterWidth(*root_,viewportWidth_,viewportWidth_);
+        float outerHeight=authoredHeight?
+            BlockOuterHeight(*root_,viewportHeight_,viewportWidth_,viewportHeight_,viewportWidth_):
+            NaturalHeight(*root_,std::max(1.0f,viewportWidth_));
+        if(!authoredHeight&&document_.QuirksMode())outerHeight=std::max(outerHeight,viewportHeight_);
+        LayoutBoxTree(*root_,{0,0,outerWidth,outerHeight},true,true,definiteHeight);
+    }else LayoutBoxTree(*root_,{0,0,viewportWidth_,viewportHeight_},true);
 }
 
 void LayoutEngine::LayoutBoxTree(LayoutBox& box,const LayoutRect& available,bool forcedSize,
@@ -5976,7 +6477,7 @@ void LayoutEngine::LayoutBoxTree(LayoutBox& box,const LayoutRect& available,bool
     const float edgeReference=flexItem?box.parent->content.width:available.width;
     auto margin=UsedLayoutMargins(box,edgeReference,viewportWidth_);
     auto padding=EdgeValues(box.style,L"padding",edgeReference,viewportWidth_);
-    const auto border=BorderValues(box.style);float x=available.x+margin.left,y=available.y+margin.top;
+    const auto border=UsedBorderValues(box);float x=available.x+margin.left,y=available.y+margin.top;
     float width=std::max(0.0f,available.width-margin.left-margin.right),height=std::max(0.0f,available.height-margin.top-margin.bottom);
     auto cssWidth=box.style.Get(L"width"),cssHeight=box.style.Get(L"height");
     if(!forcedSize&& !cssWidth.empty()&&cssWidth!=L"auto")width=StyleSheet::Length(cssWidth,available.width,viewportWidth_,width);
@@ -6084,11 +6585,10 @@ void LayoutEngine::FinalizeScroll(LayoutBox& box){
     const bool scrollX=scrollable(overflowX),scrollY=scrollable(overflowY);
     if(!scrollX&&!scrollY){box.node->scrollLeft=0;box.node->scrollTop=0;box.appliedScrollLeft=0;box.appliedScrollTop=0;return;}
     if(box.node->tag==L"textarea"){
-        const auto padding=EdgeValues(box.style,L"padding",box.rect.width,viewportWidth_);
         if(scrollY)box.scrollHeight=std::max(box.content.height,
-            TextHeight(box.node->Attribute(L"value"),box.style,box.content.width)+padding.bottom);
+            TextHeight(box.node->Attribute(L"value"),box.style,box.content.width));
         if(scrollX&&PreventsTextWrapping(box.style.Get(L"white-space")))box.scrollWidth=std::max(box.content.width,
-            TextWidth(box.node->Attribute(L"value"),box.style)+padding.right);
+            TextWidth(box.node->Attribute(L"value"),box.style));
         box.node->scrollLeft=std::max(0.0f,std::min(std::max(0.0f,box.scrollWidth-box.content.width),box.node->scrollLeft));
         box.node->scrollTop=std::max(0.0f,std::min(std::max(0.0f,box.scrollHeight-box.content.height),box.node->scrollTop));
         box.appliedScrollLeft=box.node->scrollLeft;box.appliedScrollTop=box.node->scrollTop;
@@ -6137,8 +6637,13 @@ void LayoutEngine::FinalizeScroll(LayoutBox& box){
         if(extent.right>scrollport.x+scrollport.width+0.01f)extent.right+=endX;
         if(extent.bottom>scrollport.y+scrollport.height+0.01f)extent.bottom+=endY;
     }
-    if(scrollX)box.scrollWidth=std::max(clientWidth,extent.right-scrollport.x);
-    if(scrollY)box.scrollHeight=std::max(clientHeight,extent.bottom-scrollport.y);
+    // Non-viewport scroll metrics use the content box for both the client
+    // size and overflow origin. Counting start padding as overflow creates
+    // a scrollbar even when the contents fit, and inflates long scroll ranges.
+    const float originX=box.viewportScrollContainer?scrollport.x:box.content.x;
+    const float originY=box.viewportScrollContainer?scrollport.y:box.content.y;
+    if(scrollX)box.scrollWidth=std::max(clientWidth,extent.right-originX);
+    if(scrollY)box.scrollHeight=std::max(clientHeight,extent.bottom-originY);
     box.node->scrollLeft=std::max(0.0f,std::min(std::max(0.0f,box.scrollWidth-clientWidth),box.node->scrollLeft));
     box.node->scrollTop=std::max(0.0f,std::min(std::max(0.0f,box.scrollHeight-clientHeight),box.node->scrollTop));
     if(box.node->scrollLeft>0||box.node->scrollTop>0){
@@ -6236,8 +6741,9 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
     const bool noWrap=PreventsTextWrapping(whiteSpace);
     if(inlineOnly&&(!inlineSizes.empty())&&(inlineWidth<=flowWidth+0.5f||noWrap)){
         float x=box.content.x;
-        if(box.style.Is(L"text-align",L"center")||box.style.Is(L"text-align",L"-webkit-center"))x+=(flowWidth-inlineWidth)/2;
-        else if(box.style.Is(L"text-align",L"right")||box.style.Is(L"text-align",L"-webkit-right"))x+=flowWidth-inlineWidth;
+        const auto alignment=PhysicalTextAlignment(box.style);
+        if(alignment==L"center"||alignment==L"-webkit-center")x+=(flowWidth-inlineWidth)/2;
+        else if(alignment==L"right"||alignment==L"-webkit-right")x+=flowWidth-inlineWidth;
         float y=box.content.y;
         if(box.style.Is(L"display",L"inline")&&!IsBlockifiedItem(box)&&
            !UsesGenericMonospaceMetrics(box.style))
@@ -6272,33 +6778,6 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
     float cursorY=box.content.y;float lineX=box.content.x;float lineHeight=0;
     BlockMarginFlow marginFlow; marginFlow.parent=CollapsedBlockMargins(box,box.rect.width);
     std::vector<FloatArea> floats;
-    // The root body and its first in-flow block share their adjoining top
-    // margin when neither establishes a separating border, padding, or scroll
-    // container. The body margin has already positioned this root box, so
-    // remove only the double-counted portion before placing its first child.
-    if(!box.parent&&box.node&&box.node->tag==L"body"){
-        const auto padding=EdgeValues(box.style,L"padding",box.rect.width,viewportWidth_);
-        const auto border=BorderValues(box.style);
-        const auto overflow=box.style.Get(L"overflow",L"visible");
-        if(padding.top<=0&&border.top<=0&&overflow==L"visible"){
-            for(const auto& child:box.children){
-                if(!child->visible||child->style.Is(L"position",L"absolute")||
-                   child->style.Is(L"position",L"fixed"))continue;
-                if(!IsInlineLevel(child->style.Get(L"display"))){
-                    const auto bodyMargin=EdgeValues(box.style,L"margin",box.rect.width,viewportWidth_);
-                    const auto childMargin=UsedLayoutMargins(*child,flowWidth,viewportWidth_);
-                    const auto collapse=[](float first,float second){
-                        if(first>=0&&second>=0)return std::max(first,second);
-                        if(first<=0&&second<=0)return std::min(first,second);
-                        return first+second;
-                    };
-                    cursorY-=bodyMargin.top+childMargin.top-
-                        collapse(bodyMargin.top,childMargin.top);
-                }
-                break;
-            }
-        }
-    }
     size_t inlineLineBegin=0;
     for(size_t childIndex=0;childIndex<box.children.size();++childIndex){
         auto& child=box.children[childIndex];if(!child->visible)continue;
@@ -6374,6 +6853,11 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
                 AvailableFloatBand(floats,box.content.x,box.content.x+flowWidth,
                                    cursorY,bandLeft,bandRight,nextBottom);
                 lineX=bandLeft;
+                if(wrapText&&!PreservesSpaces(child->style.Get(L"white-space"))){
+                    child->trimLeadingLineWhitespace=true;
+                    child->naturalWidthValid=false;child->minimumWidthValid=false;child->naturalHeightValid=false;
+                    w=inlineOuterWidth(*child);
+                }
                 w=std::min(w,std::max(0.0f,bandRight-bandLeft));
             }
             const float h=(wrapText||wrappingInlineContainer)?
@@ -6396,6 +6880,7 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
                           true,false,false);
             lineX+=w;
             lineHeight=std::max(lineHeight,childLine.Height());
+            if(child->node->type==NodeType::Text)lineHeight=std::max(lineHeight,h);
         }
         else{
             if(lineX>box.content.x){cursorY+=lineHeight;lineX=box.content.x;lineHeight=0;}
@@ -6410,7 +6895,8 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
                                    bandLeft,bandRight,nextBottom);
             }
             const float availableWidth=std::max(0.0f,bandRight-bandLeft);
-            float h=NaturalHeight(*child,std::max(1.0f,availableWidth));const auto cssH=child->style.Get(L"height");
+            const float w=BlockOuterWidth(*child,availableWidth,viewportWidth_);
+            float h=NaturalHeight(*child,std::max(1.0f,w));const auto cssH=child->style.Get(L"height");
             const bool explicitHeight=!cssH.empty()&&cssH!=L"auto";
             if(explicitHeight)
                 h=BlockOuterHeight(*child,box.content.height,flowWidth,viewportHeight_,viewportWidth_);
@@ -6431,7 +6917,6 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
                     h=constrained+decoration+childMargin.top+childMargin.bottom;
                 }
             }
-            const float w=BlockOuterWidth(*child,availableWidth,viewportWidth_);
             const bool autoLeft=ToLower(Trim(child->style.Get(L"margin-left")))==L"auto";
             const bool autoRight=ToLower(Trim(child->style.Get(L"margin-right")))==L"auto";
             const float freeWidth=std::max(0.0f,availableWidth-w);float childX=bandLeft;
@@ -6439,6 +6924,7 @@ void LayoutEngine::LayoutBlock(LayoutBox& box,bool definiteHeight){
             else if(!autoRight){
                 if(box.style.Is(L"text-align",L"-webkit-center"))childX+=freeWidth/2;
                 else if(box.style.Is(L"text-align",L"-webkit-right"))childX+=freeWidth;
+                else if(box.style.Is(L"direction",L"rtl"))childX+=freeWidth;
             }
             LayoutBoxTree(*child,{childX,cursorY,w,h},true,true,explicitHeight);
             cursorY+=h+marginFlow.After(childMargins);
@@ -6708,6 +7194,15 @@ void LayoutEngine::LayoutFlex(LayoutBox& box){
             for(const auto i:clamped){const float reduction=std::max(0.0f,sizes[i]-minimums[i]);sizes[i]=minimums[i];deficit-=reduction;active.erase(std::remove(active.begin(),active.end(),i),active.end());}
         }
     }
+    if((freeSpace>0.001f&&growTotal>0)||(freeSpace<-0.001f&&shrinkTotal>0)){
+        const double units=64.0*deviceScale_;
+        double accumulated=0;float assigned=0;
+        for(auto& size:sizes){
+            accumulated+=size;
+            const float edge=static_cast<float>(std::round(accumulated*units)/units);
+            size=edge-assigned;assigned=edge;
+        }
+    }
     float occupied=gap*std::max(0,static_cast<int>(children.size())-1);for(float size:sizes)occupied+=size;float remain=std::max(0.0f,mainSize-occupied);
     const float autoMainMargin=mainAutoMarginCount&&remain>0?
         remain/static_cast<float>(mainAutoMarginCount):0;
@@ -6789,8 +7284,10 @@ void LayoutEngine::LayoutGrid(LayoutBox& box,bool definiteWidth,bool definiteHei
     const std::vector<float> provisionalRows(rowCount,std::max(1.0f,(box.content.height-rowGap*std::max(0,static_cast<int>(rowCount)-1))/rowCount));
     const auto justifyContent=box.style.Get(L"justify-content",L"normal");
     const auto alignContent=box.style.Get(L"align-content",L"normal");
-    const auto columns=ResolveGridTracks(*columnDefinitions,columnCount,gridWidth,columnGap,viewportWidth_,items,true,provisionalRows,definiteWidth,StretchesGridAutoTracks(justifyContent));
-    const auto rows=ResolveGridTracks(*rowDefinitions,rowCount,box.content.height,rowGap,viewportHeight_,items,false,columns,definiteHeight,StretchesGridAutoTracks(alignContent));
+    const auto completeColumns=CompleteGridTracks(*columnDefinitions,box,true,columnCount,gridWidth);
+    const auto completeRows=CompleteGridTracks(*rowDefinitions,box,false,rowCount,box.content.height);
+    const auto columns=ResolveGridTracks(completeColumns,columnCount,gridWidth,columnGap,viewportWidth_,items,true,provisionalRows,definiteWidth,StretchesGridAutoTracks(justifyContent));
+    const auto rows=ResolveGridTracks(completeRows,rowCount,box.content.height,rowGap,viewportHeight_,items,false,columns,definiteHeight,StretchesGridAutoTracks(alignContent));
     const auto horizontalDistribution=DistributeGridContent(justifyContent,gridWidth,columns,columnGap);
     const auto verticalDistribution=DistributeGridContent(alignContent,box.content.height,rows,rowGap);
     const float distributedColumnGap=columnGap+horizontalDistribution.extraGap;
@@ -6896,7 +7393,9 @@ void LayoutEngine::LayoutTable(LayoutBox& box){
 
 ID2D1SolidColorBrush* LayoutEngine::SolidBrush(ID2D1RenderTarget* target,unsigned int color){
     if(!target)return nullptr;
-    if(brushCacheTarget_!=target){brushCache_.clear();brushCacheTarget_=target;}
+    // Keep the resource owner alive so a fresh target at a reused address
+    // cannot accidentally inherit brushes belonging to a destroyed target.
+    if(brushCacheTarget_.Get()!=target){brushCache_.clear();brushCacheTarget_=target;}
     const auto found=brushCache_.find(color);
     if(found!=brushCache_.end())return found->second.Get();
     if(brushCache_.size()>=512)brushCache_.clear();
@@ -6920,16 +7419,16 @@ void LayoutEngine::EnsureGeometryResources(ID2D1RenderTarget* target){
         svgGeometryCache_.clear();geometryFactory_=factory.Get();
     }
     auto create=[&](Microsoft::WRL::ComPtr<ID2D1PathGeometry>& geometry,
-                    std::initializer_list<D2D1_POINT_2F> points){
+                    std::initializer_list<D2D1_POINT_2F> points,bool closed=true){
         if(geometry||points.size()<3)return;
         Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
         if(FAILED(factory->CreatePathGeometry(&geometry))||FAILED(geometry->Open(&sink))){geometry.Reset();return;}
-        auto point=points.begin();sink->BeginFigure(*point++,D2D1_FIGURE_BEGIN_FILLED);
+        auto point=points.begin();sink->BeginFigure(*point++,closed?D2D1_FIGURE_BEGIN_FILLED:D2D1_FIGURE_BEGIN_HOLLOW);
         for(;point!=points.end();++point)sink->AddLine(*point);
-        sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+        sink->EndFigure(closed?D2D1_FIGURE_END_CLOSED:D2D1_FIGURE_END_OPEN);
         if(FAILED(sink->Close()))geometry.Reset();
     };
-    create(selectArrowGeometry_,{D2D1::Point2F(-4,-2),D2D1::Point2F(5,-2),D2D1::Point2F(0,3)});
+    create(selectArrowGeometry_,{D2D1::Point2F(-4,-2),D2D1::Point2F(0,2),D2D1::Point2F(4,-2)},false);
     create(verticalArrowGeometry_,{D2D1::Point2F(0,0),D2D1::Point2F(-1,1),D2D1::Point2F(1,1)});
     create(horizontalArrowGeometry_,{D2D1::Point2F(0,0),D2D1::Point2F(1,-1),D2D1::Point2F(1,1)});
 }
@@ -6956,7 +7455,7 @@ void LayoutEngine::Paint(ID2D1RenderTarget* target,IDWriteFactory* factory,const
     canvasBackgroundBox_=canvasHtmlBox_&&HasCanvasBackground(canvasHtmlBox_->style)?canvasHtmlBox_:
         (canvasBodyBox_&&HasCanvasBackground(canvasBodyBox_->style)?canvasBodyBox_:nullptr);
     if(canvasBackgroundBox_){
-        target->PushAxisAlignedClip(PixelAlignedRect(clip,deviceScale_),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        PushPaintClip(target,PixelAlignedRect(clip,deviceScale_),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
         const LayoutRect canvas{0,0,viewportWidth_,viewportHeight_};const CornerRadii radius{};
         const auto color=BackgroundColor(canvasBackgroundBox_->style);
         if((color>>24)!=0)target->FillRectangle(PixelAlignedRect(canvas,deviceScale_),SolidBrush(target,color));
@@ -6964,7 +7463,7 @@ void LayoutEngine::Paint(ID2D1RenderTarget* target,IDWriteFactory* factory,const
         PaintImageBackgrounds(target,canvasBackgroundBox_->style,canvas,radius,viewportWidth_,
             document_,styleSheet_,svgBackgroundCache_,svgGeometryCache_,rasterImageResolver_,
             imageBitmapCacheTarget_,imageBitmapCache_);
-        target->PopAxisAlignedClip();
+        PopPaintClip(target);
     }
     paintingTopLayer_=nullptr;
     PaintStackingContext(target,factory,*root_,clip);
@@ -6980,9 +7479,9 @@ void LayoutEngine::Paint(ID2D1RenderTarget* target,IDWriteFactory* factory,const
     // after document stacking contexts and top-layer content, independently
     // of the authored body's transform, opacity and border radius.
     if(root_->visible&&root_->viewportScrollContainer){
-        target->PushAxisAlignedClip(PixelAlignedRect(clip,deviceScale_),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        PushPaintClip(target,PixelAlignedRect(clip,deviceScale_),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
         PaintScrollbars(target,*root_);
-        target->PopAxisAlignedClip();
+        PopPaintClip(target);
     }
     canvasBackgroundBox_=nullptr;
 }
@@ -6995,10 +7494,10 @@ void LayoutEngine::PaintDialogBackdrop(ID2D1RenderTarget* target,const LayoutBox
     if(style.Is(L"visibility",L"hidden"))return;
     float opacity=1.0f;TryParseFloat(style.Get(L"opacity",L"1"),opacity);
     opacity=std::max(0.0f,std::min(1.0f,opacity));if(opacity<=0.001f)return;
-    target->PushAxisAlignedClip(PixelAlignedRect(clipBounds,deviceScale_),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    PushPaintClip(target,PixelAlignedRect(clipBounds,deviceScale_),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     Microsoft::WRL::ComPtr<ID2D1Layer> opacityLayer;
     if(opacity<0.999f&&SUCCEEDED(target->CreateLayer(nullptr,&opacityLayer)))
-        target->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(),nullptr,
+        PushPaintLayer(target,D2D1::LayerParameters(D2D1::InfiniteRect(),nullptr,
             D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,D2D1::IdentityMatrix(),opacity),opacityLayer.Get());
     const LayoutRect viewport{0,0,viewportWidth_,viewportHeight_};
     const CornerRadii radius{};const auto color=BackgroundColor(style);
@@ -7007,8 +7506,8 @@ void LayoutEngine::PaintDialogBackdrop(ID2D1RenderTarget* target,const LayoutBox
     PaintImageBackgrounds(target,style,viewport,radius,viewportWidth_,document_,styleSheet_,
         svgBackgroundCache_,svgGeometryCache_,rasterImageResolver_,imageBitmapCacheTarget_,
         imageBitmapCache_);
-    if(opacityLayer)target->PopLayer();
-    target->PopAxisAlignedClip();
+    if(opacityLayer)PopPaintLayer(target);
+    PopPaintClip(target);
 }
 
 void LayoutEngine::PaintStackingContext(ID2D1RenderTarget* target,IDWriteFactory* factory,
@@ -7016,13 +7515,13 @@ void LayoutEngine::PaintStackingContext(ID2D1RenderTarget* target,IDWriteFactory
     if(clipBounds.width<=0||clipBounds.height<=0)return;
     if(!Intersects(box.subtreeBounds,clipBounds))return;
     if(box.node&&box.node->modal&& &box!=paintingTopLayer_)return;
-    target->PushAxisAlignedClip(PixelAlignedRect(clipBounds,deviceScale_),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    PushPaintClip(target,PixelAlignedRect(clipBounds,deviceScale_),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     PaintBox(target,factory,box,clipBounds,&box);
     const auto contextClip=ClipsOverflow(box)?IntersectRects(clipBounds,PaddingBox(box)):clipBounds;
     for(auto* context:box.nonNegativeStackingContexts)
         if(Intersects(context->subtreeBounds,contextClip))
             PaintStackingContext(target,factory,*context,StackingContextClip(*context,box,contextClip));
-    target->PopAxisAlignedClip();
+    PopPaintClip(target);
 }
 
 void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,LayoutBox& box,
@@ -7038,24 +7537,58 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
     if(box.style.Is(L"visibility",L"hidden")||opacity<=0.001f)return;D2D1_MATRIX_3X2_F previousTransform{};const bool transformed=ApplyPaintTransform(target,box,previousTransform);Microsoft::WRL::ComPtr<ID2D1Layer> opacityLayer;
     std::unique_ptr<ScopedWebTextRendering> opacityTextRendering;
     if(opacity<0.999f&&SUCCEEDED(target->CreateLayer(nullptr,&opacityLayer))){
-        target->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(),nullptr,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,D2D1::IdentityMatrix(),opacity),opacityLayer.Get());
+        PushPaintLayer(target,D2D1::LayerParameters(D2D1::InfiniteRect(),nullptr,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,D2D1::IdentityMatrix(),opacity),opacityLayer.Get());
         opacityTextRendering=std::make_unique<ScopedWebTextRendering>(target,factory,true);
     }
     const auto background=BackgroundColor(box.style);ID2D1SolidColorBrush* brush=nullptr;
-    const auto radius=UniformCornerRadii(box.style,box.rect.width,box.rect.height,viewportWidth_);
+    const auto radius=ResolveCornerRadii(box.style,box.rect.width,box.rect.height,viewportWidth_);
+    const auto appearance=ToLower(Trim(box.style.Get(L"appearance",
+        box.style.Get(L"-webkit-appearance",L"auto"))));
+    const auto borders=BorderValues(box.style);
+    const auto controlType=ToLower(box.node->Attribute(L"type"));
+    const auto controlImage=Trim(box.style.Get(L"background-image"));
+    const bool plainControlBackground=controlImage.empty()||controlImage==L"none";
+    const auto defaultBorder=[&](const wchar_t* expectedStyle,unsigned int expectedColor){
+        for(const auto* side:{L"top",L"right",L"bottom",L"left"}){
+            const auto value=box.style.Get(L"border-"+std::wstring(side)+L"-style",
+                box.style.Get(L"border-style",box.style.Get(L"border-"+std::wstring(side),box.style.Get(L"border"))));
+            if(value.find(expectedStyle)==std::wstring::npos||BorderColor(box.style,side)!=expectedColor)return false;
+        }
+        return true;
+    };
+    const bool nativeButton=plainControlBackground&&appearance!=L"none"&&(box.node->tag==L"button"||
+        (box.node->tag==L"input"&&(controlType==L"button"||controlType==L"submit"||controlType==L"reset")))&&
+        !radius.Any()&&borders.top==2&&borders.right==2&&borders.bottom==2&&borders.left==2&&
+        defaultBorder(L"outset",0xff000000)&&(background==0xffefefef||background==0xfff0f0f0);
+    const bool nativeTextField=plainControlBackground&&appearance!=L"none"&&box.node->tag==L"input"&&
+        controlType!=L"button"&&controlType!=L"submit"&&controlType!=L"reset"&&
+        controlType!=L"checkbox"&&controlType!=L"radio"&&!radius.Any()&&
+        borders.top==2&&borders.right==2&&borders.bottom==2&&borders.left==2&&
+        defaultBorder(L"inset",0xff767676)&&background==0xffffffff;
+    const float themeBorder=std::max(1.0f,std::floor(box.style.deviceScale))/std::max(0.01f,box.style.deviceScale);
+    const bool nativeSelect=plainControlBackground&&appearance!=L"none"&&box.node->tag==L"select"&&
+        !radius.Any()&&borders.top==themeBorder&&borders.right==themeBorder&&borders.bottom==themeBorder&&borders.left==themeBorder&&
+        defaultBorder(L"solid",0xff767676)&&background==0xffffffff;
+    const bool nativeDecoration=nativeButton||nativeTextField||nativeSelect;
     PaintOuterBoxShadows(target,box.style,box.rect,radius,viewportWidth_,deviceScale_,
                          shadowBitmapCacheTarget_,shadowBitmapCache_);
-    if(&box!=canvasBackgroundBox_){
-        if((background>>24)!=0){brush=SolidBrush(target,background);auto rect=PixelAlignedRect(box.rect,deviceScale_);if(radius.x>0&&radius.y>0)target->FillRoundedRectangle(D2D1::RoundedRect(rect,radius.x,radius.y),brush);else target->FillRectangle(rect,brush);}
+    if(&box!=canvasBackgroundBox_&&!nativeDecoration){
+        if((background>>24)!=0){
+            brush=SolidBrush(target,background);const auto rect=PixelAlignedRect(box.rect,deviceScale_);
+            const auto bleed=BackgroundBleedInset(box.style,radius);
+            FillRoundedBox(target,D2D1::RectF(rect.left+bleed.left,rect.top+bleed.top,rect.right-bleed.right,rect.bottom-bleed.bottom),
+                InsetCornerRadii(radius,bleed),brush);
+        }
         PaintGradientBackgrounds(target,box.style,box.rect,radius,viewportWidth_);
         PaintImageBackgrounds(target,box.style,box.rect,radius,viewportWidth_,document_,styleSheet_,
                               svgBackgroundCache_,svgGeometryCache_,rasterImageResolver_,
                               imageBitmapCacheTarget_,imageBitmapCache_);
     }
     PaintInsetBoxShadows(target,box.style,box.rect,viewportWidth_);
-    const auto borders=BorderValues(box.style);const bool uniform=borders.top==borders.right&&borders.top==borders.bottom&&borders.top==borders.left;
+    const bool uniform=borders.top==borders.right&&borders.top==borders.bottom&&borders.top==borders.left;
     const LayoutBox* collapsedTable=nullptr;
-    if(HasTableDisplay(box,L"table-cell"))
+    if(HasTableDisplay(box,L"table")&&box.style.Is(L"border-collapse",L"collapse"))collapsedTable=&box;
+    else if(HasTableDisplay(box,L"table-cell")||HasTableDisplay(box,L"table-row")||IsTableRowGroup(box))
         for(auto* ancestor=box.parent;ancestor;ancestor=ancestor->parent)
             if(HasTableDisplay(*ancestor,L"table")){
                 if(ancestor->style.Is(L"border-collapse",L"collapse"))collapsedTable=ancestor;
@@ -7063,7 +7596,40 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
             }
     const bool collapsedTableCell=collapsedTable!=nullptr;
     const auto outerRect=PixelAlignedRect(box.rect,box.style.deviceScale);
-    if(uniform&&borders.top>0&&!collapsedTableCell){auto color=BorderColor(box.style,L"top");brush=SolidBrush(target,color);const float inset=borders.top/2;auto rect=D2D1::RectF(outerRect.left+inset,outerRect.top+inset,outerRect.right-inset,outerRect.bottom-inset);if(radius.x>0&&radius.y>0){const float strokeRadiusX=std::max(0.0f,radius.x-inset),strokeRadiusY=std::max(0.0f,radius.y-inset);target->DrawRoundedRectangle(D2D1::RoundedRect(rect,strokeRadiusX,strokeRadiusY),brush,borders.top);}else target->DrawRectangle(rect,brush,borders.top);}
+    if(nativeDecoration){
+        // Theme borders quantize their thickness in device pixels. Keep the
+        // UA layout border separate from this decorative frame.
+        const float scale=std::max(0.01f,box.style.deviceScale);
+        const float width=std::max(1.0f,std::floor(scale))/scale;
+        const float corner=std::max(1.0f,std::floor(2*scale))/scale;
+        const auto frame=D2D1::RectF(outerRect.left+width/2,outerRect.top+width/2,
+            outerRect.right-width/2,outerRect.bottom-width/2);
+        const auto antialias=target->GetAntialiasMode();
+        if(nativeTextField||nativeSelect)target->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+        brush=SolidBrush(target,nativeButton?0xffefefef:0xffffffff);
+        if(!PaintSoftwareRoundedRect(target,D2D1::RoundedRect(frame,corner,corner),brush))
+            target->FillRoundedRectangle(D2D1::RoundedRect(frame,corner,corner),brush);
+        brush=SolidBrush(target,box.node->disabled?0xffd1d1d1:0xff767676);
+        if(!PaintSoftwareRoundedRect(target,D2D1::RoundedRect(frame,corner,corner),brush,width))
+            target->DrawRoundedRectangle(D2D1::RoundedRect(frame,corner,corner),brush,width);
+        target->SetAntialiasMode(antialias);
+    }else if(!collapsedTable){
+    if(uniform&&borders.top>0&&!collapsedTableCell){
+        brush=SolidBrush(target,BorderColor(box.style,L"top"));const float inset=borders.top/2;
+        const auto rect=D2D1::RectF(outerRect.left+inset,outerRect.top+inset,outerRect.right-inset,outerRect.bottom-inset);
+        const auto borderRadius=InsetCornerRadii(radius,{inset,inset,inset,inset});
+        if(borderRadius.Any()){
+            bool painted=false;
+            if(!radius.Uniform()&&activeRasterSurface&&activeRasterSurface->target==target){
+                const auto inner=D2D1::RectF(outerRect.left+borders.left,outerRect.top+borders.top,
+                    outerRect.right-borders.right,outerRect.bottom-borders.bottom);
+                const auto innerRadius=InsetCornerRadii(radius,borders);
+                if(inner.right>inner.left&&inner.bottom>inner.top)
+                    painted=activeRasterSurface->PaintSkia(outerRect,radius.corners,BorderColor(box.style,L"top"),0,&inner,&innerRadius.corners);
+            }
+            if(!painted)if(auto geometry=RoundedBoxGeometry(target,rect,borderRadius))target->DrawGeometry(geometry.Get(),brush,borders.top);
+        }else target->DrawRectangle(rect,brush,borders.top);
+    }
     else{
         FLOAT dpiX=USER_DEFAULT_SCREEN_DPI,dpiY=USER_DEFAULT_SCREEN_DPI;target->GetDpi(&dpiX,&dpiY);
         const auto pixelCenter=[](float value,float dpi){const float scale=dpi/USER_DEFAULT_SCREEN_DPI;return scale>0?(std::round(value*scale-0.5f)+0.5f)/scale:value;};
@@ -7080,6 +7646,7 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
         if(borders.right>0&&tableRight){brush=SolidBrush(target,BorderColor(box.style,L"right"));const float x=pixelCenter(outerRect.right+(collapsedTableCell?borders.right/2:-borders.right/2),dpiX);target->DrawLine(D2D1::Point2F(x,outerRect.top),D2D1::Point2F(x,outerRect.bottom),brush,borders.right);}
         if(borders.bottom>0){brush=SolidBrush(target,BorderColor(box.style,L"bottom"));const float y=pixelCenter(outerRect.bottom+(collapsedTableCell?borders.bottom/2:-borders.bottom/2),dpiY);target->DrawLine(D2D1::Point2F(outerRect.left,y),D2D1::Point2F(outerRect.right,y),brush,borders.bottom);}
         if(borders.left>0){brush=SolidBrush(target,BorderColor(box.style,L"left"));const float x=pixelCenter(outerRect.left+borders.left/2,dpiX);target->DrawLine(D2D1::Point2F(x,outerRect.top),D2D1::Point2F(x,outerRect.bottom),brush,borders.left);}
+    }
     }
     // A browsing context is replaced content in its owner's CSS stacking
     // context. Paint it here, inside the owner's transform/opacity and clips,
@@ -7105,45 +7672,67 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
             const float markerLeft=box.content.x-gap-markerWidth;
             brush=SolidBrush(target,StyleSheet::Color(box.style.Get(L"color",L"#000"),
                                                        0xff000000));
-            target->DrawTextLayout(D2D1::Point2F(markerLeft,box.content.y),
-                                   markerLayout.Get(),brush);
+            DrawWebTextLayout(target,factory,D2D1::Point2F(markerLeft,box.content.y),markerLayout.Get(),brush);
         }
     }
-    const auto appearance=ToLower(Trim(box.style.Get(L"appearance",
-        box.style.Get(L"-webkit-appearance",L"auto"))));
     if(appearance!=L"none"&&box.node->tag==L"input"&&
        (box.node->Attribute(L"type")==L"checkbox"||box.node->Attribute(L"type")==L"radio")){
         const auto type=box.node->Attribute(L"type");
-        const float size=std::max(1.0f,std::min(box.rect.width,box.rect.height));
-        const float left=std::round(box.rect.x),top=std::round(box.rect.y+(box.rect.height-size)/2);
+        const auto aligned=PixelAlignedRect(box.rect,deviceScale_);
+        // Checkbox/radio themes paint an integer unzoomed rectangle, then
+        // restore the display scale and center the largest fitting square.
+        const float width=std::max(1.0f,std::floor(aligned.right-aligned.left));
+        const float height=std::max(1.0f,std::floor(aligned.bottom-aligned.top));
+        const float size=std::min(width,height);
+        const float left=aligned.left+(width-size)/2;
+        const float top=aligned.top+(height-size)/2;
         const auto r=D2D1::RectF(left,top,left+size,top+size);
-        const auto accent=box.node->disabled?0xff9ca3af:StyleSheet::Color(box.style.Get(L"accent-color",L"#0d73d8"),0xff0d73d8);
+        const auto accent=box.node->disabled?0x4d767676:StyleSheet::Color(box.style.Get(L"accent-color",L"#0075ff"),0xff0075ff);
         if(type==L"radio"){
             brush=SolidBrush(target,0xff6b7280);
             target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F((r.left+r.right)/2,(r.top+r.bottom)/2),size/2-1,size/2-1),brush,1);
             if(box.node->checked){brush=SolidBrush(target,accent);target->FillEllipse(D2D1::Ellipse(D2D1::Point2F((r.left+r.right)/2,(r.top+r.bottom)/2),4,4),brush);}
         }else{
-            const float controlRadius=std::max(1.5f,size*0.15f);
+            const float controlRadius=2.0f;
             if(box.node->indeterminate){
                 brush=SolidBrush(target,accent);
-                target->FillRoundedRectangle(D2D1::RoundedRect(r,controlRadius,controlRadius),brush);
+                if(!PaintSoftwareRoundedRect(target,D2D1::RoundedRect(r,controlRadius,controlRadius),brush))
+                    target->FillRoundedRectangle(D2D1::RoundedRect(r,controlRadius,controlRadius),brush);
                 brush=SolidBrush(target,0xffffffff);const float inset=size*0.25f;
                 target->FillRectangle(D2D1::RectF(r.left+inset,r.top+size*0.45f,
                     r.right-inset,r.top+size*0.55f),brush);
             }else if(box.node->checked){
                 brush=SolidBrush(target,accent);
-                target->FillRoundedRectangle(D2D1::RoundedRect(r,controlRadius,controlRadius),brush);
+                if(!PaintSoftwareRoundedRect(target,D2D1::RoundedRect(r,controlRadius,controlRadius),brush))
+                    target->FillRoundedRectangle(D2D1::RoundedRect(r,controlRadius,controlRadius),brush);
                 brush=SolidBrush(target,0xffffffff);
-                const float scale=size/13.0f,stroke=std::max(1.5f,size*0.14f);
-                const auto middle=D2D1::Point2F(r.left+5.25f*scale,r.top+9.25f*scale);
-                target->DrawLine(D2D1::Point2F(r.left+2.5f*scale,r.top+6.5f*scale),middle,brush,stroke);
-                target->DrawLine(middle,D2D1::Point2F(r.left+10.5f*scale,r.top+3.5f*scale),brush,stroke);
+                Microsoft::WRL::ComPtr<ID2D1Factory> checkFactory;target->GetFactory(&checkFactory);
+                Microsoft::WRL::ComPtr<ID2D1PathGeometry> check;
+                Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
+                if(checkFactory&&SUCCEEDED(checkFactory->CreatePathGeometry(&check))&&SUCCEEDED(check->Open(&sink))){
+                    const auto start=D2D1::Point2F(r.left+size*0.2f,r.top+size*0.5f);
+                    sink->BeginFigure(start,D2D1_FIGURE_BEGIN_HOLLOW);
+                    sink->AddLine(D2D1::Point2F(start.x+size*0.2f,start.y+size*0.2f));
+                    sink->AddLine(D2D1::Point2F(r.right-size*0.2f,r.top+size*0.2f));
+                    sink->EndFigure(D2D1_FIGURE_END_OPEN);
+                    if(SUCCEEDED(sink->Close())&&(!activeRasterSurface||activeRasterSurface->target!=target||
+                       !activeRasterSurface->DrawGeometry(check.Get(),brush,size*0.16f)))
+                        target->DrawGeometry(check.Get(),brush,size*0.16f);
+                }
             }else{
-                brush=SolidBrush(target,box.node->disabled?0xffb8bec6:0xff6b7280);
-                target->FillRoundedRectangle(D2D1::RoundedRect(r,controlRadius,controlRadius),brush);
-                const auto inner=D2D1::RectF(r.left+1,r.top+1,r.right-1,r.bottom-1);
-                brush=SolidBrush(target,box.node->disabled?0xfff3f4f6:0xffffffff);
-                target->FillRoundedRectangle(D2D1::RoundedRect(inner,std::max(0.5f,controlRadius-1),std::max(0.5f,controlRadius-1)),brush);
+                const auto inner=D2D1::RectF(r.left+0.2f,r.top+0.2f,r.right-0.2f,r.bottom-0.2f);
+                if(box.node->disabled){
+                    brush=SolidBrush(target,0x33a9a9a9);
+                    if(!PaintSoftwareRoundedRect(target,D2D1::RoundedRect(inner,controlRadius,controlRadius),brush))
+                        target->FillRoundedRectangle(D2D1::RoundedRect(inner,controlRadius,controlRadius),brush);
+                }
+                brush=SolidBrush(target,box.node->disabled?0x99ffffff:0xffffffff);
+                if(!PaintSoftwareRoundedRect(target,D2D1::RoundedRect(inner,controlRadius,controlRadius),brush))
+                    target->FillRoundedRectangle(D2D1::RoundedRect(inner,controlRadius,controlRadius),brush);
+                brush=SolidBrush(target,box.node->disabled?0x4d767676:0xff767676);
+                const auto frame=D2D1::RoundedRect(D2D1::RectF(r.left+0.5f,r.top+0.5f,
+                    r.right-0.5f,r.bottom-0.5f),controlRadius,controlRadius);
+                if(!PaintSoftwareRoundedRect(target,frame,brush,1))target->DrawRoundedRectangle(frame,brush,1);
             }
         }
     }
@@ -7191,13 +7780,22 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
             const auto rect=D2D1::RectF(box.content.x,box.content.y,box.content.x+box.content.width,box.content.y+box.content.height);
             // A glyph's ink may extend beyond its advance, especially with
             // negative character spacing. Only CSS overflow clips text ink.
+            // Use the same device edge as the ancestor's overflow clip. A
+            // second, fractional clip can recompose untouched backdrop pixels
+            // at a different edge when glyph painting flushes the surface.
             const auto textClip=box.node->type==NodeType::Text?
-                D2D1::RectF(clipBounds.x,clipBounds.y,
-                            clipBounds.x+clipBounds.width,clipBounds.y+clipBounds.height):rect;
-            target->PushAxisAlignedClip(textClip,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                PixelAlignedRect(clipBounds,deviceScale_):rect;
+            PushPaintClip(target,textClip,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
             const auto origin=TextOrigin(box);
             float textLeft=origin.x;
             float textTop=origin.y;
+            if(formControl&&PhysicalTextAlignment(box.style)==L"center"){
+                DWRITE_TEXT_METRICS metrics{};
+                if(SUCCEEDED(box.textLayout->GetMetrics(&metrics))){
+                    const float layoutWidth=std::ceil(metrics.widthIncludingTrailingWhitespace*64)/64;
+                    textLeft+=(metrics.widthIncludingTrailingWhitespace-layoutWidth)/2;
+                }
+            }
             if(formControl){
                 FLOAT dpiX=USER_DEFAULT_SCREEN_DPI,dpiY=USER_DEFAULT_SCREEN_DPI;target->GetDpi(&dpiX,&dpiY);
                 // Center decorative glyphs on a physical half-pixel so their
@@ -7207,28 +7805,31 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
                     textLeft+=0.5f*USER_DEFAULT_SCREEN_DPI/dpiX;
                 if(dpiY>0){
                     float pixelTop=std::round(textTop*dpiY/USER_DEFAULT_SCREEN_DPI);
-                    // DirectWrite's GDI-compatible layout uses a one-device-pixel
-                    // higher ink origin than the Windows browser button baseline.
-                    // Apply the baseline correction in physical pixels so it is
-                    // stable at every display scale instead of becoming a CSS-px
-                    // adjustment tied to one viewport or control.
-                    // Decorative symbols keep the font's centered glyph origin;
-                    // the one-pixel browser baseline correction belongs to labels.
-                    if(IsButtonControlText(box.node)&&!IsDecorativeControlText(box.node))pixelTop+=1.0f;
+                    // Control text uses natural advances and the common rounded
+                    // font baseline; snap only its paint origin to device pixels.
                     textTop=pixelTop*USER_DEFAULT_SCREEN_DPI/dpiY;
                 }
             }
-            target->DrawTextLayout(D2D1::Point2F(textLeft,textTop),box.textLayout.Get(),brush);
-            target->PopAxisAlignedClip();
+            DrawWebTextLayout(target,factory,D2D1::Point2F(textLeft,textTop),box.textLayout.Get(),brush);
+            PopPaintClip(target);
         }
     }
-    if(box.node->tag==L"select"){
-        const float centerX=box.rect.x+box.rect.width-9.5f,centerY=box.rect.y+box.rect.height/2.0f;
+    if(box.node->tag==L"select"&&appearance!=L"none"){
+        const float scale=std::max(0.01f,box.style.deviceScale);
+        const auto bounds=PixelAlignedRect(box.rect,scale);
+        const float arrowWidth=std::floor(8*scale),arrowHeight=std::floor(arrowWidth/2);
+        const float arrowLeft=std::floor(bounds.right*scale-std::floor(scale)-(15*scale+arrowWidth)/2);
+        const float arrowMiddle=std::floor(bounds.top*scale)+std::floor((bounds.bottom-bounds.top)*scale/2);
+        const float centerX=(arrowLeft+arrowWidth/2)/scale;
+        const float centerY=(arrowMiddle-std::floor(arrowHeight/2)+arrowHeight/2)/scale;
         brush=SolidBrush(target,StyleSheet::Color(box.style.Get(L"color",L"#000"),0xff000000));
         if(selectArrowGeometry_){
             D2D1_MATRIX_3X2_F current{};target->GetTransform(&current);
             target->SetTransform(D2D1::Matrix3x2F::Translation(centerX,centerY)*current);
-            target->FillGeometry(selectArrowGeometry_.Get(),brush);target->SetTransform(current);
+            if(!activeRasterSurface||activeRasterSurface->target!=target||
+               !activeRasterSurface->DrawGeometry(selectArrowGeometry_.Get(),brush,2/scale))
+                target->DrawGeometry(selectArrowGeometry_.Get(),brush,2/scale);
+            target->SetTransform(current);
         }
     }
     const auto overflowX=OverflowX(box);
@@ -7239,7 +7840,7 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
     const bool clip=clips(overflowX)||clips(overflowY);
     LayoutRect childClip=clipBounds;
     Microsoft::WRL::ComPtr<ID2D1Layer> roundedOverflowLayer;
-    Microsoft::WRL::ComPtr<ID2D1RoundedRectangleGeometry> roundedOverflowGeometry;
+    Microsoft::WRL::ComPtr<ID2D1Geometry> roundedOverflowGeometry;
     bool roundedOverflowClip=false;
     std::unique_ptr<ScopedWebTextRendering> roundedTextRendering;
     if(clip){
@@ -7249,20 +7850,13 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
         // descendant repaint the inside edge of the rounded border.
         const auto paddingBox=PaddingBox(box);
         childClip=IntersectRects(clipBounds,paddingBox);
-        target->PushAxisAlignedClip(PixelAlignedRect(paddingBox,deviceScale_),
+        PushPaintClip(target,PixelAlignedRect(paddingBox,deviceScale_),
                                     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-        const float clipRadiusX=std::max(0.0f,radius.x-
-            std::max(borders.left,borders.right));
-        const float clipRadiusY=std::max(0.0f,radius.y-
-            std::max(borders.top,borders.bottom));
-        if(clipRadiusX>0&&clipRadiusY>0){
-            Microsoft::WRL::ComPtr<ID2D1Factory> clipFactory;
-            target->GetFactory(&clipFactory);
-            if(clipFactory&&SUCCEEDED(clipFactory->CreateRoundedRectangleGeometry(
-                    D2D1::RoundedRect(PixelAlignedRect(paddingBox,deviceScale_),clipRadiusX,clipRadiusY),
-                    &roundedOverflowGeometry))&&
-               SUCCEEDED(target->CreateLayer(nullptr,&roundedOverflowLayer))){
-                target->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(),
+        const auto clipRadius=InsetCornerRadii(radius,borders);
+        if(clipRadius.Any()){
+            roundedOverflowGeometry=RoundedBoxGeometry(target,PixelAlignedRect(paddingBox,deviceScale_),clipRadius);
+            if(roundedOverflowGeometry&&SUCCEEDED(target->CreateLayer(nullptr,&roundedOverflowLayer))){
+                PushPaintLayer(target,D2D1::LayerParameters(D2D1::InfiniteRect(),
                     roundedOverflowGeometry.Get()),roundedOverflowLayer.Get());
                 roundedOverflowClip=true;
                 // The mask layer has alpha even on an opaque page target.
@@ -7287,14 +7881,46 @@ void LayoutEngine::PaintBox(ID2D1RenderTarget* target,IDWriteFactory* factory,La
     }else{
         for(auto* child:box.paintChildren)paintChild(*child);
     }
+    if(collapsedTable==&box){
+        // Paint shared grid edges after cell backgrounds. A filled, snapped
+        // strip keeps odd and even device widths sharp without a half-pixel
+        // stroke offset, and a spanning cell contributes no internal edge.
+        const auto model=BuildTableGrid(box);
+        const auto edges=ResolveCollapsedTableEdges(box,model);
+        const auto columns=ResolveTableColumns(box,model,box.content.width,viewportWidth_);
+        std::vector<float> x(columns.size()+1,box.content.x),y(model.rows.size()+1,box.content.y);
+        for(size_t c=0;c<columns.size();++c)x[c+1]=x[c]+columns[c];
+        for(size_t r=0;r<model.rows.size();++r)y[r+1]=y[r]+model.rows[r].box->rect.height;
+        const auto fill=[&](const CollapsedEdge& edge,const LayoutRect& rect){
+            if(edge.style&&edge.width>0&&edge.rank!=100)
+                target->FillRectangle(PixelAlignedRect(rect,deviceScale_),SolidBrush(target,BorderColor(*edge.style,edge.side)));
+        };
+        for(size_t r=0;r<edges.horizontal.size();++r)
+            for(size_t c=0;c<columns.size();++c){
+                const auto& edge=edges.horizontal[r][c];
+                const float left=r<edges.vertical.size()?edges.vertical[r][c].width/2:
+                    (r?edges.vertical[r-1][c].width/2:0);
+                const float right=r<edges.vertical.size()?edges.vertical[r][c+1].width/2:
+                    (r?edges.vertical[r-1][c+1].width/2:0);
+                fill(edge,{x[c]-left,y[r]-edge.width/2,columns[c]+left+right,edge.width});
+            }
+        for(size_t r=0;r<edges.vertical.size();++r)
+            for(size_t c=0;c<x.size();++c){
+                const auto& edge=edges.vertical[r][c];
+                const size_t adjoining=std::min(c,columns.size()-1);
+                const float top=edges.horizontal[r][adjoining].width/2;
+                const float bottom=edges.horizontal[r+1][adjoining].width/2;
+                fill(edge,{x[c]-edge.width/2,y[r]-top,edge.width,y[r+1]-y[r]+top+bottom});
+            }
+    }
     if(clip){
-        if(roundedOverflowClip)target->PopLayer();
+        if(roundedOverflowClip)PopPaintLayer(target);
         roundedTextRendering.reset();
-        target->PopAxisAlignedClip();
+        PopPaintClip(target);
     }
     if(!box.viewportScrollContainer)PaintScrollbars(target,box);
     PaintOutline(target,box.style,box.rect,radius,viewportWidth_);
-    if(opacityLayer)target->PopLayer();
+    if(opacityLayer)PopPaintLayer(target);
     opacityTextRendering.reset();
     if(transformed)target->SetTransform(previousTransform);
 }
@@ -7316,7 +7942,7 @@ void LayoutEngine::PaintScrollbars(ID2D1RenderTarget* target,const LayoutBox& bo
         if(!scrollbar.standardStyling&&!thumbBackground.empty())thumbColor=StyleSheet::Color(thumbBackground,thumbColor);
         const float trackBottom=scrollbar.track.y+scrollbar.track.height;
         if((trackColor>>24)!=0){brush=SolidBrush(target,trackColor);target->FillRectangle(D2D1::RectF(scrollbar.track.x,scrollbar.track.y,scrollbar.track.x+scrollbar.track.width,trackBottom),brush);}
-        brush=SolidBrush(target,thumbColor);const auto thumbRadii=UniformCornerRadii(thumbStyle,scrollbar.thumb.width,scrollbar.thumb.height,viewportWidth_);const float thumbRadius=scrollbar.standardStyling?std::min(scrollbar.thumb.width,scrollbar.thumb.height)/2.0f:(thumbRadii.x>0?thumbRadii.x:std::min(scrollbar.thumb.width,scrollbar.thumb.height)/2.0f);target->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(scrollbar.thumb.x,scrollbar.thumb.y,scrollbar.thumb.x+scrollbar.thumb.width,scrollbar.thumb.y+scrollbar.thumb.height),thumbRadius,thumbRadius),brush);
+        brush=SolidBrush(target,thumbColor);const auto thumbRadii=ResolveCornerRadii(thumbStyle,scrollbar.thumb.width,scrollbar.thumb.height,viewportWidth_);const float thumbRadius=scrollbar.standardStyling?std::min(scrollbar.thumb.width,scrollbar.thumb.height)/2.0f:(thumbRadii.x>0?thumbRadii.x:std::min(scrollbar.thumb.width,scrollbar.thumb.height)/2.0f);target->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(scrollbar.thumb.x,scrollbar.thumb.y,scrollbar.thumb.x+scrollbar.thumb.width,scrollbar.thumb.y+scrollbar.thumb.height),thumbRadius,thumbRadius),brush);
         if(scrollbar.arrowHeight>0&&verticalArrowGeometry_){
             const float center=scrollbar.track.x+scrollbar.track.width/2;
             const float halfWidth=scrollbar.thumb.width/2.0f;
@@ -7347,7 +7973,7 @@ void LayoutEngine::PaintScrollbars(ID2D1RenderTarget* target,const LayoutBox& bo
         if(!horizontalScrollbar.standardStyling&&!thumbBackground.empty())thumbColor=StyleSheet::Color(thumbBackground,thumbColor);
         const float trackRight=horizontalScrollbar.track.x+horizontalScrollbar.track.width;
         if((trackColor>>24)!=0){brush=SolidBrush(target,trackColor);target->FillRectangle(D2D1::RectF(horizontalScrollbar.track.x,horizontalScrollbar.track.y,trackRight,horizontalScrollbar.track.y+horizontalScrollbar.track.height),brush);}
-        brush=SolidBrush(target,thumbColor);const auto thumbRadii=UniformCornerRadii(thumbStyle,horizontalScrollbar.thumb.width,horizontalScrollbar.thumb.height,viewportWidth_);const float thumbRadius=horizontalScrollbar.standardStyling?std::min(horizontalScrollbar.thumb.width,horizontalScrollbar.thumb.height)/2.0f:(thumbRadii.x>0?thumbRadii.x:std::min(horizontalScrollbar.thumb.width,horizontalScrollbar.thumb.height)/2.0f);target->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(horizontalScrollbar.thumb.x,horizontalScrollbar.thumb.y,horizontalScrollbar.thumb.x+horizontalScrollbar.thumb.width,horizontalScrollbar.thumb.y+horizontalScrollbar.thumb.height),thumbRadius,thumbRadius),brush);
+        brush=SolidBrush(target,thumbColor);const auto thumbRadii=ResolveCornerRadii(thumbStyle,horizontalScrollbar.thumb.width,horizontalScrollbar.thumb.height,viewportWidth_);const float thumbRadius=horizontalScrollbar.standardStyling?std::min(horizontalScrollbar.thumb.width,horizontalScrollbar.thumb.height)/2.0f:(thumbRadii.x>0?thumbRadii.x:std::min(horizontalScrollbar.thumb.width,horizontalScrollbar.thumb.height)/2.0f);target->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(horizontalScrollbar.thumb.x,horizontalScrollbar.thumb.y,horizontalScrollbar.thumb.x+horizontalScrollbar.thumb.width,horizontalScrollbar.thumb.y+horizontalScrollbar.thumb.height),thumbRadius,thumbRadius),brush);
     if(horizontalScrollbar.arrowWidth>0&&horizontalArrowGeometry_){
             const float center=horizontalScrollbar.track.y+horizontalScrollbar.track.height/2.0f;
             const float halfHeight=horizontalScrollbar.thumb.height/2.0f;
@@ -8022,5 +8648,155 @@ void LayoutEngine::DumpBox(const LayoutBox& box,std::wstring& output,bool& first
     for(const auto& child:box.children)DumpBox(*child,output,first,includeText);
 }
 std::wstring LayoutEngine::DumpJson(bool includeText)const{std::wstring out=L"[";bool first=true;if(root_)DumpBox(*root_,out,first,includeText);return out+L"]";}
+
+ComputedStyle LayoutEngine::StyleForRendering(const std::shared_ptr<Node>& node) const {
+    if(const auto* box=BoxFor(node))return box->style;
+    // A display:none ancestor stops box construction. Connected descendants
+    // still inherit computed styles from their actual ancestor chain.
+    std::vector<std::shared_ptr<Node>> ancestors;
+    for(auto current=node;current;current=current->parent.lock())ancestors.push_back(current);
+    ComputedStyle inherited;bool hasParent=false;
+    for(auto it=ancestors.rbegin();it!=ancestors.rend();++it){
+        if(const auto* box=BoxFor(*it))inherited=box->style;
+        else inherited=styleSheet_.Compute(*it,hasParent?&inherited:nullptr);
+        hasParent=true;
+    }
+    inherited.deviceScale=deviceScale_;return inherited;
+}
+
+std::wstring LayoutEngine::DumpRenderingStyleJson(const ComputedStyle& style) const {
+    // Use layout/paint's fallbacks and resolvers for this bounded projection.
+    // The original sparse style map is retained separately in the capture.
+    std::wostringstream out;out.imbue(std::locale::classic());out<<std::setprecision(9);
+    const auto quote=[](const std::wstring& value){
+        std::wstring result=L"\"";const wchar_t hex[]=L"0123456789abcdef";
+        for(const auto c:value){if(c==L'"'||c==L'\\'){result+=L'\\';result+=c;}
+            else if(c<32){result+=L"\\u00";result+=hex[(c>>4)&15];result+=hex[c&15];}
+            else result+=c;}
+        return result+L'"';
+    };
+    bool first=true;out<<L'{';
+    const auto add=[&](const wchar_t* key,const std::wstring& value){
+        if(!first)out<<L',';first=false;out<<quote(key)<<L':'<<quote(value);
+    };
+    const auto number=[](float value,const wchar_t* suffix=L""){
+        std::wostringstream text;text.imbue(std::locale::classic());
+        text<<std::setprecision(9)<<value<<suffix;return text.str();
+    };
+    for(const auto* key:{L"display",L"position",L"visibility",L"box-sizing",L"direction",
+        L"text-align",L"font-style",L"font-weight",L"font-kerning",L"pointer-events",
+        L"flex-direction",L"flex-wrap",L"flex-grow",L"flex-shrink",L"list-style-position",L"list-style-type"})
+        add(key,style.Get(key));
+    const auto whiteSpace=style.Get(L"white-space");
+    add(L"white-space",whiteSpace.empty()?L"normal":whiteSpace);
+    add(L"overflow-x",style.Get(L"overflow-x",style.Get(L"overflow",L"visible")));
+    add(L"overflow-y",style.Get(L"overflow-y",style.Get(L"overflow",L"visible")));
+    add(L"opacity",number(std::clamp(StyleSheet::Length(style.Get(L"opacity",L"1"),1,1,1),0.0f,1.0f)));
+    auto spacing=style.Get(L"letter-spacing");if(spacing.empty())spacing=L"normal";
+    add(L"letter-spacing",spacing==L"normal"?spacing:number(StyleSheet::Length(spacing,FontSize(style),viewportWidth_,0,FontSize(style)),L"px"));
+    auto lineHeight=style.Get(L"line-height");if(lineHeight.empty())lineHeight=L"normal";
+    add(L"line-height",lineHeight==L"normal"?lineHeight:number(LineHeight(style),L"px"));
+    add(L"font-size",number(FontSize(style),L"px"));
+    const auto color=[&](const wchar_t* key,unsigned int argb){
+        std::wostringstream hex;hex<<L'#'<<std::hex<<std::setfill(L'0')<<std::setw(6)
+            <<(argb&0xffffffu)<<std::setw(2)<<(argb>>24);add(key,hex.str());
+    };
+    color(L"color",StyleSheet::Color(style.Get(L"color",L"#000000")));
+    color(L"background-color",BackgroundColor(style));
+    out<<L'}';return out.str();
+}
+
+std::wstring LayoutEngine::DumpRenderingTextJson()const{
+    std::map<const Node*,std::wstring> paths;
+    const std::function<void(const std::shared_ptr<Node>&,const std::wstring&)> index=
+        [&](const std::shared_ptr<Node>& node,const std::wstring& path){
+            if(!node)return;paths[node.get()]=path;
+            for(size_t i=0;i<node->children.size();++i)index(node->children[i],path+L"/"+std::to_wstring(i));
+        };
+    auto html=document_.QuerySelector(L"html");if(!html)html=document_.Body();index(html,L"0");
+    std::wostringstream out;out.imbue(std::locale::classic());out<<std::setprecision(9)<<L'[';
+    bool first=true;
+    const auto quote=[](const std::wstring& value){return L"\""+EscapeJson(value)+L"\"";};
+    const std::function<void(const LayoutBox*)> walk=[&](const LayoutBox* box){
+        if(!box||!box->visible)return;
+        if(box->node&&box->node->type==NodeType::Text){
+            const auto source=box->generatedFrom&&box->generatedFrom->type==NodeType::Text?box->generatedFrom:box->node;
+            const auto path=paths.find(source.get());
+            const auto text=BoxText(*box);
+            auto& measured=*const_cast<LayoutBox*>(box);
+            if(path!=paths.end()&&!text.empty()){
+                EnsureTextLayout(measured,SharedWriteFactory(),text);
+                if(measured.textLayout){
+                    Microsoft::WRL::ComPtr<RenderingGlyphCollector> shaped;
+                    shaped.Attach(new RenderingGlyphCollector(SharedWriteFactory(),text.size(),!box->style.Is(L"font-kerning",L"none")));
+                    const bool glyphsCollected=SUCCEEDED(measured.textLayout->Draw(nullptr,shaped.Get(),0,0));
+                    UINT32 lineCount=0;measured.textLayout->GetLineMetrics(nullptr,0,&lineCount);
+                    std::vector<DWRITE_LINE_METRICS> lines(lineCount);
+                    measured.textLayout->GetLineMetrics(lines.data(),lineCount,&lineCount);
+                    const auto origin=TextOrigin(*box);
+                    const auto font=InlineFontBoxMetrics(box->style);
+                    size_t raw=box->textSourceOffset,lineStart=0;float lineTop=0;
+                    for(UINT32 line=0;line<lineCount;++line){
+                        const auto& metrics=lines[line];
+                        for(size_t pos=lineStart;pos<lineStart+metrics.length&&pos<text.size();++pos){
+                            if(IsCollapsibleTextSpace(text[pos]))continue;
+                            while(raw<source->text.size()&&IsCollapsibleTextSpace(source->text[raw]))++raw;
+                            const size_t units=text[pos]>=0xd800&&text[pos]<=0xdbff&&pos+1<text.size()&&
+                                text[pos+1]>=0xdc00&&text[pos+1]<=0xdfff?2:1;
+                            DWRITE_HIT_TEST_METRICS hit{};UINT32 count=0;
+                            if(SUCCEEDED(measured.textLayout->HitTestTextRange(static_cast<UINT32>(pos),
+                                static_cast<UINT32>(units),origin.x,origin.y,&hit,1,&count))&&count==1){
+                                if(!first)out<<L',';first=false;
+                                const bool maps=raw+units<=source->text.size()&&source->text.compare(raw,units,text,pos,units)==0;
+                                const auto& glyph=shaped->glyphs[pos];
+                                const float nextOffset=pos+units<lineStart+metrics.length&&pos+units<text.size()?
+                                    shaped->glyphs[pos+units].offset:0;
+                                // HarfBuzz splits a legacy kern adjustment across
+                                // the two logical advances; DirectWrite places it
+                                // on the first. Normalize range boundaries while
+                                // retaining raw advances and actual glyph ink data.
+                                const double startFraction=static_cast<double>(pos-glyph.clusterStart)/glyph.clusterLength;
+                                const double endFraction=static_cast<double>(pos+units-glyph.clusterStart)/glyph.clusterLength;
+                                const auto legacyBoundary=[&](double fraction){
+                                    return (-glyph.legacyIncoming+(glyph.legacyIncoming-glyph.legacyOutgoing)*fraction)/2.0;
+                                };
+                                const double left=hit.left+(glyph.rtl?-nextOffset:glyph.offset)+legacyBoundary(startFraction);
+                                const double right=hit.left+hit.width+(glyph.rtl?-glyph.offset:nextOffset)+legacyBoundary(endFraction);
+                                const double layoutUnits=64.0*std::max(0.01f,box->style.deviceScale);
+                                const auto bound=[&](double value,bool upper){
+                                    double scaled=value*layoutUnits;const auto nearest=std::round(scaled);
+                                    if(std::abs(scaled-nearest)<0.001)scaled=nearest;
+                                    return (upper?std::ceil(scaled):std::floor(scaled))/layoutUnits;
+                                };
+                                const auto rangeLeft=bound(left,false),rangeRight=bound(right,true);
+                                out<<L"{\"path\":"<<quote(path->second)<<L",\"start\":"<<raw
+                                   <<L",\"length\":"<<units<<L",\"text\":"<<quote(text.substr(pos,units))
+                                   <<L",\"mapped\":"<<(maps?L"true":L"false")<<L",\"rect\":["
+                                   <<rangeLeft<<L','<<hit.top+metrics.baseline-font.baseline
+                                   <<L','<<rangeRight-rangeLeft<<L','<<font.height<<L"],\"rawHitRect\":["
+                                   <<hit.left<<L','<<hit.top<<L','<<hit.width<<L','<<hit.height<<L"],\"glyph\":{\"collected\":"
+                                   <<(glyphsCollected&&glyph.present?L"true":L"false")<<L",\"fontResolved\":"
+                                   <<(glyph.fontResolved?L"true":L"false")<<L",\"family\":"<<quote(glyph.family)
+                                   <<L",\"face\":"<<quote(glyph.face)<<L",\"postScript\":"<<quote(glyph.postScript)
+                                   <<L",\"index\":"<<glyph.index<<L",\"advance\":"<<glyph.advance
+                                   <<L",\"placementOffset\":"<<glyph.offset<<L",\"emSize\":"<<glyph.emSize
+                                   <<L",\"legacyIncoming\":"<<glyph.legacyIncoming<<L",\"legacyOutgoing\":"<<glyph.legacyOutgoing
+                                   <<L",\"clusterStart\":"<<glyph.clusterStart<<L",\"clusterLength\":"<<glyph.clusterLength
+                                   <<L",\"rtl\":"<<(glyph.rtl?L"true":L"false")<<L"},\"baseline\":"
+                                   <<hit.top+metrics.baseline<<L",\"lineBox\":["
+                                   <<origin.x<<L','<<origin.y+lineTop<<L','<<box->content.width<<L','<<metrics.height
+                                   <<L"],\"declaredFont\":"<<quote(box->style.Get(L"font-family"))<<L'}';
+                            }
+                            raw+=units;pos+=units-1;
+                        }
+                        lineStart+=metrics.length;lineTop+=metrics.height;
+                    }
+                }
+            }
+        }
+        for(const auto& child:box->children)walk(child.get());
+    };
+    walk(root_.get());out<<L']';return out.str();
+}
 
 } // namespace TWebFrame::Internal

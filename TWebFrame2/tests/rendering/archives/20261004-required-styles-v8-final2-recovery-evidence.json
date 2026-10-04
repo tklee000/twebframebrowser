@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "archiveId": "20261004-required-styles-v8-final2-recovery-evidence",
+  "zipFile": "20261004-required-styles-v8-final2-recovery-evidence.zip",
+  "zipSha256": "52FDFF92CCB6CFA5EF222A9D5178146DB46A239BC26392EFD58F3E76D9B474F7",
+  "bytes": 13058222,
+  "entryCount": 4014,
+  "everyEntryRecoveryVerified": true,
+  "baseArchiveSha256": "BD2071D1D39DD5B7C39258F49F19F6E9884EB6EC293DE9C30DADDE88F82FB88C",
+  "restoredSourceHashesVerified": 140,
+  "rerenderedPairs": 120,
+  "styleCalibrationRerenderedPairs": 18,
+  "styleCalibrationPassed": 12,
+  "styleCalibrationFailed": 6,
+  "allReferenceNativeAndCdpPixelSignaturesMatch": true,
+  "allDomStyleGeometryDiagnosticsMatch": true
+}

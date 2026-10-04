@@ -1,4 +1,5 @@
 #include "DOM.h"
+#include "CSSSyntax.h"
 #include "NumericParser.h"
 
 #include <algorithm>
@@ -20,6 +21,26 @@ namespace TWebFrame::Internal {
 namespace {
 
 bool IsSpace(wchar_t c) { return std::iswspace(c) != 0; }
+
+std::wstring AdjustSvgAttribute(const std::wstring& name){
+    // HTML tree construction adjusts these tokenized lowercase SVG names.
+    // https://html.spec.whatwg.org/multipage/parsing.html#adjust-svg-attributes
+    static const FastMap<std::wstring,std::wstring> names=[](){
+        FastMap<std::wstring,std::wstring> result;
+        for(const auto* adjusted:{L"attributeName",L"attributeType",L"baseFrequency",L"baseProfile",
+            L"calcMode",L"clipPathUnits",L"diffuseConstant",L"edgeMode",L"filterUnits",L"glyphRef",
+            L"gradientTransform",L"gradientUnits",L"kernelMatrix",L"kernelUnitLength",L"keyPoints",
+            L"keySplines",L"keyTimes",L"lengthAdjust",L"limitingConeAngle",L"markerHeight",L"markerUnits",
+            L"markerWidth",L"maskContentUnits",L"maskUnits",L"numOctaves",L"pathLength",L"patternContentUnits",
+            L"patternTransform",L"patternUnits",L"pointsAtX",L"pointsAtY",L"pointsAtZ",L"preserveAlpha",
+            L"preserveAspectRatio",L"primitiveUnits",L"refX",L"refY",L"repeatCount",L"repeatDur",
+            L"requiredExtensions",L"requiredFeatures",L"specularConstant",L"specularExponent",L"spreadMethod",
+            L"startOffset",L"stdDeviation",L"stitchTiles",L"surfaceScale",L"systemLanguage",L"tableValues",
+            L"targetX",L"targetY",L"textLength",L"viewBox",L"viewTarget",L"xChannelSelector",L"yChannelSelector",L"zoomAndPan"})
+            result.emplace(ToLower(adjusted),adjusted);
+        return result;
+    }();const auto found=names.find(name);return found==names.end()?name:found->second;
+}
 
 template<typename Callback>
 void ForEachClassToken(const std::wstring& value, Callback&& callback) {
@@ -206,26 +227,13 @@ void CloseOpenElement(std::vector<std::shared_ptr<Node>>& stack,
 void ParseStyleAttribute(const std::wstring& source,
                          FastMap<std::wstring, std::wstring>& out,
                          FastMap<std::wstring, std::wstring>* priorities = nullptr) {
-    size_t start = 0;
-    while (start < source.size()) {
-        size_t end = source.find(L';', start);
-        if (end == std::wstring::npos) end = source.size();
-        const auto part = source.substr(start, end - start);
-        const size_t colon = part.find(L':');
-        if (colon != std::wstring::npos) {
-            auto name = Trim(part.substr(0, colon));
-            if (name.rfind(L"--", 0) != 0) name = ToLower(name);
-            auto value = Trim(part.substr(colon + 1));
-            const auto lowerValue = ToLower(value);
-            constexpr auto important = L"!important";
-            if (lowerValue.size() >= 10 &&
-                lowerValue.compare(lowerValue.size() - 10, 10, important) == 0) {
-                value = Trim(value.substr(0, value.size() - 10));
-                if (priorities && !name.empty()) (*priorities)[name] = L"important";
-            } else if (priorities && !name.empty()) priorities->erase(name);
-            if (!name.empty()) out[name] = value;
+    for(const auto& declaration:CssSyntax::Declarations(source)){
+        if(priorities&&priorities->count(declaration.name)&&!declaration.important)continue;
+        out[declaration.name]=declaration.value;
+        if(priorities){
+            if(declaration.important)(*priorities)[declaration.name]=L"important";
+            else priorities->erase(declaration.name);
         }
-        start = end + 1;
     }
 }
 
@@ -247,7 +255,7 @@ bool MatchPlainSimple(const std::shared_ptr<Node>& node,std::wstring_view select
         if(!equalsInsensitive(node->tag,selector.substr(begin,index-begin)))return false;
     }else if(selector[index]==L'*')++index;
     while(index<selector.size()){
-        if(selector[index]!=L'#'&&selector[index]!=L'.'){++index;continue;}
+        if(selector[index]!=L'#'&&selector[index]!=L'.')return false;
         const wchar_t kind=selector[index++];const size_t begin=index;
         while(index<selector.size()&&identifier(selector[index]))++index;
         const auto token=selector.substr(begin,index-begin);
@@ -273,224 +281,22 @@ bool MatchPlainSimple(const std::shared_ptr<Node>& node,std::wstring_view select
     return true;
 }
 
-bool MatchSimple(const std::shared_ptr<Node>& node, const std::wstring& source) {
-    if (!node || node->type != NodeType::Element) return false;
-    // The overwhelming majority of production selectors are tag/class/id
-    // compounds.  Match those without copying and repeatedly scanning the
-    // selector for every supported pseudo-class.  Functional/state selectors
-    // stay on the complete path below.
-    if(source.find(L':')==std::wstring::npos&&source.find(L'[')==std::wstring::npos)
-        return MatchPlainSimple(node,source);
-    auto selector = Trim(source);
-    if (selector.empty() || selector == L"*") return true;
-
-    // Supported dynamic pseudo classes and relational/simple functional selectors.
-    for (;;) {
-        const auto hasPos = selector.find(L":has(");
-        if (hasPos == std::wstring::npos) break;
-        size_t close=hasPos+5;int depth=1;for(;close<selector.size()&&depth;++close){if(selector[close]==L'(')++depth;else if(selector[close]==L')')--depth;}
-        if(depth!=0)return false;const auto relative=Trim(selector.substr(hasPos+5,close-hasPos-6));bool found=false;
-        std::function<void(const std::shared_ptr<Node>&)> find=[&](const std::shared_ptr<Node>& current){if(found)return;for(const auto& child:current->children){if(child->type==NodeType::Element&&MatchSimple(child,relative)){found=true;return;}find(child);}};
-        find(node);if(!found)return false;selector.erase(hasPos,close-hasPos);
-    }
-    for (;;) {
-        const auto notPos = selector.find(L":not(");
-        if (notPos == std::wstring::npos) break;
-        const auto close = selector.find(L')', notPos + 5);
-        if (close == std::wstring::npos) return false;
-        if (MatchSimple(node, selector.substr(notPos + 5, close - notPos - 5))) return false;
-        selector.erase(notPos, close - notPos + 1);
-    }
-    auto consumePseudo = [&](const wchar_t* text, bool state) {
-        const std::wstring p(text);
-        size_t pos;
-        while ((pos = selector.find(p)) != std::wstring::npos) {
-            if (!state) return false;
-            selector.erase(pos, p.size());
-        }
-        return true;
-    };
-    auto isEdgeChild=[&](bool first){
-        auto parent=node->parent.lock();if(!parent)return false;
-        if(first){for(const auto& child:parent->children)if(child->type==NodeType::Element)return child==node;}
-        else{for(auto it=parent->children.rbegin();it!=parent->children.rend();++it)if((*it)->type==NodeType::Element)return *it==node;}
-        return false;
-    };
-    auto isEdgeOfType=[&](bool first){
-        auto parent=node->parent.lock();if(!parent)return false;
-        if(first){for(const auto& child:parent->children)
-            if(child->type==NodeType::Element&&child->tag==node->tag)return child==node;}
-        else{for(auto it=parent->children.rbegin();it!=parent->children.rend();++it)
-            if((*it)->type==NodeType::Element&&(*it)->tag==node->tag)return *it==node;}
-        return false;
-    };
-    auto elementSiblingCount=[&](bool sameType){
-        auto parent=node->parent.lock();if(!parent)return 0;
-        int count=0;for(const auto& child:parent->children)
-            if(child->type==NodeType::Element&&(!sameType||child->tag==node->tag))++count;
-        return count;
-    };
-    const bool canBeDisabled=node->tag==L"button"||node->tag==L"fieldset"||
-        node->tag==L"input"||node->tag==L"optgroup"||node->tag==L"option"||
-        node->tag==L"select"||node->tag==L"textarea";
-    const bool canBeRequired=node->tag==L"input"||node->tag==L"select"||node->tag==L"textarea";
-    const bool isLink=(node->tag==L"a"||node->tag==L"area")&&node->attributes.count(L"href")!=0;
-    auto isEmpty=[&](){
-        for(const auto& child:node->children)
-            if(child->type==NodeType::Element||
-               (child->type==NodeType::Text&&!child->text.empty()))return false;
-        return true;
-    };
-    auto childIndex=[&](){
-        auto parent=node->parent.lock();if(!parent)return 0;int index=0;
-        for(const auto& child:parent->children)if(child->type==NodeType::Element){++index;if(child==node)return index;}
-        return 0;
-    };
-    auto typeIndex=[&](){
-        auto parent=node->parent.lock();if(!parent)return 0;int index=0;
-        for(const auto& child:parent->children)if(child->type==NodeType::Element&&child->tag==node->tag){++index;if(child==node)return index;}
-        return 0;
-    };
-    auto matchesNth=[](int index,std::wstring expression){
-        expression=ToLower(expression);expression.erase(std::remove_if(expression.begin(),expression.end(),IsSpace),expression.end());
-        if(index<=0||expression.empty())return false;if(expression==L"odd")return index%2==1;if(expression==L"even")return index%2==0;
-        const auto integer=[](const std::wstring& text,int& value){
-            size_t used=0;return TryParseInteger(text,value,&used)&&used==text.size();
-        };
-        const auto n=expression.find(L'n');
-        if(n==std::wstring::npos){int exact=0;return integer(expression,exact)&&index==exact;}
-        const auto coefficient=expression.substr(0,n);int a=0;
-        if(coefficient.empty()||coefficient==L"+")a=1;
-        else if(coefficient==L"-")a=-1;
-        else if(!integer(coefficient,a))return false;
-        int b=0;if(n+1<expression.size()&&!integer(expression.substr(n+1),b))return false;
-        if(a==0)return index==b;
-        const int delta=index-b;return delta%a==0&&delta/a>=0;
-    };
-    for(;;){
-        const auto position=selector.find(L":nth-child(");if(position==std::wstring::npos)break;
-        const auto close=selector.find(L')',position+11);if(close==std::wstring::npos||!matchesNth(childIndex(),selector.substr(position+11,close-position-11)))return false;
-        selector.erase(position,close-position+1);
-    }
-    for(;;){
-        const auto position=selector.find(L":nth-of-type(");if(position==std::wstring::npos)break;
-        const auto close=selector.find(L')',position+13);if(close==std::wstring::npos||!matchesNth(typeIndex(),selector.substr(position+13,close-position-13)))return false;
-        selector.erase(position,close-position+1);
-    }
-    // :root is a regular pseudo-class and may be compounded with an attribute,
-    // class, or id selector (for example :root[data-theme="light"]).  Keeping
-    // it in the token stream made the generic parser read "root" as a tag.
-    for(;;){
-        const auto position=selector.find(L":root");if(position==std::wstring::npos)break;
-        const auto end=position+5;
-        if((position>0&&(std::iswalnum(selector[position-1])||selector[position-1]==L'-'||selector[position-1]==L'_'))||
-           (end<selector.size()&&(std::iswalnum(selector[end])||selector[end]==L'-'||selector[end]==L'_')))return false;
-        if(node->tag!=L"html")return false;
-        selector.erase(position,5);
-    }
-    if (!consumePseudo(L":checked", node->checked) ||
-        !consumePseudo(L":indeterminate", node->indeterminate) ||
-        !consumePseudo(L":disabled", canBeDisabled&&node->disabled) ||
-        !consumePseudo(L":enabled", canBeDisabled&&!node->disabled) ||
-        !consumePseudo(L":required", canBeRequired&&node->attributes.count(L"required")!=0) ||
-        !consumePseudo(L":optional", canBeRequired&&node->attributes.count(L"required")==0) ||
-        !consumePseudo(L":link",isLink) ||
-        !consumePseudo(L":any-link",isLink) ||
-        !consumePseudo(L":hover", node->hovered) ||
-        !consumePseudo(L":focus-within", node->focusWithin||node->focused) ||
-        !consumePseudo(L":focus-visible", node->focusVisible) ||
-        !consumePseudo(L":focus", node->focused) ||
-        !consumePseudo(L":empty",isEmpty()) ||
-        !consumePseudo(L":first-child",isEdgeChild(true)) ||
-        !consumePseudo(L":last-child",isEdgeChild(false)) ||
-        !consumePseudo(L":first-of-type",isEdgeOfType(true)) ||
-        !consumePseudo(L":last-of-type",isEdgeOfType(false)) ||
-        !consumePseudo(L":only-child",elementSiblingCount(false)==1) ||
-        !consumePseudo(L":only-of-type",elementSiblingCount(true)==1)) return false;
-    if(selector.find(L":active")!=std::wstring::npos||
-       selector.find(L":visited")!=std::wstring::npos)return false;
-    // Unsupported pseudo-classes invalidate a selector. Removing only the
-    // colon would make a state rule match every element with its base selector.
-    if(selector.find(L':')!=std::wstring::npos)return false;
-
-    size_t i = 0;
-    if (i < selector.size() && (std::iswalpha(selector[i]) || selector[i] == L'_')) {
-        const size_t begin = i++;
-        while (i < selector.size() && (std::iswalnum(selector[i]) || selector[i] == L'-' || selector[i] == L'_')) ++i;
-        if (node->tag != ToLower(selector.substr(begin, i - begin))) return false;
-    }
-    while (i < selector.size()) {
-        if (selector[i] == L'#' || selector[i] == L'.') {
-            const wchar_t kind = selector[i++];
-            const size_t begin = i;
-            while (i < selector.size() && (std::iswalnum(selector[i]) || selector[i] == L'-' || selector[i] == L'_')) ++i;
-            const auto word = selector.substr(begin, i - begin);
-            if (kind == L'#' && node->Attribute(L"id") != word) return false;
-            if (kind == L'.' && !node->HasClass(word)) return false;
-        } else if (selector[i] == L'[') {
-            const size_t close = selector.find(L']', i + 1);
-            if (close == std::wstring::npos) return false;
-            const auto expression = Trim(selector.substr(i + 1, close - i - 1));
-            const size_t equals=expression.find(L'=');
-            size_t operatorPosition=equals;
-            std::wstring attributeOperator;
-            if(equals!=std::wstring::npos){
-                if(equals>0&&std::wstring(L"~|^$*").find(expression[equals-1])!=std::wstring::npos){
-                    operatorPosition=equals-1;attributeOperator=expression.substr(equals-1,2);
-                }else attributeOperator=L"=";
-            }
-            if (operatorPosition == std::wstring::npos) {
-                if (node->attributes.count(ToLower(expression)) == 0) return false;
-            } else {
-                auto key = ToLower(Trim(expression.substr(0, operatorPosition)));
-                auto value = Trim(expression.substr(operatorPosition + attributeOperator.size()));
-                bool caseInsensitive=false;
-                if(value.size()>=2&&std::iswspace(value[value.size()-2])&&
-                   (value.back()==L'i'||value.back()==L'I')){
-                    caseInsensitive=true;value=Trim(value.substr(0,value.size()-1));
-                }
-                if (value.size() >= 2 &&
-                    ((value.front() == L'\'' && value.back() == L'\'') ||
-                     (value.front() == L'"' && value.back() == L'"')))
-                    value = value.substr(1, value.size() - 2);
-                if(node->attributes.count(key)==0)return false;
-                auto actual=node->Attribute(key);
-                if(caseInsensitive){actual=ToLower(actual);value=ToLower(value);}
-                bool matches=false;
-                if(attributeOperator==L"=")matches=actual==value;
-                else if(attributeOperator==L"^=")matches=actual.rfind(value,0)==0;
-                else if(attributeOperator==L"$=")matches=actual.size()>=value.size()&&
-                    actual.compare(actual.size()-value.size(),value.size(),value)==0;
-                else if(attributeOperator==L"*=")matches=actual.find(value)!=std::wstring::npos;
-                else if(attributeOperator==L"~="){
-                    std::wistringstream words(actual);std::wstring word;
-                    while(words>>word)if(word==value){matches=true;break;}
-                }else if(attributeOperator==L"|=")matches=actual==value||
-                    (actual.size()>value.size()&&actual.rfind(value+L"-",0)==0);
-                if(!matches)return false;
-            }
-            i = close + 1;
-        } else {
-            ++i; // Unknown pseudo/state is ignored so one rule cannot abort parsing.
-        }
-    }
-    return true;
-}
+#include "CSSSelectors.inl"
 
 std::vector<std::wstring> SplitSelector(std::wstring selector) {
-    std::vector<std::wstring> result;std::wstring current;int bracket=0;
-    auto flush=[&](){auto value=Trim(current);if(!value.empty())result.push_back(value);current.clear();};
-    for(wchar_t c:selector){
-        if(c==L'['||c==L'(')++bracket;
-        if(c==L']'||c==L')')--bracket;
-        if(bracket==0&&(c==L'>'||c==L'+'||c==L'~')){flush();result.push_back(std::wstring(1,c));}
-        else if(bracket==0&&IsSpace(c))flush();
-        else current+=c;
+    std::vector<std::wstring> result;
+    size_t start=0;
+    while(start<selector.size()){
+        while(start<selector.size()&&CssSyntax::Space(selector[start]))++start;
+        if(start==selector.size())break;
+        const auto c=selector[start];
+        if(c==L'>'||c==L'+'||c==L'~'){result.emplace_back(1,c);++start;continue;}
+        auto end=CssSyntax::Find(selector,L" >+~\t\r\n\f",start);
+        if(end==std::wstring::npos)end=selector.size();
+        result.push_back(selector.substr(start,end-start));start=end;
     }
-    flush();
     return result;
 }
-
 void Walk(const std::shared_ptr<Node>& node,
           const std::function<void(const std::shared_ptr<Node>&)>& fn) {
     if (!node) return;
@@ -519,6 +325,7 @@ struct CompiledQuerySelector {
 void CompileQueryIndexKey(CompiledQuerySelector& selector) {
     if (selector.parts.empty()) return;
     const auto& simple = selector.parts.back();
+    if(simple.find(L'\\')!=std::wstring::npos)return;
     std::wstring firstClass;
     int brackets = 0, parentheses = 0;
     for (size_t index = 0; index < simple.size();) {
@@ -564,15 +371,7 @@ void CompileQueryIndexKey(CompiledQuerySelector& selector) {
 std::vector<CompiledQuerySelector> CompileQuerySelectors(const std::wstring& selector,
                                                          bool hasScope) {
     std::vector<CompiledQuerySelector> result;
-    int nesting = 0;
-    size_t start = 0;
-    for (size_t i = 0; i <= selector.size(); ++i) {
-        const wchar_t c = i < selector.size() ? selector[i] : L',';
-        if (c == L'[' || c == L'(') ++nesting;
-        if (c == L']' || c == L')') --nesting;
-        if (c != L',' || nesting != 0) continue;
-        auto item = Trim(selector.substr(start, i - start));
-        start = i + 1;
+    for (const auto& item : CssSyntax::Split(CssSyntax::Comments(selector),L',')) {
         CompiledQuerySelector compiled;
         if (hasScope && item.rfind(L":scope", 0) == 0) {
             auto remainder = Trim(item.substr(6));
@@ -709,6 +508,9 @@ public:
             auto node = std::make_shared<Node>();
             node->type = NodeType::Element;
             node->tag = tag;
+            if(tag==L"svg"||(stack.back()->namespaceUri==L"http://www.w3.org/2000/svg"&&
+                stack.back()->tag!=L"foreignobject"&&stack.back()->tag!=L"desc"&&stack.back()->tag!=L"title"))
+                node->namespaceUri=L"http://www.w3.org/2000/svg";
             SkipSpace();
             bool selfClosing = false;
             while (position_ < html_.size() && html_[position_] != L'>') {
@@ -734,7 +536,9 @@ public:
                         value = html_.substr(begin, position_ - begin);
                     }
                 }
-                node->attributes[key] = DecodeEntities(value);
+                const auto attribute=node->namespaceUri==L"http://www.w3.org/2000/svg"?AdjustSvgAttribute(key):key;
+                // Duplicate HTML token attributes retain the first value.
+                if(!node->attributes.count(attribute))node->attributes[attribute] = DecodeEntities(value);
                 SkipSpace();
             }
             if (position_ < html_.size() && html_[position_] == L'>') ++position_;
@@ -838,6 +642,10 @@ std::wstring Node::Attribute(const std::wstring& name) const {
     const auto direct = attributes.find(name);
     if (direct != attributes.end()) return direct->second;
     if (xml) return L"";
+    if(namespaceUri==L"http://www.w3.org/2000/svg"){
+        const auto adjusted=attributes.find(AdjustSvgAttribute(ToLower(name)));
+        if(adjusted!=attributes.end())return adjusted->second;
+    }
     if (std::none_of(name.begin(), name.end(), [](wchar_t character) {
             return std::iswupper(character) != 0;
         })) return L"";
@@ -1164,33 +972,7 @@ std::vector<std::wstring> Document::CompileSelector(const std::wstring& selector
 
 bool Document::MatchesSelector(const std::shared_ptr<Node>& node,
                                const std::vector<std::wstring>& parts) {
-    if (parts.empty()) return false;
-    auto current=node;int index=static_cast<int>(parts.size())-1;
-    if(parts[index]==L">"||parts[index]==L"+"||!MatchSimple(current,parts[index]))return false;
-    --index;
-    while(index>=0){
-        bool direct=false,adjacent=false,generalSibling=false;
-        if(parts[index]==L">"||parts[index]==L"+"||parts[index]==L"~"){
-            direct=parts[index]==L">";adjacent=parts[index]==L"+";
-            generalSibling=parts[index]==L"~";--index;if(index<0)return false;
-        }
-        if(adjacent||generalSibling){
-            auto parent=current?current->parent.lock():nullptr;
-            std::vector<std::shared_ptr<Node>> previous;
-            if(parent)for(const auto& sibling:parent->children){
-                if(sibling==current)break;
-                if(sibling->type==NodeType::Element)previous.push_back(sibling);
-            }
-            current.reset();
-            for(auto it=previous.rbegin();it!=previous.rend();++it)
-                if(adjacent||MatchSimple(*it,parts[index])){current=*it;break;}
-        }else current=current?current->parent.lock():nullptr;
-        if(direct||adjacent){if(!current||!MatchSimple(current,parts[index]))return false;}
-        else if(generalSibling){if(!current)return false;}
-        else{while(current&&!MatchSimple(current,parts[index]))current=current->parent.lock();if(!current)return false;}
-        --index;
-    }
-    return true;
+    return !parts.empty()&&MatchParts(node,parts,static_cast<int>(parts.size())-1);
 }
 
 std::shared_ptr<Node> Document::QuerySelector(const std::wstring& selector,

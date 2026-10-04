@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "0001-solid-box",
+  "stage": "pilot",
+  "family": "block",
+  "features": [
+    "box",
+    "solid-fill"
+  ],
+  "seed": 20261003,
+  "generatorVersion": "1.0",
+  "scriptless": true,
+  "states": [
+    "initial"
+  ],
+  "viewports": [
+    [
+      384,
+      768
+    ],
+    [
+      800,
+      600
+    ],
+    [
+      1280,
+      800
+    ]
+  ],
+  "dpi": [
+    96,
+    144
+  ],
+  "htmlSha256": "0E8ECAD3C65899CF1B675376759698A1732CE38E49A758D9B128C8422841300A",
+  "cssSha256": "99A01C17E5528B6ECB7FA6E64C59101631A64E6A119CB1DD38AAE166DE5B68CF"
+}

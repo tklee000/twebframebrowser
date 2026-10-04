@@ -64,6 +64,11 @@ Shadow DOM, Custom Elements, browser observer APIs, the full Event constructor f
 
 ## CSS selectors and cascade
 
+For the 2026-10-03 parser, selector, nesting, layer, variable, math and color
+changes, see [CSS behavior and WebView2 comparison](CSS-WEBVIEW2-COMPATIBILITY.md).
+That report records the implemented cases and remaining compatibility gaps;
+TWebFrame does not claim complete WebView2 CSS compatibility.
+
 ### Selectors
 
 - Type, universal, ID, class, and compound selectors.

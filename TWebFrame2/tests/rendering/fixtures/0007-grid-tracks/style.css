@@ -1,0 +1,2 @@
+body{margin:0;background:#fff;font:16px/20px Arial;color:#17202a}
+.grid{display:grid;grid-template-columns:70px minmax(40px,1fr) 2fr;grid-template-rows:42px 58px;gap:7px 9px;width:333px;padding:11px;background:#d8e5ec}.tile{background:#427598}.tile:nth-child(even){background:#c58743}

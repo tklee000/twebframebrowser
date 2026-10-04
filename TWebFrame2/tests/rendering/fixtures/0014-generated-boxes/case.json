@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "0014-generated-boxes",
+  "stage": "pilot",
+  "family": "cascade",
+  "features": [
+    "pseudo-element",
+    "content",
+    "absolute",
+    "cascade"
+  ],
+  "seed": 20261003,
+  "generatorVersion": "1.0",
+  "scriptless": true,
+  "states": [
+    "initial"
+  ],
+  "viewports": [
+    [
+      384,
+      768
+    ],
+    [
+      800,
+      600
+    ],
+    [
+      1280,
+      800
+    ]
+  ],
+  "dpi": [
+    96,
+    144
+  ],
+  "htmlSha256": "EB87603E3C287DD5BB41739335669F61BD526CE7255BA5BBCCD4EEFB71727514",
+  "cssSha256": "470820E57BB1CEC4DCED857A87474477640BAC643656A2F64D92C9CFF2B444DF"
+}

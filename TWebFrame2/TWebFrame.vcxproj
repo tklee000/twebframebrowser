@@ -99,6 +99,18 @@
   <ItemGroup><ClInclude Include="src\StringTransform.inl" /></ItemGroup>
   <ItemGroup><ClInclude Include="src\ByteCopy.inl" /></ItemGroup>
   <ItemGroup><ClInclude Include="src\WorkerRuntime.inl" /></ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\CSSSyntax.h" />
+    <ClInclude Include="src\RenderingDiagnostics.h" /><ClInclude Include="src\RenderingGlyphs.h" /><ClInclude Include="src\FontFeatures.h" />
+    <ClInclude Include="src\RasterSurface.h" /><ClInclude Include="src\RasterPath.h" /><ClInclude Include="src\RasterSkia.h" /><ClInclude Include="src\RasterGradient.h" />
+    <ClInclude Include="src\CSSSelectors.inl" />
+    <ClInclude Include="src\CSSParser.inl" />
+    <ClInclude Include="src\CSSConditions.inl" />
+    <ClInclude Include="src\CSSVariables.inl" />
+    <ClInclude Include="src\CSSMath.inl" />
+    <ClInclude Include="src\CSSColorFunctions.inl" />
+    <ClInclude Include="src\CSSNamedColors.inl" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
 </Project>

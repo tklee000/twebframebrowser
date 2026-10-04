@@ -1,4 +1,5 @@
 #include "CSS.h"
+#include "CSSSyntax.h"
 #include "NumericParser.h"
 
 #include <algorithm>
@@ -10,50 +11,12 @@
 namespace TWebFrame::Internal {
 namespace {
 
-std::wstring StripComments(const std::wstring& css) {
-    std::wstring out;
-    for (size_t i = 0; i < css.size();) {
-        if (i + 1 < css.size() && css[i] == L'/' && css[i + 1] == L'*') {
-            const size_t end = css.find(L"*/", i + 2);
-            i = end == std::wstring::npos ? css.size() : end + 2;
-        } else out += css[i++];
-    }
-    return out;
-}
-
 std::vector<std::wstring> Split(const std::wstring& value, wchar_t delimiter) {
-    std::vector<std::wstring> result;
-    int nesting = 0; wchar_t quote = 0; size_t start = 0;
-    for (size_t i = 0; i <= value.size(); ++i) {
-        const wchar_t c = i < value.size() ? value[i] : delimiter;
-        if (quote) { if (c == quote && (i == 0 || value[i - 1] != L'\\')) quote = 0; }
-        else if (c == L'\'' || c == L'"') quote = c;
-        else if (c == L'(' || c == L'[') ++nesting;
-        else if (c == L')' || c == L']') --nesting;
-        else if (c == delimiter && nesting == 0) {
-            auto item = Trim(value.substr(start, i - start));
-            if (!item.empty()) result.push_back(item);
-            start = i + 1;
-        }
-    }
-    return result;
+    return CssSyntax::Split(value, delimiter);
 }
 
 std::vector<std::wstring> SplitWhitespace(const std::wstring& value) {
-    std::vector<std::wstring> result;
-    std::wstring current;
-    int nesting = 0;wchar_t quote=0;
-    for (wchar_t c : value) {
-        if(quote){current+=c;if(c==quote)quote=0;continue;}
-        if(c==L'\''||c==L'"'){quote=c;current+=c;continue;}
-        if (c == L'(' || c == L'[') ++nesting;
-        if (c == L')' || c == L']') --nesting;
-        if (std::iswspace(c) && nesting == 0) {
-            if (!current.empty()) { result.push_back(current); current.clear(); }
-        } else current += c;
-    }
-    if (!current.empty()) result.push_back(current);
-    return result;
+    return CssSyntax::Words(value);
 }
 
 std::wstring BorderColorFromShorthand(const std::wstring& value) {
@@ -120,7 +83,7 @@ BackgroundShorthand ParseBackgroundLayer(const std::wstring& value,bool finalLay
             if(IsBackgroundRepeatToken(piece)){repeat.push_back(piece);continue;}
             if(lowered==L"scroll"||lowered==L"fixed"||lowered==L"local"||
                lowered==L"border-box"||lowered==L"padding-box"||lowered==L"content-box")continue;
-            if(finalLayer&&StyleSheet::Color(piece,invalid)!=invalid){result.color=piece;continue;}
+            if(finalLayer&&(lowered==L"currentcolor"||StyleSheet::Color(piece,invalid)!=invalid)){result.color=piece;continue;}
             (afterSlash?size:position).push_back(piece);
         }
     }
@@ -151,6 +114,8 @@ BackgroundShorthand ParseBackgroundShorthand(const std::wstring& value) {
 std::wstring SelectorSubjectKey(const std::vector<std::wstring>& parts) {
     if(parts.empty())return {};
     const auto& subject=parts.back();
+    // Escapes and functional selectors need the general candidate path.
+    if(subject.find(L'\\')!=std::wstring::npos)return {};
     std::wstring id,className,tag;
     size_t index=0;
     if(index<subject.size()&&(std::iswalpha(subject[index])||subject[index]==L'_')){
@@ -180,16 +145,20 @@ std::wstring SelectorSubjectKey(const std::vector<std::wstring>& parts) {
 
 void CollectSelectorAttributes(const std::wstring& selector,
                                FastMap<std::wstring,bool>& attributes) {
-    for(size_t position=0;(position=selector.find(L'[',position))!=std::wstring::npos;){
-        const auto close=selector.find(L']',position+1);
-        if(close==std::wstring::npos)break;
+    wchar_t quote=0;
+    for(size_t position=0;position<selector.size();++position){
+        const auto c=selector[position];
+        if(c==L'\\'){position=CssSyntax::EscapeEnd(selector,position)-1;continue;}
+        if(quote){if(c==quote)quote=0;continue;}
+        if(c==L'\''||c==L'"'){quote=c;continue;}
+        if(c!=L'[')continue;
+        const auto close=CssSyntax::Close(selector,position);
+        if(close>=selector.size())break;
         size_t begin=position+1;
         while(begin<close&&std::iswspace(selector[begin]))++begin;
-        size_t end=begin;
-        while(end<close&&(std::iswalnum(selector[end])||selector[end]==L'-'||
-              selector[end]==L'_'||selector[end]==L':'))++end;
-        if(end>begin)attributes[ToLower(selector.substr(begin,end-begin))]=true;
-        position=close+1;
+        const auto end=CssSyntax::IdentifierEnd(selector,begin);
+        if(end>begin)attributes[ToLower(CssSyntax::Decode(std::wstring_view(selector).substr(begin,end-begin)))]=true;
+        position=close;
     }
 }
 
@@ -230,16 +199,48 @@ std::wstring ResolveViewportUnits(std::wstring value,float viewportWidth,float v
 }
 
 int Specificity(const std::wstring& selector) {
+    static thread_local unsigned depth=0;
+    if(depth>=128)return 0;
+    struct Scope {unsigned& value;explicit Scope(unsigned& v):value(v){++value;}~Scope(){--value;}} scope(depth);
+    // Reserve independent fields: ten classes must never outrank one ID.
     int ids = 0, classes = 0, tags = 0;
-    bool inAttribute = false;
+    bool typePosition = true;
     for (size_t i = 0; i < selector.size(); ++i) {
         const wchar_t c = selector[i];
-        if (c == L'#') ++ids;
-        else if (c == L'.' || c == L':' || c == L'[') { ++classes; inAttribute = c == L'['; }
-        else if (c == L']') inAttribute = false;
-        else if (!inAttribute && (i == 0 || std::iswspace(selector[i - 1]) || selector[i - 1] == L',' || selector[i - 1] == L'>') && std::iswalpha(c)) ++tags;
+        if(CssSyntax::Space(c)||c==L'>'||c==L'+'||c==L'~'){typePosition=true;continue;}
+        if(c==L'['){++classes;i=CssSyntax::Close(selector,i);typePosition=false;continue;}
+        if(c==L'#'||c==L'.'){
+            if(c==L'#')++ids;else ++classes;
+            i=CssSyntax::IdentifierEnd(selector,i+1)-1;typePosition=false;continue;
+        }
+        if(c==L':'){
+            const bool element=i+1<selector.size()&&selector[i+1]==L':';
+            const size_t start=i+(element?2:1),end=CssSyntax::IdentifierEnd(selector,start);
+            const auto name=ToLower(CssSyntax::Decode(std::wstring_view(selector).substr(start,end-start)));
+            const bool legacy=name==L"before"||name==L"after"||name==L"first-letter"||name==L"first-line";
+            if(element||legacy)++tags;
+            else if(name!=L"where"&&name!=L"is"&&name!=L"not"&&name!=L"has")++classes;
+            i=end-1;
+            if(end<selector.size()&&selector[end]==L'('){
+                const auto close=CssSyntax::Close(selector,end);
+                auto arguments=selector.substr(end+1,close-end-1);int maximum=0;
+                if(name==L"is"||name==L"not"||name==L"has"){
+                    for(const auto& item:Split(arguments,L','))maximum=std::max(maximum,Specificity(item));
+                }else if(name==L"nth-child"||name==L"nth-last-child"){
+                    const auto of=ToLower(arguments).find(L" of ");
+                    if(of!=std::wstring::npos)for(const auto& item:Split(arguments.substr(of+4),L','))maximum=std::max(maximum,Specificity(item));
+                }
+                ids+=maximum/1000000;classes+=(maximum/1000)%1000;tags+=maximum%1000;i=close;
+            }
+            typePosition=false;continue;
+        }
+        if(CssSyntax::Name(c)||c==L'\\'){
+            const auto end=CssSyntax::IdentifierEnd(selector,i);
+            if(typePosition)++tags;i=end-1;
+        }
+        typePosition=false;
     }
-    return ids * 100 + classes * 10 + tags;
+    return std::min(ids,999)*1000000+std::min(classes,999)*1000+std::min(tags,999);
 }
 
 void SetDefault(const std::shared_ptr<Node>& node, ComputedStyle& style) {
@@ -253,8 +254,10 @@ void SetDefault(const std::shared_ptr<Node>& node, ComputedStyle& style) {
     set(L"font-size", L"16px");
     set(L"font-style", L"normal");
     set(L"font-weight", L"400");
+    set(L"font-kerning", L"auto");
     set(L"tab-size", L"8");
-    set(L"text-align", L"left");
+    set(L"direction", L"ltr");
+    set(L"text-align", L"start");
     set(L"overflow", L"visible");
     set(L"pointer-events", L"auto");
     set(L"visibility", L"visible");
@@ -304,6 +307,16 @@ void SetDefault(const std::shared_ptr<Node>& node, ComputedStyle& style) {
         if(!background.empty()&&!style.values->count(L"background-image"))
             (*style.values)[L"background-image"]=L"url(\""+background+L"\")";
     }
+    if(node&&node->tag==L"svg"){
+        // Inline SVG gets a clipping viewport from the user-agent stylesheet.
+        // A stand-alone SVG document root retains the visible initial value.
+        if(const auto parent=node->parent.lock();parent&&parent->type!=NodeType::Document)
+            (*style.values)[L"overflow"]=L"hidden";
+        // SVG presentation dimensions participate below author CSS.
+        const auto width=node->Attribute(L"width"),height=node->Attribute(L"height");
+        if(!width.empty())set(L"width",width.c_str());
+        if(!height.empty())set(L"height",height.c_str());
+    }
     if (node && node->tag == L"p") set(L"margin", L"1em 0");
     if (node && (node->tag == L"ul" || node->tag == L"ol")) {
         set(L"margin", L"1em 0");
@@ -342,18 +355,18 @@ void SetDefault(const std::shared_ptr<Node>& node, ComputedStyle& style) {
         (*style.values)[L"font-size"] = L"13.3333px";
         (*style.values)[L"font-weight"] = L"400";
         (*style.values)[L"line-height"] = L"normal";
+        (*style.values)[L"color"] = node->disabled?L"#545454":L"#000000";
     }
-    if(node&&(node->tag==L"button"||node->tag==L"select"||
+    if(node&&(node->tag==L"table"||node->tag==L"button"||node->tag==L"select"||
+       (node->tag==L"input"&&(node->Attribute(L"type")==L"checkbox"||node->Attribute(L"type")==L"radio"||node->Attribute(L"type")==L"search"||node->Attribute(L"type")==L"color"))||
        (node->tag==L"input"&&(node->Attribute(L"type")==L"button"||node->Attribute(L"type")==L"submit"||node->Attribute(L"type")==L"reset"))))
         (*style.values)[L"box-sizing"]=L"border-box";
     if(node&&node->tag==L"input"&&(node->Attribute(L"type")==L"button"||node->Attribute(L"type")==L"submit"||node->Attribute(L"type")==L"reset"))
         (*style.values)[L"text-align"]=L"center";
     if (node && node->tag == L"button") {
-        set(L"padding", L"2px 6px"); set(L"border", L"1px solid #767676");
+        set(L"padding", L"1px 6px"); set(L"border", L"2px outset #000000");
         set(L"background", L"#f0f0f0");
-        // Keep native-style button labels on one line while still collapsing
-        // indentation and newlines from formatted HTML source.
-        set(L"white-space", L"nowrap");
+        (*style.values)[L"white-space"] = L"normal";
         // A button's user-agent style specifies centered text on the element
         // itself.  It therefore takes precedence over an inherited text-align,
         // while an author rule applied later in the cascade can still override it.
@@ -361,6 +374,7 @@ void SetDefault(const std::shared_ptr<Node>& node, ComputedStyle& style) {
     }
     if (node && node->tag == L"select") {
         set(L"border", L"1px solid #767676"); set(L"background", L"white");
+        (*style.values)[L"white-space"] = L"pre";
     }
     if (node && node->tag == L"input" &&
         (node->Attribute(L"type") == L"checkbox" || node->Attribute(L"type") == L"radio")) {
@@ -406,7 +420,12 @@ void SetDefault(const std::shared_ptr<Node>& node, ComputedStyle& style) {
     }
     if (node && node->tag == L"input" && node->Attribute(L"type") != L"checkbox" &&
         node->Attribute(L"type") != L"radio") {
-        set(L"border", L"1px solid #767676"); set(L"background", L"white");
+        const auto type=node->Attribute(L"type");
+        const bool button=type==L"button"||type==L"submit"||type==L"reset";
+        set(L"padding",button?L"1px 6px":L"1px 2px");
+        set(L"border",button?L"2px outset #000000":L"2px inset #767676");
+        set(L"background",button?L"#f0f0f0":L"white");
+        (*style.values)[L"white-space"]=button?L"pre":L"normal";
     }
 }
 
@@ -419,7 +438,7 @@ std::wstring ComputedStyle::Get(const std::wstring& name, const std::wstring& fa
     auto it=values->end();
     if(alreadyLower||name.rfind(L"--",0)==0)it=values->find(name);
     else{const auto lowered=ToLower(name);it=values->find(lowered);}
-    return it == values->end() ? fallback : it->second;
+    return it == values->end() || it->second == std::wstring(1,L'\0') ? fallback : it->second;
 }
 
 bool ComputedStyle::Is(const std::wstring& name, const std::wstring& value) const {
@@ -447,159 +466,8 @@ SelectPopupPalette ResolveSelectPopupPalette(const ComputedStyle& style,
     };
 }
 
-bool StyleSheet::Parse(const std::wstring& source, std::wstring* error) {
-    ++version_;
-    rules_.clear(); ruleIndex_.clear(); universalRuleIndexes_.clear();
-    keyframes_.clear();shadowStyles_.clear();
-    selectorAttributes_.clear(); nthChildSubjects_.clear();hasUniversalNthChild_=false;
-    rootVariables_.clear(); pseudoRules_.clear(); hoverRuleIndexes_.clear();
-    hoverRequiresBroadInvalidation_=false; mutationRequiresBroadInvalidation_=false;
-    usesNthChild_ = false;
-    usesViewportFontSize_ = false;
-    const auto css = StripComments(source);
-    int order = 0;
-    auto ruleEnd=[](const std::wstring& text,size_t brace,size_t& end){
-        int depth=1;wchar_t quote=0;end=brace+1;
-        for(;end<text.size()&&depth;++end){
-            const wchar_t c=text[end];
-            if(quote){if(c==quote&&text[end-1]!=L'\\')quote=0;continue;}
-            if(c==L'\''||c==L'"')quote=c;else if(c==L'{')++depth;else if(c==L'}')--depth;
-        }
-        return depth==0;
-    };
-    std::function<bool(const std::wstring&,const std::vector<std::wstring>&)> parseBlock;
-    parseBlock=[&](const std::wstring& text,const std::vector<std::wstring>& mediaQueries){
-        size_t position=0;
-        while(position<text.size()){
-            while(position<text.size()&&std::iswspace(text[position]))++position;
-            if(position>=text.size())break;
-            if(text[position]==L'@'){
-                const size_t brace=text.find(L'{',position),semicolon=text.find(L';',position);
-                if(semicolon!=std::wstring::npos&&(brace==std::wstring::npos||semicolon<brace)){position=semicolon+1;continue;}
-                if(brace==std::wstring::npos)break;
-                size_t end=0;if(!ruleEnd(text,brace,end)){if(error)*error=L"Unclosed CSS at-rule";return false;}
-                const auto prelude=ToLower(Trim(text.substr(position,brace-position)));
-                if(prelude.rfind(L"@media",0)==0){
-                    auto nestedQueries=mediaQueries;nestedQueries.push_back(Trim(prelude.substr(6)));
-                    if(!parseBlock(text.substr(brace+1,end-brace-2),nestedQueries))return false;
-                }else if(prelude.rfind(L"@keyframes ",0)==0||prelude.rfind(L"@-webkit-keyframes ",0)==0){
-                    CssKeyframes animation;animation.mediaQueries=mediaQueries;
-                    const auto rawPrelude=Trim(text.substr(position,brace-position));
-                    animation.name=Trim(rawPrelude.substr(rawPrelude.find_first_of(L" \t\r\n")));
-                    const auto body=text.substr(brace+1,end-brace-2);size_t framePosition=0;
-                    while(framePosition<body.size()){
-                        const auto frameBrace=body.find(L'{',framePosition);if(frameBrace==std::wstring::npos)break;
-                        size_t frameEnd=0;if(!ruleEnd(body,frameBrace,frameEnd))break;
-                        std::vector<CssDeclaration> declarations;
-                        for(const auto& part:Split(body.substr(frameBrace+1,frameEnd-frameBrace-2),L';')){
-                            const auto colon=part.find(L':');if(colon==std::wstring::npos)continue;
-                            CssDeclaration declaration;declaration.name=Trim(part.substr(0,colon));
-                            if(declaration.name.rfind(L"--",0)!=0)declaration.name=ToLower(declaration.name);
-                            declaration.value=Trim(part.substr(colon+1));
-                            if(declaration.value.find(L"!important")==std::wstring::npos&&!declaration.name.empty())declarations.push_back(std::move(declaration));
-                        }
-                        for(auto selector:Split(body.substr(framePosition,frameBrace-framePosition),L',')){
-                            selector=ToLower(Trim(selector));float offset=0;size_t consumed=0;
-                            if(selector==L"from")offset=0;
-                            else if(selector==L"to")offset=1;
-                            else if(TryParseFloat(selector,offset,&consumed)&&selector.substr(consumed)==L"%"&&offset>=0&&offset<=100)offset/=100;
-                            else continue;
-                            animation.frames.push_back({offset,declarations});
-                        }
-                        framePosition=frameEnd;
-                    }
-                    std::stable_sort(animation.frames.begin(),animation.frames.end(),[](const CssKeyframe& a,const CssKeyframe& b){return a.offset<b.offset;});
-                    if(!animation.name.empty()&&!animation.frames.empty())keyframes_.push_back(std::move(animation));
-                }
-                position=end;continue;
-            }
-            const size_t brace=text.find(L'{',position);if(brace==std::wstring::npos)break;
-            size_t end=0;if(!ruleEnd(text,brace,end)){if(error)*error=L"Unclosed CSS rule";return false;}
-            const auto selectors=Split(text.substr(position,brace-position),L',');
-            const auto body=text.substr(brace+1,end-brace-2);std::vector<CssDeclaration> declarations;
-            for(const auto& part:Split(body,L';')){
-                const size_t colon=part.find(L':');if(colon==std::wstring::npos)continue;
-                CssDeclaration declaration;declaration.name=Trim(part.substr(0,colon));
-                if(declaration.name.rfind(L"--",0)!=0)declaration.name=ToLower(declaration.name);
-                declaration.value=Trim(part.substr(colon+1));
-                const auto important=declaration.value.rfind(L"!important");
-                if(important!=std::wstring::npos&&Trim(declaration.value.substr(important))==L"!important"){
-                    declaration.important=true;declaration.value=Trim(declaration.value.substr(0,important));
-                }
-                if(declaration.name==L"font-size"){
-                    const auto lowered=ToLower(declaration.value);
-                    usesViewportFontSize_=usesViewportFontSize_||lowered.find(L"vw")!=std::wstring::npos||
-                        lowered.find(L"vh")!=std::wstring::npos||lowered.find(L"vmin")!=std::wstring::npos||
-                        lowered.find(L"vmax")!=std::wstring::npos;
-                }
-                if(!declaration.name.empty())declarations.push_back(declaration);
-            }
-            for(const auto& selector:selectors){
-                CssRule rule;
-                rule.selector=selector;
-                rule.declarations=declarations;
-                rule.specificity=Specificity(selector);
-                rule.order=order++;
-                rule.mediaQueries=mediaQueries;
-                auto pseudoSuffix=selector.rfind(L"::");size_t pseudoSeparator=2;
-                if(pseudoSuffix==std::wstring::npos){
-                    const auto colon=selector.rfind(L':');
-                    const auto suffix=colon==std::wstring::npos?L"":ToLower(Trim(selector.substr(colon+1)));
-                    if(suffix==L"before"||suffix==L"after"||suffix==L"first-line"||suffix==L"first-letter"){
-                        pseudoSuffix=colon;pseudoSeparator=1;
-                    }
-                }
-                if(pseudoSuffix!=std::wstring::npos)
-                    rule.pseudo=ToLower(Trim(selector.substr(pseudoSuffix+pseudoSeparator)));
-                if(pseudoSuffix!=std::wstring::npos)rule.specificity=Specificity(selector.substr(0,pseudoSuffix))+1;
-                rule.selectorParts=Document::CompileSelector(
-                    pseudoSuffix==std::wstring::npos?selector:selector.substr(0,pseudoSuffix));
-                CollectSelectorAttributes(selector,selectorAttributes_);
-                for(const auto& part:rule.selectorParts)
-                    if(part.find(L":nth-child(")!=std::wstring::npos||
-                       part.find(L":nth-of-type(")!=std::wstring::npos){
-                        const auto key=SelectorSubjectKey({part});
-                        if(key.empty())hasUniversalNthChild_=true;
-                        else nthChildSubjects_[key]=true;
-                    }
-                rule.hasCustomDeclarations=std::any_of(declarations.begin(),declarations.end(),
-                    [](const CssDeclaration& declaration){return declaration.name.rfind(L"--",0)==0;});
-                const auto subjectKey=SelectorSubjectKey(rule.selectorParts);
-                rules_.push_back(std::move(rule));
-                const auto ruleIndex=rules_.size()-1;
-                if(selector.find(L":hover")!=std::wstring::npos){
-                    hoverRuleIndexes_.push_back(ruleIndex);
-                    // A hovered node can invalidate outside its own subtree
-                    // through sibling combinators or relational :has(). Keep
-                    // those uncommon selectors on the conservative path.
-                    hoverRequiresBroadInvalidation_=hoverRequiresBroadInvalidation_||
-                        selector.find(L'+')!=std::wstring::npos||
-                        selector.find(L'~')!=std::wstring::npos||
-                        selector.find(L":has(")!=std::wstring::npos;
-                }
-                mutationRequiresBroadInvalidation_=mutationRequiresBroadInvalidation_||
-                    selector.find(L'+')!=std::wstring::npos||
-                    selector.find(L'~')!=std::wstring::npos||
-                    selector.find(L":has(")!=std::wstring::npos;
-                if(subjectKey.empty())universalRuleIndexes_.push_back(ruleIndex);
-                else ruleIndex_[subjectKey].push_back(ruleIndex);
-                if(selector.find(L":nth-child(")!=std::wstring::npos)usesNthChild_=true;
-                if(!rules_.back().pseudo.empty()){
-                    const auto& pseudo=rules_.back().pseudo;
-                    if(std::find(pseudoRules_.begin(),pseudoRules_.end(),pseudo)==pseudoRules_.end())
-                        pseudoRules_.push_back(pseudo);
-                }
-                if(mediaQueries.empty()&&Trim(selector)==L":root")for(const auto& declaration:declarations)
-                    if(declaration.name.rfind(L"--",0)==0)rootVariables_[declaration.name]=declaration.value;
-            }
-            position=end;
-        }
-        return true;
-    };
-    if(!parseBlock(css,{}))return false;
-    if (error) error->clear();
-    return true;
-}
+#include "CSSParser.inl"
+#include "CSSConditions.inl"
 
 std::vector<const CssRule*> StyleSheet::CandidateRules(const std::shared_ptr<Node>& node) const {
     std::vector<const CssRule*> result;
@@ -703,9 +571,62 @@ bool StyleSheet::MediaQueryMatches(const std::wstring& source,double viewportWid
     };
     const auto EvaluateMediaFeature=[&](std::wstring expression){
         expression=ToLower(Trim(expression));
+        if(expression==L"screen"||expression==L"all")return true;
+        if(expression==L"print")return false;
+        const auto featureValue=[&](const std::wstring& name)->double{
+            if(name==L"width")return viewportWidth;
+            if(name==L"height")return viewportHeight;
+            if(name==L"device-width")return displayWidth;
+            if(name==L"device-height")return displayHeight;
+            if(name==L"resolution")return devicePixelRatio;
+            if(name==L"aspect-ratio")return viewportHeight>0?viewportWidth/viewportHeight:0;
+            if(name==L"color")return 8;
+            return std::numeric_limits<double>::quiet_NaN();
+        };
+        const auto comparison=expression.find_first_of(L"<>=");
+        if(comparison!=std::wstring::npos){
+            std::vector<std::wstring> operands,operators;size_t start=0;
+            for(size_t i=0;i<expression.size();){
+                if(expression[i]!=L'<'&&expression[i]!=L'>'&&expression[i]!=L'='){++i;continue;}
+                operands.push_back(Trim(expression.substr(start,i-start)));const auto begin=i++;
+                if(i<expression.size()&&expression[i]==L'=')++i;
+                operators.push_back(expression.substr(begin,i-begin));start=i;
+            }
+            operands.push_back(Trim(expression.substr(start)));
+            if(operands.size()<2||operands.size()>3)return false;
+            std::wstring feature;
+            for(const auto& operand:operands)if(std::isfinite(featureValue(operand))){if(!feature.empty())return false;feature=operand;}
+            if(feature.empty()||(operands.size()==3&&operands[1]!=feature))return false;
+            if(operators.size()==2&&(operators[0][0]!=operators[1][0]||operators[0][0]==L'='))return false;
+            const auto operandValue=[&](const std::wstring& operand)->double{
+                if(operand==feature)return featureValue(feature);
+                if(feature==L"aspect-ratio"){
+                    const auto ratio=Split(operand,L'/');float a=0,b=1;size_t used=0;
+                    if(ratio.empty()||ratio.size()>2||!TryParseFloat(ratio[0],a,&used)||used!=ratio[0].size())return std::numeric_limits<double>::quiet_NaN();
+                    if(ratio.size()==2&&(!TryParseFloat(ratio[1],b,&used)||used!=ratio[1].size()||b<=0))return std::numeric_limits<double>::quiet_NaN();
+                    return a/b;
+                }
+                if(feature==L"resolution"){
+                    float number=0;size_t used=0;if(!TryParseFloat(operand,number,&used))return std::numeric_limits<double>::quiet_NaN();
+                    const auto unit=operand.substr(used);
+                    return unit==L"dpi"?number/96.0:unit==L"dpcm"?number*2.54/96.0:unit==L"dppx"||unit==L"x"?number:std::numeric_limits<double>::quiet_NaN();
+                }
+                return MediaLength(operand,viewportWidth,viewportHeight);
+            };
+            for(size_t i=0;i<operators.size();++i){
+                const auto a=operandValue(operands[i]),b=operandValue(operands[i+1]);if(!std::isfinite(a)||!std::isfinite(b))return false;
+                const auto& op=operators[i];bool matches=false;
+                if(op==L"<")matches=a<b;else if(op==L"<=")matches=a<=b;
+                else if(op==L">")matches=a>b;else if(op==L">=")matches=a>=b;
+                else if(op==L"=")matches=a==b;
+                if(!matches)return false;
+            }
+            return true;
+        }
         const auto colon=expression.find(L':');
         auto name=Trim(expression.substr(0,colon));
         const auto value=colon==std::wstring::npos?L"":Trim(expression.substr(colon+1));
+        if(colon==std::wstring::npos&&std::isfinite(featureValue(name)))return featureValue(name)!=0;
         auto compareLength=[&](const std::wstring& base,double actual){
             const double expected=MediaLength(value,viewportWidth,viewportHeight);
             if(!std::isfinite(expected))return false;
@@ -748,34 +669,17 @@ bool StyleSheet::MediaQueryMatches(const std::wstring& source,double viewportWid
         return false;
     };
 
-        size_t clauseStart=0;int nesting=0;
-        for(size_t index=0;index<=source.size();++index){
-            const wchar_t character=index<source.size()?source[index]:L',';
-            if(character==L'(')++nesting;else if(character==L')')--nesting;
-            if(character!=L','||nesting!=0)continue;
-            auto clause=ToLower(Trim(source.substr(clauseStart,index-clauseStart)));clauseStart=index+1;
-            bool negate=false;
-            if(clause.rfind(L"not ",0)==0){negate=true;clause=Trim(clause.substr(4));}
-            if(clause.rfind(L"only ",0)==0)clause=Trim(clause.substr(5));
-            const auto firstFeature=clause.find(L'(');
-            auto mediaType=Trim(clause.substr(0,firstFeature));
-            while(mediaType.size()>=3&&mediaType.rfind(L"and")==mediaType.size()-3)
-                mediaType=Trim(mediaType.substr(0,mediaType.size()-3));
-            bool matches=mediaType.empty()||mediaType==L"all"||mediaType==L"screen";
-            size_t position=firstFeature;
-            while(matches&&position!=std::wstring::npos&&position<clause.size()){
-                int depth=1;size_t end=position+1;
-                for(;end<clause.size()&&depth;++end){if(clause[end]==L'(')++depth;else if(clause[end]==L')')--depth;}
-                if(depth!=0){matches=false;break;}
-                matches=EvaluateMediaFeature(clause.substr(position+1,end-position-2));
-                position=clause.find(L'(',end);
-            }
-            if(negate)matches=!matches;
-            if(matches)return true;
-        }
-        return false;
+    for(auto clause:Split(CssSyntax::Comments(source),L',')){
+        clause=ToLower(Trim(clause));
+        if(clause.rfind(L"only ",0)==0)clause=Trim(clause.substr(5));
+        const auto afterNot=clause.rfind(L"not ",0)==0?Trim(clause.substr(4)):L"";
+        const bool legacyNot=!afterNot.empty()&&afterNot.front()!=L'(';
+        if(legacyNot)clause=Trim(clause.substr(4));
+        const bool matches=CssCondition(clause,EvaluateMediaFeature);
+        if(legacyNot?!matches:matches)return true;
     }
-
+    return false;
+}
 bool StyleSheet::RuleApplies(const CssRule& rule,float width,float height) const {
     if(!rule.mediaEnabled)return false;
     for(const auto& query:rule.mediaQueries)
@@ -805,26 +709,7 @@ void StyleSheet::SetViewport(float width,float height) noexcept {
     if(mediaActivationChanged||usesViewportFontSize_)++version_;
 }
 
-std::wstring StyleSheet::ResolveVariables(const std::wstring& input,
-                                          const FastMap<std::wstring, std::wstring>& vars,
-                                          int depth) const {
-    if (depth > 8) return input;
-    std::wstring value = input;
-    size_t position = 0;
-    while ((position = value.find(L"var(", position)) != std::wstring::npos) {
-        const size_t end = value.find(L')', position + 4);
-        if (end == std::wstring::npos) break;
-        auto expression = value.substr(position + 4, end - position - 4);
-        const size_t comma = expression.find(L',');
-        const auto name = Trim(expression.substr(0, comma));
-        auto it = vars.find(name);
-        const auto replacement = it != vars.end() ? ResolveVariables(it->second, vars, depth + 1)
-            : (comma == std::wstring::npos ? L"" : Trim(expression.substr(comma + 1)));
-        value.replace(position, end - position + 1, replacement);
-        position += replacement.size();
-    }
-    return value;
-}
+#include "CSSVariables.inl"
 
 std::shared_ptr<StyleSheet> StyleSheet::ShadowStyles(const std::shared_ptr<Node>& node) const {
     if(node&&!shadowScope_){
@@ -867,7 +752,7 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
                                   const std::wstring& pseudo) const {
     if(const auto scoped=ShadowStyles(node))return scoped->Compute(node,parent,pseudo);
     ComputedStyle result;
-    if (parent) for (const auto* inherited : {L"color", L"color-scheme", L"font-family", L"font-size", L"font-style", L"font-weight", L"letter-spacing", L"line-height", L"list-style-image", L"list-style-position", L"list-style-type", L"tab-size", L"text-align", L"text-decoration", L"text-decoration-line", L"white-space", L"pointer-events", L"visibility", L"fill", L"fill-opacity", L"fill-rule", L"stroke", L"stroke-opacity", L"stroke-width", L"stroke-linecap", L"stroke-linejoin", L"stroke-miterlimit", L"stroke-dasharray", L"stroke-dashoffset"}) {
+    if (parent) for (const auto* inherited : {L"color", L"color-scheme", L"font-family", L"font-size", L"font-style", L"font-weight", L"font-kerning", L"letter-spacing", L"line-height", L"list-style-image", L"list-style-position", L"list-style-type", L"tab-size", L"direction", L"text-align", L"text-decoration", L"text-decoration-line", L"white-space", L"pointer-events", L"visibility", L"fill", L"fill-opacity", L"fill-rule", L"stroke", L"stroke-opacity", L"stroke-width", L"stroke-linecap", L"stroke-linejoin", L"stroke-miterlimit", L"stroke-dasharray", L"stroke-dashoffset"}) {
         const auto value = parent->Get(inherited);
         if (!value.empty()) (*result.values)[inherited] = value;
     }
@@ -894,16 +779,25 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
     // `inherit` declaration can replace an earlier author declaration rather
     // than leaving that declaration behind when the parent has no value.
     const auto baseValues = *result.values;
-    struct Winner { bool important; int specificity; int order; };
+    struct Winner { bool important; int specificity; int order; std::vector<int> layer; bool inlineStyle=false; };
     FastMap<std::wstring, Winner> winners;
+    struct PropertyCandidate {Winner winner;std::wstring value;};
+    FastMap<std::wstring,std::vector<PropertyCandidate>> propertyCandidates;
     auto wins = [](const Winner& candidate, const Winner& current) {
+        if(candidate.important!=current.important)return candidate.important;
+        if(candidate.inlineStyle!=current.inlineStyle)return candidate.inlineStyle;
+        for(size_t i=0;i<std::max(candidate.layer.size(),current.layer.size());++i){
+            const int left=i<candidate.layer.size()?candidate.layer[i]:std::numeric_limits<int>::max();
+            const int right=i<current.layer.size()?current.layer[i]:std::numeric_limits<int>::max();
+            if(left!=right)return candidate.important?left<right:left>right;
+        }
         return candidate.important > current.important ||
             (candidate.important == current.important &&
              (candidate.specificity > current.specificity ||
               (candidate.specificity == current.specificity && candidate.order >= current.order)));
     };
     const auto ruleApplies=[&](const CssRule& rule){return RuleApplies(rule,viewportWidth_,viewportHeight_);};
-    auto variables=rootVariables_;
+    FastMap<std::wstring,std::wstring> variables;
     if(parent){
         for(const auto& pair:*parent->values)
             if(pair.first.rfind(L"--",0)==0)variables[pair.first]=pair.second;
@@ -912,11 +806,18 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
         // on its <html> ancestor through document.documentElement.style.
         std::vector<std::shared_ptr<Node>> ancestors;
         for(auto ancestor=node->parent.lock();ancestor;ancestor=ancestor->parent.lock())ancestors.push_back(ancestor);
-        for(auto it=ancestors.rbegin();it!=ancestors.rend();++it)
-            for(const auto& pair:(*it)->inlineStyle)
-                if(pair.first.rfind(L"--",0)==0)variables[pair.first]=pair.second;
+        ComputedStyle ancestorStyle;
+        bool hasAncestorStyle=false;
+        for(auto it=ancestors.rbegin();it!=ancestors.rend();++it){
+            if((*it)->type!=NodeType::Element)continue;
+            ancestorStyle=Compute(*it,hasAncestorStyle?&ancestorStyle:nullptr);
+            hasAncestorStyle=true;
+        }
+        if(hasAncestorStyle)for(const auto& pair:*ancestorStyle.values)
+            if(pair.first.rfind(L"--",0)==0)variables[pair.first]=pair.second;
     }
     const auto candidateRules=CandidateRules(node);
+    const auto inheritedVariables=variables;
     std::vector<const CssRule*> matchedRules;
     matchedRules.reserve(candidateRules.size());
     for(const auto* rulePointer:candidateRules){
@@ -925,13 +826,18 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
            (pseudo.empty()?rule.pseudo.empty():rule.pseudo==pseudo)&&
            Document::MatchesSelector(node,rule.selectorParts))matchedRules.push_back(rulePointer);
     }
+    const bool needsLayerRevert=std::any_of(matchedRules.begin(),matchedRules.end(),[](const auto* rule){
+        return std::any_of(rule->declarations.begin(),rule->declarations.end(),[](const auto& item){return ToLower(Trim(item.value))==L"revert-layer";});
+    })||std::any_of(node->inlineStyle.begin(),node->inlineStyle.end(),[](const auto& item){return ToLower(Trim(item.second))==L"revert-layer";});
     FastMap<std::wstring,Winner> customWinners;
+    FastMap<std::wstring,std::vector<PropertyCandidate>> customCandidates;
     for(const auto* rulePointer:matchedRules){
         const auto& rule=*rulePointer;
         if(!rule.hasCustomDeclarations)continue;
         for(const auto& declaration:rule.declarations){
             if(declaration.name.rfind(L"--",0)!=0)continue;
-            const Winner candidate{declaration.important,rule.specificity,rule.order};
+            const Winner candidate{declaration.important,rule.specificity,rule.order,rule.layer};
+            if(needsLayerRevert)customCandidates[declaration.name].push_back({candidate,declaration.value});
             const auto previous=customWinners.find(declaration.name);
             if(previous==customWinners.end()||wins(candidate,previous->second)){
                 customWinners[declaration.name]=candidate;
@@ -939,12 +845,71 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
             }
         }
     }
-    for(const auto& pair:node->inlineStyle){
+    if(pseudo.empty())for(const auto& pair:node->inlineStyle){
         if(pair.first.rfind(L"--",0)!=0)continue;
-        const Winner candidate{node->inlineStylePriority.count(pair.first)!=0,1000,0};const auto previous=customWinners.find(pair.first);
+        const Winner candidate{node->inlineStylePriority.count(pair.first)!=0,0,0,{},true};const auto previous=customWinners.find(pair.first);
+        if(needsLayerRevert)customCandidates[pair.first].push_back({candidate,pair.second});
         if(previous==customWinners.end()||wins(candidate,previous->second))variables[pair.first]=pair.second;
     }
-    for(const auto& pair:variables)(*result.values)[pair.first]=pair.second;
+    // Freeze custom properties at their defining element before inheritance.
+    // Otherwise a child's --b could change a parent's --a:var(--b).
+    const auto rawVariables=variables;
+    CssVariableResolver variableResolver(rawVariables);
+    for(auto& pair:variables){
+        const auto keyword=ToLower(Trim(pair.second));
+        if(keyword==L"initial")pair.second=std::wstring(1,L'\0');
+        else if(keyword==L"inherit"||keyword==L"unset")pair.second=parent?parent->Get(pair.first,std::wstring(1,L'\0')):std::wstring(1,L'\0');
+        else{std::wstring resolved;if(variableResolver.ResolveProperty(pair.first,resolved))pair.second=std::move(resolved);else pair.second=std::wstring(1,L'\0');}
+        (*result.values)[pair.first]=pair.second;
+    }
+    for(auto& property:customCandidates){
+        auto& candidates=property.second;
+        std::stable_sort(candidates.begin(),candidates.end(),[&](const auto& a,const auto& b){return wins(b.winner,a.winner)&&!wins(a.winner,b.winner);});
+        if(candidates.empty()||ToLower(Trim(candidates.back().value))!=L"revert-layer")continue;
+        auto chosen=candidates.end();
+        while(chosen!=candidates.begin()){
+            --chosen;
+            if(ToLower(Trim(chosen->value))!=L"revert-layer")break;
+            const auto layer=chosen->winner.layer;const bool inlineStyle=chosen->winner.inlineStyle;
+            while(chosen!=candidates.begin()){
+                const auto previous=chosen-1;
+                if(previous->winner.layer!=layer||previous->winner.inlineStyle!=inlineStyle)break;
+                --chosen;
+            }
+            if(chosen==candidates.begin()){chosen=candidates.end();break;}
+        }
+        const auto inherited=inheritedVariables.find(property.first);
+        variables[property.first]=chosen==candidates.end()?(inherited==inheritedVariables.end()?std::wstring(1,L'\0'):inherited->second):chosen->value;
+    }
+    for(auto& pair:variables){
+        const auto keyword=ToLower(Trim(pair.second));
+        if(keyword==L"inherit"||keyword==L"unset"||keyword==L"revert"){
+            const auto inherited=inheritedVariables.find(pair.first);
+            pair.second=inherited==inheritedVariables.end()?std::wstring(1,L'\0'):inherited->second;
+        }
+    }
+    static const ComputedStyle initialStyle=[](){
+    ComputedStyle initialValues;
+    auto initialNode=std::make_shared<Node>();initialNode->tag=L"span";SetDefault(initialNode,initialValues);
+    for(const auto* property:{L"width",L"height",L"min-width",L"min-height",L"top",L"right",L"bottom",L"left",L"flex-basis"})(*initialValues.values)[property]=L"auto";
+    for(const auto* property:{L"max-width",L"max-height",L"background-image",L"box-shadow",L"transform",L"text-decoration",L"text-decoration-line",L"content"})(*initialValues.values)[property]=L"none";
+    (*initialValues.values)[L"background-color"]=L"transparent";(*initialValues.values)[L"opacity"]=L"1";
+    (*initialValues.values)[L"line-height"]=L"normal";
+    (*initialValues.values)[L"font-kerning"]=L"auto";
+    for(const auto* property:{L"row-gap",L"column-gap",L"gap",L"letter-spacing"})(*initialValues.values)[property]=L"normal";
+    for(const auto* side:{L"top",L"right",L"bottom",L"left"}){
+        (*initialValues.values)[L"margin-"+std::wstring(side)]=L"0px";
+        (*initialValues.values)[L"padding-"+std::wstring(side)]=L"0px";
+        (*initialValues.values)[L"border-"+std::wstring(side)+L"-width"]=L"medium";
+        (*initialValues.values)[L"border-"+std::wstring(side)+L"-style"]=L"none";
+        (*initialValues.values)[L"border-"+std::wstring(side)+L"-color"]=L"currentcolor";
+    }
+    return initialValues;
+    }();
+    const auto inheritedProperty=[](const std::wstring& name){
+        static const auto names=CssSyntax::Words(L"color color-scheme font-family font-size font-style font-weight font-kerning letter-spacing line-height list-style-image list-style-position list-style-type tab-size direction text-align white-space pointer-events visibility fill fill-opacity fill-rule stroke stroke-opacity stroke-width stroke-linecap stroke-linejoin stroke-miterlimit stroke-dasharray stroke-dashoffset");
+        return std::find(names.begin(),names.end(),name)!=names.end();
+    };
     // SVG presentation attributes are author declarations with zero
     // specificity. Resolve them only after inherited and element-local custom
     // properties are known; otherwise values such as fill="var(--surface)"
@@ -957,10 +922,13 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
     }
     auto setProperty = [&](const std::wstring& name, const std::wstring& value,
                            const Winner& candidate) {
+        if(needsLayerRevert)propertyCandidates[name].push_back({candidate,value});
         const auto current = winners.find(name);
         if (current != winners.end() && !wins(candidate, current->second)) return;
         winners[name] = candidate;
-        auto resolved = ResolveVariables(value, variables);
+        bool valid=true;
+        auto resolved = ResolveVariables(value, variables,0,&valid);
+        if(!valid)resolved=L"unset";
         if(name==L"font-size"){
             const auto lowered=ToLower(Trim(resolved));
             const bool hasViewportUnit=lowered.find(L"vw")!=std::wstring::npos||
@@ -974,7 +942,12 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
                     viewportWidth_,parentSize,parentSize))+L"px";
             }
         }
-        if (ToLower(Trim(resolved)) == L"inherit") {
+        const auto wideKeyword=ToLower(Trim(resolved));
+        if(wideKeyword==L"initial"||(wideKeyword==L"unset"&&!inheritedProperty(name))){
+            (*result.values)[name]=initialStyle.Get(name);
+        }else if(wideKeyword==L"revert"){
+            const auto original=baseValues.find(name);(*result.values)[name]=original==baseValues.end()?initialStyle.Get(name):original->second;
+        }else if(wideKeyword==L"inherit"||wideKeyword==L"unset") {
             const auto inherited = parent ? parent->Get(name) : L"";
             if (!inherited.empty()) (*result.values)[name] = inherited;
             else {
@@ -984,8 +957,43 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
             }
         } else (*result.values)[name] = std::move(resolved);
     };
-    auto applyDeclaration = [&](const std::wstring& name, const std::wstring& value,
+    auto applyDeclaration = [&](const std::wstring& name, const std::wstring& authoredValue,
                                 const Winner& candidate) {
+        bool valid=true;auto value=ResolveVariables(authoredValue,variables,0,&valid);
+        if(!valid)value=L"unset";
+        const auto keyword=ToLower(Trim(value));
+        const bool wide=keyword==L"inherit"||keyword==L"initial"||keyword==L"unset"||keyword==L"revert"||keyword==L"revert-layer";
+        if(!wide&&(name==L"color"||name==L"background-color"||name==L"outline-color"||
+           (name.rfind(L"border-",0)==0&&name.size()>6&&name.compare(name.size()-6,6,L"-color")==0))&&
+           keyword!=L"currentcolor"&&StyleSheet::Color(value,0x01020304u)==0x01020304u){
+            if(authoredValue.find(L"var(")==std::wstring::npos)return;
+            value=L"unset";
+        }
+        if(name==L"all"&&wide){
+            auto properties=*initialStyle.values;
+            for(const auto& pair:baseValues)properties[pair.first]=L"";
+            for(const auto* rule:matchedRules)for(const auto& item:rule->declarations)properties[item.name]=L"";
+            for(const auto& pair:node->inlineStyle)properties[pair.first]=L"";
+            for(const auto& pair:properties)if(pair.first.rfind(L"--",0)!=0&&pair.first!=L"direction"&&pair.first!=L"unicode-bidi")setProperty(pair.first,keyword,candidate);
+            return;
+        }
+        if(wide){
+            setProperty(name,keyword,candidate);
+            if(name==L"background")for(const auto* property:{L"background-color",L"background-image",L"background-position",L"background-size",L"background-repeat"})setProperty(property,keyword,candidate);
+            else if(name==L"font")for(const auto* property:{L"font-family",L"font-size",L"font-style",L"font-weight",L"line-height"})setProperty(property,keyword,candidate);
+            else if(name==L"flex")for(const auto* property:{L"flex-grow",L"flex-shrink",L"flex-basis"})setProperty(property,keyword,candidate);
+            else if(name==L"gap"){setProperty(L"row-gap",keyword,candidate);setProperty(L"column-gap",keyword,candidate);}
+            else if(name==L"overflow"){setProperty(L"overflow-x",keyword,candidate);setProperty(L"overflow-y",keyword,candidate);}
+            else if(name==L"margin"||name==L"padding"||name==L"inset"||name==L"border"||name==L"border-color"||name==L"border-style"||name==L"border-width"){
+                for(const auto* side:{L"top",L"right",L"bottom",L"left"}){
+                    if(name==L"inset")setProperty(side,keyword,candidate);
+                    else if(name==L"border")for(const auto* suffix:{L"width",L"style",L"color"})setProperty(L"border-"+std::wstring(side)+L"-"+suffix,keyword,candidate);
+                    else if(name.rfind(L"border-",0)==0)setProperty(L"border-"+std::wstring(side)+name.substr(6),keyword,candidate);
+                    else setProperty(name+L"-"+side,keyword,candidate);
+                }
+            }
+            return;
+        }
         if(name==L"margin"||name==L"padding"||name.rfind(L"margin-",0)==0||name.rfind(L"padding-",0)==0){
             const bool padding=name.rfind(L"padding",0)==0;
             const bool unitless=node&&node->ownerDocument&&node->ownerDocument->QuirksMode();
@@ -1008,6 +1016,19 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
             setProperty(L"background-position",background.position,candidate);
             setProperty(L"background-size",background.size,candidate);
             setProperty(L"background-repeat",background.repeat,candidate);
+        } else if (name == L"border-radius") {
+            const auto resolved=ResolveVariables(value,variables);
+            const auto slash=resolved.find(L'/');
+            const auto horizontal=ExpandEdges(resolved.substr(0,slash));
+            const auto vertical=slash==std::wstring::npos?horizontal:ExpandEdges(resolved.substr(slash+1));
+            if(horizontal.size()==4&&vertical.size()==4){
+                static const wchar_t* corners[]={L"top-left",L"top-right",L"bottom-right",L"bottom-left"};
+                const auto keyword=ToLower(Trim(resolved));
+                const bool wide=keyword==L"inherit"||keyword==L"initial"||keyword==L"unset"||
+                    keyword==L"revert"||keyword==L"revert-layer";
+                for(size_t i=0;i<4;++i)setProperty(L"border-"+std::wstring(corners[i])+L"-radius",
+                    wide?resolved:horizontal[i]+L" "+vertical[i],candidate);
+            }
         } else if (name == L"margin" || name == L"padding") {
             const auto edges = ExpandEdges(value);
             if (edges.size() == 4) {
@@ -1168,14 +1189,35 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
         const auto& rule=*rulePointer;
         for (const auto& declaration : rule.declarations) {
             if (declaration.name.rfind(L"--", 0) == 0) continue;
-            const Winner candidate{declaration.important, rule.specificity, rule.order};
+            const Winner candidate{declaration.important, rule.specificity, rule.order,rule.layer};
             applyDeclaration(declaration.name, declaration.value, candidate);
         }
     }
     if(pseudo.empty())for (const auto& pair : node->inlineStyle) {
         if(pair.first.rfind(L"--",0)==0)continue;
         applyDeclaration(pair.first, pair.second,
-                         {node->inlineStylePriority.count(pair.first)!=0, 1000, 0});
+                         {node->inlineStylePriority.count(pair.first)!=0, 0, 0,{},true});
+    }
+    for(auto& property:propertyCandidates){
+        auto& candidates=property.second;
+        std::stable_sort(candidates.begin(),candidates.end(),[&](const auto& a,const auto& b){return wins(b.winner,a.winner)&&!wins(a.winner,b.winner);});
+        if(candidates.empty()||ToLower(Trim(candidates.back().value))!=L"revert-layer")continue;
+        auto chosen=candidates.end();
+        while(chosen!=candidates.begin()){
+            --chosen;
+            if(ToLower(Trim(chosen->value))!=L"revert-layer")break;
+            const auto layer=chosen->winner.layer;const bool inlineStyle=chosen->winner.inlineStyle;
+            while(chosen!=candidates.begin()){
+                const auto previous=chosen-1;
+                if(previous->winner.layer!=layer||previous->winner.inlineStyle!=inlineStyle)break;
+                --chosen;
+            }
+            if(chosen==candidates.begin()){chosen=candidates.end();break;}
+        }
+        // Reapply the selected lower layer without losing its own CSS-wide semantics.
+        const auto value=chosen==candidates.end()?L"revert":chosen->value;
+        const auto candidate=winners[property.first];winners.erase(property.first);
+        setProperty(property.first,value,candidate);
     }
     // HTML hidden-state inputs are non-rendered controls. Chromium enforces
     // this as a user-agent !important rule, so even a broad author rule such
@@ -1185,6 +1227,16 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
     if(pseudo.empty()&&node&&node->tag==L"input"&&
        ToLower(Trim(node->Attribute(L"type")))==L"hidden")
         (*result.values)[L"display"]=L"none";
+    if(pseudo.empty()&&node){
+        const auto type=ToLower(Trim(node->Attribute(L"type")));
+        float selectSize=0;TryParseFloat(node->Attribute(L"size"),selectSize);
+        const bool clippedInput=node->tag==L"input"&&type!=L"checkbox"&&type!=L"radio"&&type!=L"range";
+        const bool menuSelect=node->tag==L"select"&&!node->attributes.count(L"multiple")&&selectSize<=1;
+        // Native text controls and menu selects have UA !important overflow
+        // clipping. Author longhands/shorthands cannot expose their contents.
+        if(clippedInput||menuSelect)for(const auto* property:{L"overflow",L"overflow-x",L"overflow-y"})
+            (*result.values)[property]=L"clip";
+    }
     // Percentages and font-relative lengths compute against this element's
     // font, then descendants inherit the resulting length. Unitless numbers
     // stay numbers and are multiplied by each descendant's own font size.
@@ -1194,86 +1246,31 @@ ComputedStyle StyleSheet::Compute(const std::shared_ptr<Node>& node, const Compu
         const float fontSize=Length(result.Get(L"font-size",L"16px"),16,viewportWidth_,16,16);
         (*result.values)[L"line-height"]=std::to_wstring(Length(lineHeight,fontSize,viewportWidth_,fontSize,fontSize))+L"px";
     }
+    if(node&&node->type==NodeType::Element&&parent&&
+       (parent->Is(L"display",L"flex")||parent->Is(L"display",L"inline-flex")||
+        parent->Is(L"display",L"grid")||parent->Is(L"display",L"inline-grid"))&&
+       !result.Is(L"position",L"absolute")&&!result.Is(L"position",L"fixed")){
+        auto display=result.Get(L"display");
+        if(display==L"inline"||display==L"inline-block")display=L"block";
+        else if(display==L"inline-flex")display=L"flex";
+        else if(display==L"inline-grid")display=L"grid";
+        else if(display==L"inline-table")display=L"table";
+        (*result.values)[L"display"]=display;
+    }
     return result;
 }
 
-float StyleSheet::Length(const std::wstring& raw, float reference, float viewport, float fallback, float fontSize) {
-    auto value = Trim(ToLower(raw));
-    if (value.empty() || value == L"auto" || value == L"none") return fallback;
-    auto mathArguments = [&](const wchar_t* name) {
-        const std::wstring prefix = std::wstring(name) + L"(";
-        if (value.rfind(prefix, 0) != 0 || value.back() != L')')
-            return std::vector<std::wstring>{};
-        return Split(value.substr(prefix.size(), value.size() - prefix.size() - 1), L',');
-    };
-    if (value.rfind(L"min(", 0) == 0) {
-        const auto arguments = mathArguments(L"min");
-        if (arguments.empty()) return fallback;
-        float result = Length(arguments.front(), reference, viewport, fallback, fontSize);
-        for (size_t index = 1; index < arguments.size(); ++index)
-            result = std::min(result, Length(arguments[index], reference, viewport, fallback, fontSize));
-        return result;
-    }
-    if (value.rfind(L"max(", 0) == 0) {
-        const auto arguments = mathArguments(L"max");
-        if (arguments.empty()) return fallback;
-        float result = Length(arguments.front(), reference, viewport, fallback, fontSize);
-        for (size_t index = 1; index < arguments.size(); ++index)
-            result = std::max(result, Length(arguments[index], reference, viewport, fallback, fontSize));
-        return result;
-    }
-    if (value.rfind(L"clamp(", 0) == 0) {
-        const auto arguments = mathArguments(L"clamp");
-        if (arguments.size() != 3) return fallback;
-        const float minimum = Length(arguments[0], reference, viewport, fallback, fontSize);
-        const float preferred = Length(arguments[1], reference, viewport, fallback, fontSize);
-        const float maximum = Length(arguments[2], reference, viewport, fallback, fontSize);
-        return std::max(minimum, std::min(preferred, maximum));
-    }
-    if (value.rfind(L"calc(", 0) == 0 && value.back() == L')') {
-        auto expression = value.substr(5, value.size() - 6);
-        float total = 0.0f; int sign = 1; size_t start = 0; int nesting = 0;
-        for (size_t i = 0; i <= expression.size(); ++i) {
-            if (i < expression.size() && expression[i] == L'(') ++nesting;
-            else if (i < expression.size() && expression[i] == L')') --nesting;
-            if (i == expression.size() || (nesting == 0 && (expression[i] == L'+' || expression[i] == L'-'))) {
-                total += sign * Length(expression.substr(start, i - start), reference, viewport, 0, fontSize);
-                if (i < expression.size()) sign = expression[i] == L'-' ? -1 : 1;
-                start = i + 1;
-            }
-        }
-        return total;
-    }
-    size_t used=0;float number=0;
-    if(!TryParseFloat(value,number,&used))return fallback;
-    const auto unit=value.substr(used);
-    if(unit==L"%")return reference*number/100.0f;
-    if(unit==L"vh"||unit==L"vw")return viewport*number/100.0f;
-    if(unit==L"em")return fontSize*number;
-    if(unit==L"rem")return 16.0f*number;
-    if(unit==L"pt")return number*(96.0f/72.0f);
-    if(unit==L"pc")return number*16.0f;
-    if(unit==L"in")return number*96.0f;
-    if(unit==L"cm")return number*(96.0f/2.54f);
-    if(unit==L"mm")return number*(96.0f/25.4f);
-    if(unit==L"q")return number*(96.0f/101.6f);
-    return unit.empty()||unit==L"px"?number:fallback;
-}
+#include "CSSMath.inl"
+
+#include "CSSColorFunctions.inl"
 
 unsigned int StyleSheet::Color(const std::wstring& raw, unsigned int fallback) {
     auto value = ToLower(Trim(raw));
     if (value == L"transparent" || value == L"none") return 0;
-    static const FastMap<std::wstring, unsigned int> named = {
-        {L"white",0xffffffffu},{L"black",0xff000000u},{L"red",0xffff0000u},
-        {L"blue",0xff0000ffu},{L"green",0xff008000u},{L"gray",0xff808080u},
-        {L"grey",0xff808080u},{L"yellow",0xffffff00u},{L"purple",0xff800080u},
-        {L"fuchsia",0xffff00ffu},{L"magenta",0xffff00ffu},{L"lime",0xff00ff00u},
-        {L"aqua",0xff00ffffu},{L"cyan",0xff00ffffu},{L"navy",0xff000080u},
-        {L"teal",0xff008080u},{L"olive",0xff808000u},{L"maroon",0xff800000u},
-        {L"silver",0xffc0c0c0u},{L"orange",0xffffa500u},
-        {L"rebeccapurple",0xff663399u},{L"transparent",0u}};
-    const auto namedIt = named.find(value);
-    if (namedIt != named.end()) return namedIt->second;
+    static const FastMap<std::wstring,unsigned int> named={
+#include "CSSNamedColors.inl"
+    };
+    if(const auto found=named.find(value);found!=named.end())return found->second;
     if (value.rfind(L"color-mix(", 0) == 0 && value.back() == L')') {
         const auto arguments=Split(value.substr(10,value.size()-11),L',');
         if(arguments.size()==3&&ToLower(Trim(arguments[0]))==L"in srgb"){
@@ -1320,43 +1317,7 @@ unsigned int StyleSheet::Color(const std::wstring& raw, unsigned int fallback) {
         }
         return fallback;
     }
-    if (value.rfind(L"rgb", 0) == 0) {
-        const auto a = value.find(L'('), b = value.find(L')');
-        if (a != std::wstring::npos && b != std::wstring::npos) {
-            auto arguments=value.substr(a+1,b-a-1);
-            if(arguments.find(L',')==std::wstring::npos)
-                for(size_t slash=0;(slash=arguments.find(L'/',slash))!=std::wstring::npos;slash+=3)
-                    arguments.replace(slash,1,L" / ");
-            auto parts=arguments.find(L',')==std::wstring::npos?
-                SplitWhitespace(arguments):Split(arguments,L',');
-            parts.erase(std::remove(parts.begin(),parts.end(),L"/"),parts.end());
-            if(parts.size()>=3){
-                auto channel=[](const std::wstring& token,unsigned int& result){
-                    const auto text=Trim(token);size_t used=0;float number=0;
-                    if(!TryParseFloat(text,number,&used))return false;
-                    const bool percent=used<text.size()&&text.substr(used)==L"%";
-                    if(used!=text.size()&&!percent)return false;
-                    const float value=percent?number*2.55f:number;
-                    result=static_cast<unsigned int>(std::lround(std::max(0.0f,std::min(255.0f,value))));
-                    return true;
-                };
-                auto alpha=[](const std::wstring& token,unsigned int& result){
-                    const auto text=Trim(token);size_t used=0;float number=0;
-                    if(!TryParseFloat(text,number,&used))return false;
-                    const bool percent=used<text.size()&&text.substr(used)==L"%";
-                    if(used!=text.size()&&!percent)return false;
-                    const float value=percent?number/100.0f:number;
-                    result=static_cast<unsigned int>(std::lround(std::max(0.0f,std::min(1.0f,value))*255.0f));
-                    return true;
-                };
-                unsigned int r=0,g=0,bl=0,opacity=255;
-                if(channel(parts[0],r)&&channel(parts[1],g)&&channel(parts[2],bl)&&
-                   (parts.size()<=3||alpha(parts[3],opacity)))
-                    return (opacity<<24)|(r<<16)|(g<<8)|bl;
-            }
-        }
-    }
-    return fallback;
+    return CssFunctionalColor(value,fallback);
 }
 
 } // namespace TWebFrame::Internal

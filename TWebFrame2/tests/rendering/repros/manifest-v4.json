@@ -1,0 +1,249 @@
+{
+  "schemaVersion": 1,
+  "createdUtc": "2026-10-03T08:38:43.9349765Z",
+  "documentCount": 17,
+  "scope": "Additional static diagnostic documents, not part of the 20-case base corpus",
+  "documents": [
+    {
+      "id": "collapsed-table-border",
+      "description": "colspan과 공유 collapsed 경계; table/cell 절반 경계 폭과 한 번의 페인트",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "7695011E939C03B2AD342554E63E9786394A0414026BE3809C4AFEB6F53DDFA1"
+        },
+        {
+          "path": "style.css",
+          "sha256": "C3CFFFD66792BA505D4DB9FC126433DBD77D8B1387E414D7EB0664379FF743EA"
+        }
+      ]
+    },
+    {
+      "id": "dpi-font-metrics",
+      "description": "Arial/Malgun Gothic/Tahoma/Times New Roman의 96/144 DPI font-box 및 baseline",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "CD5D3D25B673CA8AC484BBB8DC713BBE7698AEA9B6F202D8E256B8E47445B610"
+        },
+        {
+          "path": "style.css",
+          "sha256": "A5A85E90FA272710A3F076F3643BF868B23179B1CF54B17920362D97D59E0741"
+        }
+      ]
+    },
+    {
+      "id": "dpi-hidden-inline-icons",
+      "description": "hidden 속성을 사용하는 첫 진단 버전; UA hidden 차이를 그대로 보존",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "7C5FB7D0AE90BEF7D32F8965A5FCCC0FF602CA385BBB880F630CD2D68FA16C01"
+        },
+        {
+          "path": "style.css",
+          "sha256": "AA9A799A0E2E437F8D5CA04FF2A7F1B6F54D0A54760B542D63186D6DB4A6E2C4"
+        }
+      ]
+    },
+    {
+      "id": "dpi-hidden-inline-icons-v2",
+      "description": "display:none을 사용하는 원 회귀검사의 정적 대응; v1 별도 보존",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "7AB38C1832B13DDC4AAFFF57976B524B7582059956FF9C86EBAD9EF40B6FF97E"
+        },
+        {
+          "path": "style.css",
+          "sha256": "AA9A799A0E2E437F8D5CA04FF2A7F1B6F54D0A54760B542D63186D6DB4A6E2C4"
+        }
+      ]
+    },
+    {
+      "id": "dpi-hidden-inline-icons-v3",
+      "description": "v2에 nav와 li 계측 추가; image + br의 line strut 누락 분리",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "669544C8C4766FA6B1D1CEBE741337DA71C40267DA62D8B2979D98F25026B4A1"
+        },
+        {
+          "path": "style.css",
+          "sha256": "AA9A799A0E2E437F8D5CA04FF2A7F1B6F54D0A54760B542D63186D6DB4A6E2C4"
+        }
+      ]
+    },
+    {
+      "id": "dpi-inline-alignment",
+      "description": "Malgun Gothic과 Tahoma의 작은 label, count 및 font-size:0 toolbar 정렬",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "175FF33399262E1F816DA9C3D3DFF3C682977F92750993AF51ABA19672B42EB3"
+        },
+        {
+          "path": "style.css",
+          "sha256": "14FF146E82083D54B78BBDB597CC371DB2126808C3953F9471AE592F4F6ABBBC"
+        }
+      ]
+    },
+    {
+      "id": "dpi-inline-badges",
+      "description": "quirks 중간 정렬 badge와 text-top pseudo icon",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "0852C0D454C85092959C85E54CE4E06A6C47C36993F1CE506435315EA3AE2C00"
+        },
+        {
+          "path": "style.css",
+          "sha256": "D2BD28C34B3B30F83162F286E4E69C74415F1F583F9CB5B877BBDF1460D85CAB"
+        }
+      ]
+    },
+    {
+      "id": "dpi-standards-image-lines",
+      "description": "standards 모드의 image-only 및 image + text 줄 baseline",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "3C49A95E1BF61948D963CFACD7D22A8A24CBB8FB1834441AB43D3762E431525B"
+        },
+        {
+          "path": "style.css",
+          "sha256": "2FD9CA306EF626014805DFD260F4E9DA94ED8B6D86D38A81F7501FADBBE3EAF0"
+        }
+      ]
+    },
+    {
+      "id": "inline-wrapped-leading-space",
+      "description": "inline span 다음 text node가 자동 줄바꿈될 때 선행 공백 제거",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "902F1FFE948A329CCBCEE647929D6FA2D3D2FEEFF19506064341011C93BCE3DA"
+        },
+        {
+          "path": "style.css",
+          "sha256": "151B76FBAFAEEC061E2678A5826FBD956E69C124BF899C5648774DF6FE4E982C"
+        }
+      ]
+    },
+    {
+      "id": "nonuniform-corner-radius",
+      "description": "서로 다른 모서리 radius의 미지원 페인트; 실패 유지",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "F0D50B377947464FD5F4B04604C54D0B30E4E17E4E0D901764CDCEB3D7FFDEB3"
+        },
+        {
+          "path": "style.css",
+          "sha256": "D38409C767C2DF1C5EB145A0353944BE4961C7A7FD0722A29BC3B9C8E9C8CC8C"
+        }
+      ]
+    },
+    {
+      "id": "quirks-percentage-min-height",
+      "description": "quirks min-height:100%의 viewport 백분율 기준; 최초 pilot에서 확인한 동작 유지",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "BA1552AC8F2614E56C0895576B32E7291580A04DECEDB6E913AF817B0597B2F8"
+        },
+        {
+          "path": "style.css",
+          "sha256": "02D542685989233C832AC6B100112ED6DCCA0FF5B2A3E1347EFDD9EF31188B2C"
+        }
+      ]
+    },
+    {
+      "id": "font-kerning-pairs",
+      "description": "Arial, Malgun Gothic, Times New Roman의 auto/normal/none 및 상속 kerning; 실제 glyph와 문자 Range 경계",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "3F04F4EAA74C0A155AFDE366A918A4369BAA29ED577D1BE99B5797273062F4F9"
+        },
+        {
+          "path": "style.css",
+          "sha256": "8F08CB70E588B910673F1DAB79B07F7DDA0055E01EADA94230ECC8CE477F9924"
+        }
+      ]
+    },
+    {
+      "id": "normal-font-lines",
+      "description": "11/14/16/20px Arial, Malgun Gothic, Segoe UI의 normal line-height와 물리 픽셀 반올림",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "30879DC25B485451B82C1473F04085BBC29F109BB576AB746668100F5A6BE2AF"
+        },
+        {
+          "path": "style.css",
+          "sha256": "09679CA6169BE1F30CFB03DF44C2EBDD923433BA1219883A01584EB64B274FB6"
+        }
+      ]
+    },
+    {
+      "id": "ua-controls-geometry",
+      "description": "input/select/button 기본 크기, 버튼 줄바꿈, appearance:none과 작성자 padding/border",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "6BDBC1164B31456300BE211E634FB03A78FBBA6A36979DC2A91D438D48588C49"
+        },
+        {
+          "path": "style.css",
+          "sha256": "98D8A4226EE619F7F8CE695B54E17CDFF7122F395FE05E6D57B1FD9E9149F773"
+        }
+      ]
+    },
+    {
+      "id": "font-kerning-pairs-v2",
+      "description": "v1의 원 입력을 보존하며 Segoe UI 15/24px auto/normal/none kerning 진단 추가",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "FBE2315E4BD22C0245B940605BFB2D2CDDCB1E8B57500C2393D7679207B62214"
+        },
+        {
+          "path": "style.css",
+          "sha256": "350476AFF95284B77CC3B0AF37536E95F81883DB2E9E61B2E824004C89C82FA1"
+        }
+      ]
+    },
+    {
+      "id": "normal-regression-layouts",
+      "description": "기존 normal/inline padding/grid 버튼 회귀의 정적 대응; 기본 글꼴 환경 차이를 그대로 보존",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "6A6AEC1BBD8735DFE60A0A8BBC2093E716D4F3E72F047F7D05ED588932DC54F0"
+        },
+        {
+          "path": "style.css",
+          "sha256": "F08E07AF5232F2E1BA210A8732FB8AFFD9176D56C23D922B790C03BC8836BF57"
+        }
+      ]
+    },
+    {
+      "id": "normal-regression-layouts-v2",
+      "description": "v1에 Segoe UI를 명시한 grid intrinsic 회귀의 참조; v1은 별도 보존",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "6A6AEC1BBD8735DFE60A0A8BBC2093E716D4F3E72F047F7D05ED588932DC54F0"
+        },
+        {
+          "path": "style.css",
+          "sha256": "B19347BD87EC89FA80A887065DCC574DDFA94B2AAD7136AFAC132959AD5A4469"
+        }
+      ]
+    }
+  ],
+  "manifestVersion": 2,
+  "previousManifestSha256": "050E25FAFCB244D617858F335D1A050B0816E1715CD01A49138533D9C39A0D84",
+  "revisionReason": "추가 재캡처에서 이미 유지한 quirks min-height의 2/2 통과 확인; 결과 설명만 교정하며 HTML/CSS 해시는 동일"
+}

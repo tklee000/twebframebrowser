@@ -44,6 +44,11 @@ struct LayoutBox {
     ComputedStyle style;
     LayoutRect rect;
     LayoutRect content;
+    // Half of the winning collapsed edge belongs to each adjacent cell.
+    // Keep used widths separate from the authored computed border styles.
+    mutable bool collapsedBordersResolved = false;
+    mutable float collapsedTop = 0, collapsedRight = 0;
+    mutable float collapsedBottom = 0, collapsedLeft = 0;
     // Conservative subtree geometry for rejecting off-screen stacking contexts
     // before walking their ancestor clips or testing individual descendants.
     LayoutRect subtreeBounds;
@@ -64,6 +69,7 @@ struct LayoutBox {
     bool visible = true;
     bool preserveLeadingWhitespace = false;
     bool preserveTrailingWhitespace = false;
+    bool trimLeadingLineWhitespace = false;
     bool containsSticky = false;
     bool stickyFlowYValid = false;
     float stickyFlowY = 0.0f;
@@ -164,6 +170,9 @@ public:
     bool TextCaretRect(const std::shared_ptr<Node>& textNode, size_t textOffset,
                        LayoutRect& caretRect);
     std::wstring DumpJson(bool includeText=false) const;
+    std::wstring DumpRenderingTextJson() const;
+    ComputedStyle StyleForRendering(const std::shared_ptr<Node>& node) const;
+    std::wstring DumpRenderingStyleJson(const ComputedStyle& style) const;
     const LayoutBox* Root() const { return root_.get(); }
     const LayoutBox* BoxFor(const std::shared_ptr<Node>& node) const;
     bool VisualBounds(const std::shared_ptr<Node>& node, LayoutRect& bounds) const;
@@ -186,6 +195,7 @@ private:
                                      const std::shared_ptr<Node>& previousElement = {});
     void LayoutBoxTree(LayoutBox& box, const LayoutRect& available, bool forcedSize = false,
                        bool definiteWidth = true, bool definiteHeight = true);
+    void LayoutRoot();
     void FinalizeScroll(LayoutBox& box);
     void LayoutBlock(LayoutBox& box, bool definiteHeight = true);
     void LayoutFlex(LayoutBox& box);
@@ -240,7 +250,7 @@ private:
     const LayoutBox* canvasBackgroundBox_ = nullptr;
     const LayoutBox* canvasHtmlBox_ = nullptr;
     const LayoutBox* canvasBodyBox_ = nullptr;
-    ID2D1RenderTarget* brushCacheTarget_ = nullptr;
+    Microsoft::WRL::ComPtr<ID2D1RenderTarget> brushCacheTarget_;
     FastMap<unsigned int, Microsoft::WRL::ComPtr<ID2D1SolidColorBrush>> brushCache_;
     ID2D1Factory* geometryFactory_ = nullptr;
     Microsoft::WRL::ComPtr<ID2D1PathGeometry> selectArrowGeometry_;

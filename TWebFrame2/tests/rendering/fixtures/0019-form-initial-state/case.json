@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "0019-form-initial-state",
+  "stage": "pilot",
+  "family": "cascade",
+  "features": [
+    "form",
+    "ua-style",
+    "checked",
+    "disabled"
+  ],
+  "seed": 20261003,
+  "generatorVersion": "1.0",
+  "scriptless": true,
+  "states": [
+    "initial"
+  ],
+  "viewports": [
+    [
+      384,
+      768
+    ],
+    [
+      800,
+      600
+    ],
+    [
+      1280,
+      800
+    ]
+  ],
+  "dpi": [
+    96,
+    144
+  ],
+  "htmlSha256": "0BDDD9F17CE1FAEB60DC8764E2499A44AF901FC71E08F4C2B288EE3837E64EE8",
+  "cssSha256": "E842E3FA6BEE1A602A6ED8A9411491536E793C886002D7C8C4F980AED0BF2913"
+}

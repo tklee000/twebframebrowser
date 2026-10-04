@@ -1,0 +1,267 @@
+{
+  "schemaVersion": 1,
+  "originalArchiveId": "20261003-162837-939-d2a5124f",
+  "originalArchiveSha256": "7CC3A8E0C3028F232784AF6EECAF1C3413FE7EE28190A5C8EF6AC60BFC8B7BED",
+  "restoredEntryCount": 2361,
+  "allRestoredEntryHashesVerified": true,
+  "recompareCount": 120,
+  "recomparePassed": 84,
+  "recompareFailed": 36,
+  "recompareResultsIdentical": true,
+  "representativeFreshCaptures": [
+    {
+      "id": "0009-table-spans",
+      "dpi": 96,
+      "viewport": "800x600",
+      "referenceDifferentPixels": 0,
+      "nativeDifferentPixels": 0,
+      "textGeometryIdentical": true
+    },
+    {
+      "id": "0017-latin-inline",
+      "dpi": 96,
+      "viewport": "800x600",
+      "referenceDifferentPixels": 0,
+      "nativeDifferentPixels": 0,
+      "textGeometryIdentical": true
+    },
+    {
+      "id": "0009-table-spans",
+      "dpi": 144,
+      "viewport": "800x600",
+      "referenceDifferentPixels": 0,
+      "nativeDifferentPixels": 0,
+      "textGeometryIdentical": true
+    },
+    {
+      "id": "0017-latin-inline",
+      "dpi": 144,
+      "viewport": "800x600",
+      "referenceDifferentPixels": 0,
+      "nativeDifferentPixels": 0,
+      "textGeometryIdentical": true
+    }
+  ],
+  "recoveryZipFile": "20261003-162837-939-d2a5124f-recovery-evidence.zip",
+  "recoveryZipSha256": "B0298C1058E0185F98DA0E7C8C765111F90F9025E4BAAA1BA383E4DAC932C47B",
+  "recoveryZipBytes": 140489,
+  "recoveryEntries": [
+    {
+      "entry": "144dpi.log",
+      "sha256": "23E6E3789212F4EB45A600057C90791805247A5672F198B0C247203ACE644222"
+    },
+    {
+      "entry": "96dpi.log",
+      "sha256": "90B6CFEC9CF94F1C8840D3246076BD889BF2DDDF24AA9B888CEB79D8AFBABA93"
+    },
+    {
+      "entry": "cases.txt",
+      "sha256": "937E3836E846246A388D363E39D527C3476BEE9CF50EB97EE533499DAACFD20E"
+    },
+    {
+      "entry": "144dpi/reference-features.json",
+      "sha256": "FB51A505AA7006100AD25BF2135367E52DC5C85DA64858B5BFE1C1CE30DDDCE9"
+    },
+    {
+      "entry": "144dpi/runtime-version.txt",
+      "sha256": "692BAA586266542958DF6BE5BDE6E96382932B2877A06D5827C6C51C36FA9BDE"
+    },
+    {
+      "entry": "96dpi/reference-features.json",
+      "sha256": "FB51A505AA7006100AD25BF2135367E52DC5C85DA64858B5BFE1C1CE30DDDCE9"
+    },
+    {
+      "entry": "96dpi/runtime-version.txt",
+      "sha256": "692BAA586266542958DF6BE5BDE6E96382932B2877A06D5827C6C51C36FA9BDE"
+    },
+    {
+      "entry": "144dpi/0009-table-spans/capture-status.json",
+      "sha256": "E7BA0C9BFBC50D66DD4269C799EC6659E02B90A3773E40124D6C0F83EE67A322"
+    },
+    {
+      "entry": "144dpi/0009-table-spans/native-error.txt",
+      "sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "entry": "144dpi/0009-table-spans/native-window-paint.png",
+      "sha256": "E8B3AC44F22E9FA98729DE1782908432ED8D4C1850F74AC1621964B780984D90"
+    },
+    {
+      "entry": "144dpi/0009-table-spans/native.json",
+      "sha256": "A26D24EC11CF539C31046A69BB52A27D7F9EBB26BC4E1BD91D1047EE1FE54D34"
+    },
+    {
+      "entry": "144dpi/0009-table-spans/native.png",
+      "sha256": "E8B3AC44F22E9FA98729DE1782908432ED8D4C1850F74AC1621964B780984D90"
+    },
+    {
+      "entry": "144dpi/0009-table-spans/reference-attempt-1.png",
+      "sha256": "7C4593F8FB76E4C97F92579A428AFBE8F157636CA00E902940D8A0355BDB1E41"
+    },
+    {
+      "entry": "144dpi/0009-table-spans/reference-attempt-2.png",
+      "sha256": "7C4593F8FB76E4C97F92579A428AFBE8F157636CA00E902940D8A0355BDB1E41"
+    },
+    {
+      "entry": "144dpi/0009-table-spans/reference-dom-snapshot.json",
+      "sha256": "B8E97F107E830732B4112EF6A71DF5ADC60DD87473D1DF1A1337D088B58B7F47"
+    },
+    {
+      "entry": "144dpi/0009-table-spans/reference-metrics.json",
+      "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+    },
+    {
+      "entry": "144dpi/0009-table-spans/reference.json",
+      "sha256": "A57388B577ED2454B159499B81F5AF4BD386617A912C00DD3AE11848A50090E7"
+    },
+    {
+      "entry": "144dpi/0009-table-spans/reference.png",
+      "sha256": "7C4593F8FB76E4C97F92579A428AFBE8F157636CA00E902940D8A0355BDB1E41"
+    },
+    {
+      "entry": "144dpi/0009-table-spans/window-route.json",
+      "sha256": "67ECB1DFBBA35DCE850277BC78B79602D20BCF0F1541877DC570ACD34AA5F8EC"
+    },
+    {
+      "entry": "144dpi/0017-latin-inline/capture-status.json",
+      "sha256": "DA4869F4C7BB137A3AE13FF465FD5765CE39B7222333B0EFA4B12E733B895D46"
+    },
+    {
+      "entry": "144dpi/0017-latin-inline/native-error.txt",
+      "sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "entry": "144dpi/0017-latin-inline/native-window-paint.png",
+      "sha256": "94DB7E3D72D67D980B680E7593BBFFB2D8D3066B1E1574037914259C1ED73117"
+    },
+    {
+      "entry": "144dpi/0017-latin-inline/native.json",
+      "sha256": "CC4DF1CCBFF991218238A3D7F371FF4873F498DCB8974ACA13A6C8D730F6879F"
+    },
+    {
+      "entry": "144dpi/0017-latin-inline/native.png",
+      "sha256": "94DB7E3D72D67D980B680E7593BBFFB2D8D3066B1E1574037914259C1ED73117"
+    },
+    {
+      "entry": "144dpi/0017-latin-inline/reference-attempt-1.png",
+      "sha256": "0714584E971735C897B019D03916FD14E42627991A757897F080820A234530D6"
+    },
+    {
+      "entry": "144dpi/0017-latin-inline/reference-attempt-2.png",
+      "sha256": "0714584E971735C897B019D03916FD14E42627991A757897F080820A234530D6"
+    },
+    {
+      "entry": "144dpi/0017-latin-inline/reference-dom-snapshot.json",
+      "sha256": "81C0D67738FB5548AB299FBB108ADDE8ED0CC919B0AE8096BE7554A92F0373C5"
+    },
+    {
+      "entry": "144dpi/0017-latin-inline/reference-metrics.json",
+      "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+    },
+    {
+      "entry": "144dpi/0017-latin-inline/reference.json",
+      "sha256": "7883ED3201D3703045DBE73DB3799ABF892AFEAA7819C06808469982719D23D2"
+    },
+    {
+      "entry": "144dpi/0017-latin-inline/reference.png",
+      "sha256": "0714584E971735C897B019D03916FD14E42627991A757897F080820A234530D6"
+    },
+    {
+      "entry": "144dpi/0017-latin-inline/window-route.json",
+      "sha256": "67ECB1DFBBA35DCE850277BC78B79602D20BCF0F1541877DC570ACD34AA5F8EC"
+    },
+    {
+      "entry": "96dpi/0009-table-spans/capture-status.json",
+      "sha256": "1B29216414CF3B6C09D65BD9004C59F6561ECE3D58B6A49A1E0699DC0CAFD928"
+    },
+    {
+      "entry": "96dpi/0009-table-spans/native-error.txt",
+      "sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "entry": "96dpi/0009-table-spans/native.json",
+      "sha256": "5FFCF7ABB4F272C29B5146921C5B8495A28636448AEABCF7B253B8FCECE5FEB2"
+    },
+    {
+      "entry": "96dpi/0009-table-spans/native.png",
+      "sha256": "37B55CC597699EC6F91C79611E17CE16417A97A38E4A693AA879F8C13D397ADD"
+    },
+    {
+      "entry": "96dpi/0009-table-spans/reference-attempt-1.png",
+      "sha256": "9147BDDDE068CFE47606419CAAD9119381CD263EC936FB342C4531E843ECB18D"
+    },
+    {
+      "entry": "96dpi/0009-table-spans/reference-attempt-2.png",
+      "sha256": "9147BDDDE068CFE47606419CAAD9119381CD263EC936FB342C4531E843ECB18D"
+    },
+    {
+      "entry": "96dpi/0009-table-spans/reference-dom-snapshot.json",
+      "sha256": "1A7C04EC2C6A3655853EB3126DD9DC8539169E5355614CD379B26622223402FD"
+    },
+    {
+      "entry": "96dpi/0009-table-spans/reference-metrics.json",
+      "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+    },
+    {
+      "entry": "96dpi/0009-table-spans/reference.json",
+      "sha256": "FD1F2196E652928B2DF6D6FBE78EBBBECF5AFD7CD20AA6DE4FE97907540DB0FF"
+    },
+    {
+      "entry": "96dpi/0009-table-spans/reference.png",
+      "sha256": "9147BDDDE068CFE47606419CAAD9119381CD263EC936FB342C4531E843ECB18D"
+    },
+    {
+      "entry": "96dpi/0009-table-spans/window-route.json",
+      "sha256": "D456780BC9F49D0610EBC29DAA520A8372D06B32D3422FBF26528ED85F464588"
+    },
+    {
+      "entry": "96dpi/0017-latin-inline/capture-status.json",
+      "sha256": "CF7D6CA1CBF8334B8290463C1285E1C780B31C17708CCBC80A43EE1DD0EA5700"
+    },
+    {
+      "entry": "96dpi/0017-latin-inline/native-error.txt",
+      "sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "entry": "96dpi/0017-latin-inline/native.json",
+      "sha256": "3F73A4B30EC58CBF34E5DC344BEC7E59454CDE1C781A062DC198FEAE831933EF"
+    },
+    {
+      "entry": "96dpi/0017-latin-inline/native.png",
+      "sha256": "10700F7DAFB82B0CDDC1977FDBC23F13F5CED4A45D3842B9F234C6408D9D139F"
+    },
+    {
+      "entry": "96dpi/0017-latin-inline/reference-attempt-1.png",
+      "sha256": "3CDD4BF3C4C0B1A7EA5CB5FD5861D221907189DA1D98E5DEEB3A8217C8EDC069"
+    },
+    {
+      "entry": "96dpi/0017-latin-inline/reference-attempt-2.png",
+      "sha256": "3CDD4BF3C4C0B1A7EA5CB5FD5861D221907189DA1D98E5DEEB3A8217C8EDC069"
+    },
+    {
+      "entry": "96dpi/0017-latin-inline/reference-dom-snapshot.json",
+      "sha256": "04812334A3FEDD9FA66CEC56679EBE14565C13397D17E2EE8D7D8E22422BF794"
+    },
+    {
+      "entry": "96dpi/0017-latin-inline/reference-metrics.json",
+      "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+    },
+    {
+      "entry": "96dpi/0017-latin-inline/reference.json",
+      "sha256": "B2B9EA6C1AA46E55FBD0FC0B929730CB26BD2CF3F4F3C79AD82DF0A84959EDDD"
+    },
+    {
+      "entry": "96dpi/0017-latin-inline/reference.png",
+      "sha256": "3CDD4BF3C4C0B1A7EA5CB5FD5861D221907189DA1D98E5DEEB3A8217C8EDC069"
+    },
+    {
+      "entry": "96dpi/0017-latin-inline/window-route.json",
+      "sha256": "D456780BC9F49D0610EBC29DAA520A8372D06B32D3422FBF26528ED85F464588"
+    },
+    {
+      "entry": "restored-comparison.log",
+      "sha256": "A573EF2BD4C08E4EBCF5A9C3E9CBD768CB6BCFFE8249B9F1E3DDDDF04934F052"
+    }
+  ],
+  "allRecoveryZipEntriesVerified": true
+}

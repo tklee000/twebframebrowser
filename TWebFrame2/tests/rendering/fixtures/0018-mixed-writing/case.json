@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "0018-mixed-writing",
+  "stage": "pilot",
+  "family": "text",
+  "features": [
+    "text",
+    "korean",
+    "bidi",
+    "white-space"
+  ],
+  "seed": 20261003,
+  "generatorVersion": "1.0",
+  "scriptless": true,
+  "states": [
+    "initial"
+  ],
+  "viewports": [
+    [
+      384,
+      768
+    ],
+    [
+      800,
+      600
+    ],
+    [
+      1280,
+      800
+    ]
+  ],
+  "dpi": [
+    96,
+    144
+  ],
+  "htmlSha256": "B228A3FFAEF0065CE31A47C1E19892EBDC6B77EE26B9BE2A934BCB98DE25AB28",
+  "cssSha256": "107CE26C46918AFBD18BCAF76FEB20D58BBC75EC5C4CDBB9C0D720E0B513D8B7"
+}

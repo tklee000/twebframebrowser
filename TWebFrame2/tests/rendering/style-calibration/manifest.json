@@ -1,0 +1,196 @@
+{
+  "documents": [
+    {
+      "id": "style-initial",
+      "expected": [
+        {
+          "id": "default",
+          "styles": {
+            "white-space": "normal",
+            "letter-spacing": "normal",
+            "opacity": "1",
+            "font-size": "16px",
+            "line-height": "normal"
+          }
+        },
+        {
+          "id": "reset",
+          "styles": {
+            "white-space": "normal",
+            "opacity": "1",
+            "background-color": "rgba(0, 0, 0, 0)"
+          }
+        },
+        {
+          "id": "alpha",
+          "styles": {
+            "background-color": "rgba(20, 40, 60, 0.5)"
+          }
+        },
+        {
+          "id": "current",
+          "styles": {
+            "background-color": "rgb(23, 32, 42)"
+          }
+        },
+        {
+          "id": "clamped",
+          "styles": {
+            "opacity": "1"
+          }
+        }
+      ],
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "8B687714E7F51CFE2FF78D6C3609A38AE7D961A4CBEAC6CA70167B0CC7794EEF"
+        },
+        {
+          "path": "style.css",
+          "sha256": "D095A8A930336A77FDF040C5BC6ED6EEDA238D4185A18E1C7190F1C022DAB55C"
+        }
+      ]
+    },
+    {
+      "id": "style-inheritance",
+      "expected": [
+        {
+          "id": "inherited",
+          "styles": {
+            "letter-spacing": "0.25px",
+            "line-height": "30px",
+            "font-weight": "700",
+            "white-space": "pre",
+            "color": "rgb(167, 79, 43)",
+            "font-size": "20px"
+          }
+        },
+        {
+          "id": "unset",
+          "styles": {
+            "white-space": "pre",
+            "opacity": "1",
+            "background-color": "rgba(0, 0, 0, 0)"
+          }
+        },
+        {
+          "id": "hidden",
+          "styles": {
+            "color": "rgb(40, 100, 180)",
+            "display": "none"
+          },
+          "present": false
+        },
+        {
+          "id": "hidden-child",
+          "styles": {
+            "display": "block",
+            "line-height": "15px",
+            "font-size": "10px",
+            "color": "rgb(40, 100, 180)",
+            "white-space": "pre"
+          },
+          "present": false
+        },
+        {
+          "id": "invisible",
+          "styles": {
+            "visibility": "hidden"
+          },
+          "present": true
+        }
+      ],
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "107CFC0ACEDDB41885DF03A4F8E8A53A0EF3169F2ED84DA41BFF03DEDAD42F87"
+        },
+        {
+          "path": "style.css",
+          "sha256": "C00546FB3CE74E143FDCF635AD57DFA75FC88838DC3825F3F1A868AD4943C5C0"
+        }
+      ]
+    },
+    {
+      "id": "style-ua-overflow",
+      "expected": [
+        {
+          "id": "svg-default",
+          "styles": {
+            "overflow-y": "hidden",
+            "overflow-x": "hidden"
+          },
+          "present": true
+        },
+        {
+          "id": "svg-author",
+          "styles": {
+            "overflow-y": "visible",
+            "overflow-x": "visible"
+          },
+          "present": true
+        },
+        {
+          "id": "input-default",
+          "styles": {
+            "overflow-y": "clip",
+            "overflow-x": "clip"
+          },
+          "present": true
+        },
+        {
+          "id": "input-author",
+          "styles": {
+            "overflow-y": "clip",
+            "overflow-x": "clip"
+          },
+          "present": true
+        },
+        {
+          "id": "checkbox",
+          "styles": {
+            "overflow-y": "visible",
+            "overflow-x": "visible"
+          },
+          "present": true
+        },
+        {
+          "id": "select-default",
+          "styles": {
+            "overflow-y": "clip",
+            "overflow-x": "clip"
+          },
+          "present": true
+        },
+        {
+          "id": "select-author",
+          "styles": {
+            "overflow-y": "clip",
+            "overflow-x": "clip"
+          },
+          "present": true
+        },
+        {
+          "id": "button",
+          "styles": {
+            "overflow-y": "visible",
+            "overflow-x": "visible"
+          },
+          "present": true
+        }
+      ],
+      "files": [
+        {
+          "sha256": "048FA2CFA34C2BCCC4F0BBAF77CC204E142524A6BE2704B393DC9C1DE7F2B9F2",
+          "path": "index.html"
+        },
+        {
+          "sha256": "4CAB6C6F9CF31B467557787DF7BD4A91A2A98A209B612F68CFC6777FC4C5FA93",
+          "path": "style.css"
+        }
+      ]
+    }
+  ],
+  "scope": "Independent computed style defaults, CSS-wide values, inheritance and non-rendered descendants; separate from the 20-document corpus",
+  "schemaVersion": 1
+}

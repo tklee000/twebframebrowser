@@ -1,0 +1,1 @@
+html,body{margin:0;background:#fff;font:16px/20px Arial}.row{display:flex;align-items:center;gap:14px;margin:20px}input,button,select{font:14px Arial}input{width:150px}input[type=checkbox]{width:13px;height:13px}.styled{border:2px solid red;background:#ff0}.plain{appearance:none;border:0;background:#fff;width:120px;height:25px}

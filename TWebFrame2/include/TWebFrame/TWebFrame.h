@@ -110,6 +110,11 @@ public:
     // Test/diagnostic helpers. Layout JSON contains stable integer pixel bounds.
     std::wstring DumpLayoutJson() const;
     std::wstring DumpLayoutJson(bool includeChildFrames) const;
+    // Diagnostic capture through the View's shared paint/resource pipeline.
+    // width/height are CSS pixels; dpi is explicit (not a monitor DPI change).
+    // Pixels are opaque, top-down BGRA. The original viewport is restored.
+    bool CaptureRenderingSnapshot(unsigned int width, unsigned int height, float dpi,
+        std::vector<unsigned char>& pixels, std::wstring& diagnostics);
     // Accessibility JSON exposes the same stable automation ids used by the
     // UI Automation provider. Prefer an explicit data-automation-id or id;
     // otherwise TWebFrame emits a deterministic DOM path.

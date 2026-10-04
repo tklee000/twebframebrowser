@@ -2,6 +2,7 @@
 #include "DOM.h"
 #include "JavaScript.h"
 #include "Layout.h"
+#include "RasterSurface.h"
 
 #include <d2d1.h>
 #include <dwrite.h>
@@ -43,10 +44,10 @@ struct Raster {
     }
 };
 
-Raster Paint(LayoutEngine& layout,float scale){
+Raster Paint(LayoutEngine& layout,float scale,float width=40,float height=24){
     Raster result;
-    result.width=static_cast<UINT>(std::lround(40.0f*scale));
-    result.height=static_cast<UINT>(std::lround(24.0f*scale));
+    result.width=static_cast<UINT>(std::lround(width*scale));
+    result.height=static_cast<UINT>(std::lround(height*scale));
     ComPtr<IWICImagingFactory> wicFactory;
     ComPtr<IWICBitmap> bitmap;
     ComPtr<ID2D1Factory> d2dFactory;
@@ -68,9 +69,11 @@ Raster Paint(LayoutEngine& layout,float scale){
     Check(resources,L"form-control raster resources are created");
     if(!resources)return result;
 
+    RasterSurface surface(target.Get(),bitmap.Get(),result.width,result.height);
     target->BeginDraw();target->Clear(D2D1::ColorF(D2D1::ColorF::Black));
     layout.Paint(target.Get(),writeFactory.Get());
-    Check(SUCCEEDED(target->EndDraw()),L"form-control fixture paints");
+    const auto painted=target->EndDraw();
+    Check(SUCCEEDED(painted)&&SUCCEEDED(surface.error),L"form-control fixture paints through the shared View surface");
 
     WICRect rectangle{0,0,static_cast<INT>(result.width),static_cast<INT>(result.height)};
     ComPtr<IWICBitmapLock> lock;
@@ -197,6 +200,54 @@ void CheckNativeCheckboxGeometry(){
           L"native checkbox margins and flex gap retain browser geometry");
 }
 
+void CheckPaintGeometry(float scale){
+    std::wstring error;Document document;
+    Check(document.Parse(LR"HTML(
+        <style>html,body{margin:0;background:#fff}
+        .corners{position:absolute;left:10px;top:10px;width:60px;height:40px;
+            background:#448c9e;border-radius:18px 2px}
+        .override{position:absolute;left:90px;top:10px;width:60px;height:40px;
+            background:#448c9e;border-radius:18px;border-top-right-radius:2px}
+        select{position:absolute;left:10px;top:70px;width:80px;height:24px;
+            appearance:none;background:white;border:0;color:#000}
+        button{position:absolute;left:10px;top:105px;width:80px;height:24px}
+        .custom{left:110px;border:2px solid red;background:#ff0}
+        .native-select{appearance:auto;top:140px;border:1px solid #767676}
+        </style><div class="corners"></div><div class="override"></div>
+        <select><option></option></select><button></button><button class="custom"></button>
+        <select class="native-select"><option></option></select>
+    )HTML",&error),error.c_str());
+    StyleSheet styles;Check(styles.Parse(document.StyleText(),&error),error.c_str());
+    LayoutEngine layout(document,styles);layout.Layout(220,180,scale);
+    auto raster=Paint(layout,scale,220,180);if(raster.bytes.empty())return;
+    Check(IsWhite(raster.At(12,12,scale))&&!IsWhite(raster.At(67,12,scale)),
+        L"two-value radius rounds top left and retains the small top-right corner");
+    Check(!IsWhite(raster.At(12,47,scale))&&IsWhite(raster.At(67,47,scale)),
+        L"two-value radius maps the opposite bottom corners independently");
+    Check(!IsWhite(raster.At(147,12,scale)),L"corner longhand overrides shorthand in paint");
+    bool arrowAbsent=true;
+    for(float y=76;y<90;y+=1)for(float x=75;x<87;x+=1)
+        arrowAbsent=arrowAbsent&&IsWhite(raster.At(x,y,scale));
+    Check(arrowAbsent,L"appearance none removes the native select arrow");
+    // The preserved WebView2 oracle is gray at (80,151): that sample lies
+    // on the antialiased arm. Probe the gap and both arms independently.
+    Check(IsWhite(raster.At(81,150,scale)),L"native select arrow retains the open center of a chevron");
+    Check(raster.At(78,150,scale).red<100&&raster.At(84,150,scale).red<100,
+        L"native select arrow paints both chevron arms");
+    const auto arrowTipAA=raster.At(82,154,scale);
+    std::wcout<<L"Select tip CPU AA DPI "<<scale<<L" RGB "<<int(arrowTipAA.red)<<L","
+        <<int(arrowTipAA.green)<<L","<<int(arrowTipAA.blue)<<L"\n";
+    Check(arrowTipAA.red>=200&&arrowTipAA.green>=200&&arrowTipAA.blue>=200&&
+          IsWhite(raster.At(82,155,scale)),
+          L"native select arrow permits CPU AA at the tip and leaves the following row clear");
+    const auto border=raster.At(10,115,scale);
+    Check(Near(border.red,118)&&Near(border.green,118)&&Near(border.blue,118),
+        L"default native button paints its gray frame instead of a black UA layout border");
+    const auto custom=raster.At(110,115,scale),fill=raster.At(145,115,scale);
+    Check(custom.red>240&&custom.green<20&&custom.blue<20&&fill.red>240&&fill.green>240&&fill.blue<20,
+        L"author border and background remain visible on styled controls");
+}
+
 } // namespace
 
 int wmain(){
@@ -204,6 +255,8 @@ int wmain(){
     CheckScale(1.0f);
     CheckScale(1.5f);
     CheckNativeCheckboxGeometry();
+    CheckPaintGeometry(1.0f);
+    CheckPaintGeometry(1.5f);
     if(initialized)CoUninitialize();
     if(failures){std::wcerr<<failures<<L" form-control regression check(s) failed\n";return 1;}
     std::wcout<<L"Form-control regression checks passed\n";

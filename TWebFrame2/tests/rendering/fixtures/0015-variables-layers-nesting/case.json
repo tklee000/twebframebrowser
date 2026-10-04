@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "0015-variables-layers-nesting",
+  "stage": "pilot",
+  "family": "cascade",
+  "features": [
+    "variables",
+    "layer",
+    "nesting",
+    "grid"
+  ],
+  "seed": 20261003,
+  "generatorVersion": "1.0",
+  "scriptless": true,
+  "states": [
+    "initial"
+  ],
+  "viewports": [
+    [
+      384,
+      768
+    ],
+    [
+      800,
+      600
+    ],
+    [
+      1280,
+      800
+    ]
+  ],
+  "dpi": [
+    96,
+    144
+  ],
+  "htmlSha256": "A8D48AE8390D26DE7065C13AB8F7F80F4BF0679116B1FF28AF5D8B7104780780",
+  "cssSha256": "4C1C325DC77039CD2EA164B3FF77BB6EFF89C930C1317E6CE0C89010E31C9AD7"
+}

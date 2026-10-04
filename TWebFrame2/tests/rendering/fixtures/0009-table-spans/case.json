@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "0009-table-spans",
+  "stage": "pilot",
+  "family": "table",
+  "features": [
+    "table",
+    "colspan",
+    "rowspan",
+    "border-collapse"
+  ],
+  "seed": 20261003,
+  "generatorVersion": "1.0",
+  "scriptless": true,
+  "states": [
+    "initial"
+  ],
+  "viewports": [
+    [
+      384,
+      768
+    ],
+    [
+      800,
+      600
+    ],
+    [
+      1280,
+      800
+    ]
+  ],
+  "dpi": [
+    96,
+    144
+  ],
+  "htmlSha256": "FC261D7B2C970A1733FA349007C4EF00FDDB92EDDB280F6DD4D4E6D26FE5B161",
+  "cssSha256": "1EEF6EC29A546FC881C38858C821E803DB67E8CE6040665E7B999EFC22DBEFF6"
+}

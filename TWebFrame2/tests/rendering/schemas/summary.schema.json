@@ -1,0 +1,14 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "type":"object",
+  "required":["schemaVersion","count","passed","failed","fullContractComplete","actualWindowsBothDpiValidated","runPath","results"],
+  "properties":{
+    "schemaVersion":{"const":1},"count":{"type":"integer","minimum":1},"passed":{"type":"integer","minimum":0},
+    "failed":{"type":"integer","minimum":0},"fullContractComplete":{"type":"boolean"},
+    "actualWindowsBothDpiValidated":{"type":"boolean"},"runPath":{"type":"string"},
+    "results":{"type":"array","items":{"type":"object","required":["id","dpi","viewport","pass","status"],"properties":{
+      "id":{"type":"string"},"dpi":{"enum":[96,144]},"viewport":{"type":"string"},"pass":{"type":"boolean"},
+      "status":{"enum":["PASS","PASS_BACKEND_DIFFERENCE","FAIL","FAIL_DOM","FAIL_STYLE","FAIL_LAYOUT","FAIL_PAINT","FAIL_VIEW_ROUTE","HARNESS_ERROR","UNSTABLE_REFERENCE","PENDING"]}
+    }}}
+  }
+}

@@ -17,3 +17,7 @@ sample/html_ui_org/
 프롬프트.txt
 *.user
 *.suo
+# Originals remain on disk; rendering hash catalogs are versioned separately.
+/TWebFrame2/tests/rendering/runs/
+/TWebFrame2/tests/rendering/restored/
+__pycache__/

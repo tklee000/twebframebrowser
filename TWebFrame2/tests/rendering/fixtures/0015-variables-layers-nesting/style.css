@@ -1,0 +1,2 @@
+body{margin:0;background:#fff;font:16px/20px Arial;color:#17202a}
+@layer base,theme;@layer base{.grid{--gap:5px;display:grid;grid-template-columns:100px 140px;gap:var(--gap);padding:12px}.tile{height:45px;background:#3d6c96}}@layer theme{.grid{--gap:9px;&>.tile:nth-child(2){background:#d6954b}}}.tile:nth-child(3){grid-column:span 2}

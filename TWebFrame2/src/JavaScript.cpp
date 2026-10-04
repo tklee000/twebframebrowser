@@ -14163,6 +14163,10 @@ struct RuntimeCore {
                 escaped+=L'\\';escaped+=c;
             }
             return Value::String(escaped);
+        });
+        css.object->props[L"supports"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){
+            if(a.empty())return Value::Bool(false);
+            return Value::Bool(a.size()>1?StyleSheet::Supports(r.String(a[0]),r.String(a[1])):StyleSheet::Supports(r.String(a[0])));
         });global->values[L"CSS"]=css;
         global->values[L"requestAnimationFrame"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){return Value::Number(a.empty()?0:r.ScheduleAnimationFrame(a[0]));});
         global->values[L"cancelAnimationFrame"]=Native([](RuntimeCore& r,const Value&,const std::vector<Value>& a){

@@ -14,6 +14,8 @@
 #include "ScriptDialog.h"
 #include "ScriptHttp.h"
 #include "TextInput.h"
+#include "RenderingDiagnostics.h"
+#include "RasterSurface.h"
 
 #include <d2d1.h>
 #include <dwrite.h>
@@ -555,6 +557,7 @@ struct View::Impl {
     // Remember weak owners so teardown can sever every parent/UI bridge.
     std::vector<std::weak_ptr<View>> createdChildViews;
     float frameViewportWidth=0,frameViewportHeight=0;
+    float diagnosticDpiScale=0;
     HWND pointerFrame=nullptr;
     bool painting=false;
     unsigned childFrameDestructionDepth=0;
@@ -1034,6 +1037,7 @@ struct View::Impl {
 
     float DpiScale()const{
         if(compositionParent)return compositionParent->DpiScale();
+        if(diagnosticDpiScale>0)return diagnosticDpiScale;
         const UINT dpi=hwnd?GetDpiForWindow(hwnd):USER_DEFAULT_SCREEN_DPI;
         return std::max(1.0f,static_cast<float>(dpi)/static_cast<float>(USER_DEFAULT_SCREEN_DPI));
     }
@@ -1546,7 +1550,7 @@ struct View::Impl {
         // wait for the desktop compositor's next presentation interval.
         const auto properties=D2D1::HwndRenderTargetProperties(
             hwnd,size,D2D1_PRESENT_OPTIONS_IMMEDIATELY);
-        if(SUCCEEDED(d2dFactory->CreateHwndRenderTarget(D2D1::RenderTargetProperties(),properties,
+        if(SUCCEEDED(d2dFactory->CreateHwndRenderTarget(D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE),properties,
             renderTarget.ReleaseAndGetAddressOf()))){const float dpi=USER_DEFAULT_SCREEN_DPI*DpiScale();renderTarget->SetDpi(dpi,dpi);}
     }
     bool EnsureBackBuffer(D2D1_SIZE_U required,float dpi){
@@ -2267,7 +2271,7 @@ struct View::Impl {
         if(child->layoutDirty&&!RenderingScriptBusy())child->Rebuild();
         D2D1_MATRIX_3X2_F transform{};target->GetTransform(&transform);
         const auto content=D2D1::RectF(bounds.x,bounds.y,bounds.x+bounds.width,bounds.y+bounds.height);
-        target->PushAxisAlignedClip(content,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        PushPaintClip(target,content,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
         target->SetTransform(D2D1::Matrix3x2F::Translation(bounds.x,bounds.y)*transform);
         ComPtr<ID2D1SolidColorBrush> background;
         if(SUCCEEDED(target->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White),&background)))
@@ -2275,14 +2279,33 @@ struct View::Impl {
         const LayoutRect viewport{0,0,bounds.width,bounds.height};
         child->layout.Paint(target,child->writeFactory.Get(),&viewport);
         child->PaintTextEditing(target);child->PaintSelectPopup(target);
-        target->SetTransform(transform);target->PopAxisAlignedClip();
+        target->SetTransform(transform);PopPaintClip(target);
         // Child redraws are satisfied by this shared composition pass.
         ValidateRect(child->hwnd,nullptr);
     }
     HRESULT RenderSurface(ID2D1RenderTarget* target,const LayoutRect& dirty){
-        if(!target)return E_INVALIDARG;target->BeginDraw();target->SetTransform(D2D1::IdentityMatrix());
+        if(!target)return E_INVALIDARG;
+        // Every WIC target owns its brushes and bitmaps. Release resources
+        // before and after painting so an allocator's reused address cannot
+        // make a later frame keep resources from the previous target.
+        DiscardCompositedResources();
+        struct ScopedResources {
+            Impl* owner;
+            ~ScopedResources(){owner->DiscardCompositedResources();}
+        } resources{this};
+        const auto pixelSize=target->GetPixelSize();FLOAT dpiX=96,dpiY=96;target->GetDpi(&dpiX,&dpiY);
+        ComPtr<IWICImagingFactory> imaging;
+        ComPtr<IWICBitmap> pixels;ComPtr<ID2D1RenderTarget> raster;
+        HRESULT result=CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&imaging));
+        if(SUCCEEDED(result))result=imaging->CreateBitmap(pixelSize.width,pixelSize.height,GUID_WICPixelFormat32bppBGR,WICBitmapCacheOnLoad,&pixels);
+        const auto properties=D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE),dpiX,dpiY);
+        if(SUCCEEDED(result))result=d2dFactory->CreateWicBitmapRenderTarget(pixels.Get(),properties,&raster);
+        if(FAILED(result))return result;
+        auto* destination=target;target=raster.Get();RasterSurface surface(target,pixels.Get(),pixelSize.width,pixelSize.height);
+        target->BeginDraw();target->SetTransform(D2D1::IdentityMatrix());
         const auto dirtyRect=D2D1::RectF(dirty.x,dirty.y,dirty.x+dirty.width,dirty.y+dirty.height);
-        target->PushAxisAlignedClip(dirtyRect,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        PushPaintClip(target,dirtyRect,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
         ComPtr<ID2D1SolidColorBrush> background;
         // The initial HTML canvas is white; authored root/body backgrounds
         // are propagated by LayoutEngine::Paint over this opaque base.
@@ -2291,8 +2314,17 @@ struct View::Impl {
         layout.Paint(target,writeFactory.Get(),&dirty);PaintTextEditing(target);PaintSelectPopup(target);
         if(scriptDialog&&scriptDialog->active)
             scriptDialog->layout.Paint(target,writeFactory.Get(),&dirty);
-        target->PopAxisAlignedClip();
-        return target->EndDraw();
+        PopPaintClip(target);
+        result=target->EndDraw();if(SUCCEEDED(result))result=surface.error;
+        if(FAILED(result))return result;
+        ComPtr<ID2D1Bitmap> bitmap;
+        const auto bitmapProperties=D2D1::BitmapProperties(
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE),dpiX,dpiY);
+        result=destination->CreateBitmapFromWicBitmap(pixels.Get(),bitmapProperties,&bitmap);
+        if(FAILED(result))return result;
+        destination->BeginDraw();destination->SetTransform(D2D1::IdentityMatrix());
+        destination->DrawBitmap(bitmap.Get(),dirtyRect,1,D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,dirtyRect);
+        return destination->EndDraw();
     }
     void PrintClient(HDC dc){
         if(!dc||!d2dFactory||!writeFactory||painting)return;
@@ -2300,7 +2332,7 @@ struct View::Impl {
         RECT client{};GetClientRect(hwnd,&client);
         const float scale=DpiScale();
         ComPtr<ID2D1DCRenderTarget> target;
-        const auto properties=D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        const auto properties=D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
             D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE));
         if(FAILED(d2dFactory->CreateDCRenderTarget(&properties,&target))||
            FAILED(target->BindDC(dc,&client)))return;
@@ -2353,10 +2385,10 @@ struct View::Impl {
                             const auto dirtyBounds=D2D1::RectF(dirty.x,dirty.y,
                                 dirty.x+dirty.width,dirty.y+dirty.height);
                             renderTarget->BeginDraw();renderTarget->SetTransform(D2D1::IdentityMatrix());
-                            renderTarget->PushAxisAlignedClip(dirtyBounds,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                            PushPaintClip(renderTarget.Get(),dirtyBounds,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                             renderTarget->DrawBitmap(bitmap.Get(),dirtyBounds,1.0f,
                                 D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,dirtyBounds);
-                            renderTarget->PopAxisAlignedClip();
+                            PopPaintClip(renderTarget.Get());
                             const HRESULT result=renderTarget->EndDraw();
                             if(result==D2DERR_RECREATE_TARGET)ResetRenderTargets();
                         }else ResetRenderTargets();
@@ -3134,7 +3166,7 @@ struct View::Impl {
         }
         const int selected=PopupSelectedIndex(openSelectPopup,options);
         const float contentRight=inner.right-geometry.scrollbarWidth;
-        target->PushAxisAlignedClip(D2D1::RectF(inner.left,inner.top,contentRight,inner.bottom),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        PushPaintClip(target,D2D1::RectF(inner.left,inner.top,contentRight,inner.bottom),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
         for(size_t index=0;index<options.size();++index){
             const bool highlighted=static_cast<int>(index)==selectPopupHotIndex||
                 (selectPopupHotIndex<0&&static_cast<int>(index)==selected&&openSelectPopup->tag==L"select");
@@ -3160,7 +3192,7 @@ struct View::Impl {
                     secondaryRect,brush.Get(),D2D1_DRAW_TEXT_OPTIONS_CLIP,DWRITE_MEASURING_MODE_NATURAL);
             }
         }
-        target->PopAxisAlignedClip();
+        PopPaintClip(target);
         if(geometry.scrollbarWidth>0){
             const auto track=D2D1::RectF(contentRight,inner.top,inner.right,inner.bottom);
             target->CreateSolidColorBrush(d2d((palette.border&0x00ffffffu)|0x30000000u),&brush);target->FillRectangle(track,brush.Get());
@@ -4746,6 +4778,66 @@ bool View::ExecuteScript(const std::wstring& source,std::wstring* result,std::ws
 bool View::PostWebMessageAsJson(const std::wstring& json,std::wstring* error){const bool ok=impl_->javascript.DispatchWebMessageAsJson(json,error);if(!ok)impl_->lastError=error?*error:L"Invalid JSON web message";impl_->RefreshTextSelectionFromDom();return ok;}
 void View::PostWebMessageAsString(const std::wstring& message){impl_->javascript.DispatchWebMessageAsString(message);impl_->RefreshTextSelectionFromDom();}
 std::wstring View::DumpLayoutJson()const{if(impl_->layoutDirty)const_cast<Impl*>(impl_.get())->Rebuild();return impl_->layout.DumpJson();}
+bool View::CaptureRenderingSnapshot(unsigned int width,unsigned int height,float dpi,
+    std::vector<unsigned char>& pixels,std::wstring& diagnostics){
+    pixels.clear();diagnostics.clear();
+    if(!width||!height||width>8192||height>8192||!std::isfinite(dpi)||dpi<48||dpi>384||
+       impl_->painting||impl_->RenderingScriptBusy()||!impl_->d2dFactory)return false;
+    const float scale=dpi/USER_DEFAULT_SCREEN_DPI;
+    const UINT pixelWidth=static_cast<UINT>(std::lround(width*scale));
+    const UINT pixelHeight=static_cast<UINT>(std::lround(height*scale));
+    if(static_cast<std::uint64_t>(pixelWidth)*pixelHeight>64000000)return false;
+    struct BitmapSurface {
+        HDC dc=CreateCompatibleDC(nullptr);
+        HBITMAP bitmap=nullptr;
+        HGDIOBJ previous=nullptr;
+        ~BitmapSurface(){if(previous)SelectObject(dc,previous);if(bitmap)DeleteObject(bitmap);if(dc)DeleteDC(dc);}
+    } surface;
+    if(!surface.dc)return false;
+    BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth=pixelWidth;info.bmiHeader.biHeight=-static_cast<LONG>(pixelHeight);
+    info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
+    void* data=nullptr;surface.bitmap=CreateDIBSection(surface.dc,&info,DIB_RGB_COLORS,&data,nullptr,0);
+    if(!surface.bitmap)return false;
+    surface.previous=SelectObject(surface.dc,surface.bitmap);
+    if(!surface.previous||surface.previous==HGDI_ERROR){surface.previous=nullptr;return false;}
+    struct RestoreView {
+        Impl* state;
+        float scale,width,height;
+        bool painting;
+        ~RestoreView(){
+            state->painting=painting;state->DiscardCompositedResources();
+            state->diagnosticDpiScale=scale;state->frameViewportWidth=width;state->frameViewportHeight=height;
+            state->layoutDirty=true;state->viewportOnlyDirty=false;
+        }
+    } restore{impl_.get(),impl_->diagnosticDpiScale,impl_->frameViewportWidth,
+        impl_->frameViewportHeight,impl_->painting};
+    try{
+    impl_->diagnosticDpiScale=scale;impl_->frameViewportWidth=static_cast<float>(width);
+    impl_->frameViewportHeight=static_cast<float>(height);impl_->layoutDirty=true;impl_->viewportOnlyDirty=false;
+    impl_->Rebuild();
+    ComPtr<ID2D1DCRenderTarget> target;
+    RECT bounds{0,0,static_cast<LONG>(pixelWidth),static_cast<LONG>(pixelHeight)};
+    const auto properties=D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE));
+    HRESULT result=impl_->d2dFactory->CreateDCRenderTarget(&properties,&target);
+    if(SUCCEEDED(result))result=target->BindDC(surface.dc,&bounds);
+    if(SUCCEEDED(result)){
+        target->SetDpi(dpi,dpi);impl_->DiscardCompositedResources();impl_->painting=true;
+        result=impl_->RenderSurface(target.Get(),{0,0,static_cast<float>(width),static_cast<float>(height)});
+        impl_->painting=false;
+        if(SUCCEEDED(result)){
+            GdiFlush();const auto begin=static_cast<const unsigned char*>(data);
+            pixels.assign(begin,begin+static_cast<size_t>(pixelWidth)*pixelHeight*4);
+            for(size_t i=3;i<pixels.size();i+=4)pixels[i]=255;
+            diagnostics=Internal::RenderingDiagnostics(impl_->document,impl_->layout,width,height,dpi,
+                GetDpiForWindow(impl_->hwnd));
+        }
+        impl_->DiscardCompositedResources();
+    }
+    return SUCCEEDED(result);
+    }catch(...){pixels.clear();diagnostics.clear();return false;}
+}
 std::wstring View::DumpLayoutJson(bool includeChildFrames)const{
     if(!includeChildFrames)return DumpLayoutJson();
     const auto quote=[](const std::wstring& text){

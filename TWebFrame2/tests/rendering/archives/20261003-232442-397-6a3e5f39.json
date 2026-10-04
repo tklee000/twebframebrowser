@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "archiveId": "20261003-232442-397-6a3e5f39",
+  "createdUtc": "2026-10-03T14:33:25.8366659Z",
+  "zipFile": "20261003-232442-397-6a3e5f39.zip",
+  "zipSha256": "CABF3A4B5B7C0A13AF4194AB271D6D13625B16300474B2E1935515F607FBA267",
+  "bytes": 19370160,
+  "entryCount": 3275,
+  "everyEntryRecoveryVerified": true,
+  "sourceSnapshotIncluded": true,
+  "rendererExecutableIncluded": true,
+  "excluded": "Disposable WebView2 profile cache only; originals remain in run directory",
+  "summary": {
+    "failed": 18,
+    "fullContractComplete": false,
+    "count": 120,
+    "passed": 102
+  }
+}

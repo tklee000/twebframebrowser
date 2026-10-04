@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "contractId": "pilot-cpu-rendering-with-required-style-projection-v8",
+  "oracle": "installed WebView2; runtime version recorded before and after each capture process",
+  "pageZoom": 1.0,
+  "cssViewports": [
+    [
+      384,
+      768
+    ],
+    [
+      800,
+      600
+    ],
+    [
+      1280,
+      800
+    ]
+  ],
+  "dpi": [
+    96,
+    144
+  ],
+  "devicePixelFormat": "BGRA8 decoded from PNG; exact comparison by default with recorded CPU/GPU font, gradient and raster antialiasing exceptions",
+  "nonTextChannelTolerance": 0,
+  "coordinateToleranceCssPx": 0.015625,
+  "fontAA": {
+    "state": "CPU font composition; approved CPU/GPU AA and blend quantization differences excluded from failure",
+    "exceptionRegistry": "backend-pixel-exceptions.json",
+    "maximumObservedChannelDelta": 2
+  },
+  "backendPixelExceptions": {
+    "registry": "backend-pixel-exceptions.json",
+    "allowedKinds": [
+      "CPU_GPU_FONT_COMPOSITION",
+      "CPU_GPU_GRADIENT_COMPOSITION",
+      "CPU_GPU_RASTER_ANTIALIASING"
+    ],
+    "matching": "case, DPI, viewport, both decoded pixel SHA-256 signatures and recorded difference metrics",
+    "structuralChecksRequired": true,
+    "unregisteredDifferences": "FAIL_PAINT; investigate and record confirmed backend differences before approval",
+    "rawPixelDifferencesPreserved": true,
+    "strictDiagnosticSwitch": "-StrictPixels"
+  },
+  "activeChecks": [
+    "authored DOM preorder, text and attributes",
+    "tracked element presence and border rect",
+    "25 required computed-style properties on every tracked element, including display:none descendants; native initial values resolved through layout/paint helpers; missing or empty values fail in capture schema v4",
+    "UTF-16 non-space character source ranges, text content and font-box rects with a 1/64 CSS-pixel threshold",
+    "exact decoded device pixels with approved CPU/GPU font, gradient and raster antialiasing exceptions; raw strict differences also recorded",
+    "stable repeat captures and native DPI transition",
+    "actual-window WM_PRINTCLIENT when actual window DPI matches requested DPI",
+    "CapturePreview versus Page.captureScreenshot: exact device-pixel equality required in capture schema v3; capture discrepancies cannot use backend exceptions",
+    "same-browser edge://gpu diagnostics before/after every matrix process; active adapter, ANGLE/Skia backend, feature status and display color profile must have one stable fingerprint",
+    "native representative shaped glyph availability (.notdef rejected), resolved platform font metadata and finite character coordinates when glyph data is captured"
+  ],
+  "pendingChecks": [
+    "remaining computed styles outside the versioned 25-property projection",
+    "scroll and client normalization",
+    "reference per-character resolved glyphs and comparative baselines; complete multi-glyph cluster coverage; transformed/fallback text geometry; whitespace ranges beyond their effect on character positions",
+    "pseudo-element and iframe structure matching",
+    "unclassified font coverage, gamma/contrast, quantization and compositing differences; approved CPU/GPU differences are exempt",
+    "actual Windows 96 DPI and live monitor transition",
+    "independent visible screen/back-buffer capture and live monitor transition; CDP screenshot calibration implemented separately",
+    "transparent-output alpha, alternate color profiles and wide-gamut calibration; opaque RGB/source-over samples and current display profile recording implemented separately"
+  ],
+  "fixtureScripts": false,
+  "referenceMeasurement": "read-only ExecuteScript, DOMSnapshot CDP and CSS.getPlatformFontsForNode for tracked-node aggregates; excluded from JS DOM conformance",
+  "fullContractComplete": false,
+  "textRectNormalization": "Outward bounds in 1/64 device-layout units; legacy-only LTR kern advances redistributed to HarfBuzz logical character boundaries; raw DirectWrite hit rects, glyph advances and offsets preserved; no paint adjustment",
+  "computedStyleContract": {
+    "version": 1,
+    "properties": [
+      "display",
+      "position",
+      "visibility",
+      "box-sizing",
+      "white-space",
+      "direction",
+      "text-align",
+      "font-style",
+      "font-weight",
+      "font-kerning",
+      "pointer-events",
+      "overflow-x",
+      "overflow-y",
+      "flex-direction",
+      "flex-wrap",
+      "flex-grow",
+      "flex-shrink",
+      "list-style-position",
+      "list-style-type",
+      "opacity",
+      "letter-spacing",
+      "line-height",
+      "font-size",
+      "color",
+      "background-color"
+    ],
+    "captureSchemaVersion": 4,
+    "missingValues": "FAIL_STYLE; missing or unsupported contract version is HARNESS_ERROR",
+    "normalization": "Enums case/trim, bold/normal numeric weights and logical alignment; finite numbers within 0.000001; CSS lengths within 1/64 px; sRGB colors converted to RGBA8; original raw values preserved",
+    "legacy": "Older captures retain their original partial checks with skipped values reported; they do not satisfy version 1"
+  }
+}

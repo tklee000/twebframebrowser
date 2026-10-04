@@ -7,7 +7,7 @@ try {
     Set-Location -LiteralPath $taskRoot
     New-Item -ItemType Directory -Path (Join-Path $PSScriptRoot 'artifacts') -Force | Out-Null
     $taskProjects=@('SupportCompatibilityRegression')
-    if($FullRegression){$taskProjects+=@('TWebFrameTests','ScrollRenderingRegression','RuntimeHeapRegression','BrowserContextRegression','StandaloneScriptRegression','ScriptHttpRegression','CanvasRegression','PointerEventRegression')}
+    if($FullRegression){$taskProjects+=@('TWebFrameTests','CSSCompatibilityRegression','ScrollRenderingRegression','TableSpanRegression','FormControlRegression','RuntimeHeapRegression','BrowserContextRegression','StandaloneScriptRegression','ScriptHttpRegression','CanvasRegression','PointerEventRegression')}
     foreach($taskProject in $taskProjects){
         & $MSBuild (Join-Path $PSScriptRoot ($taskProject+'.vcxproj')) /t:Build /p:Configuration=Release /p:Platform=x64 (('/p:ForceImportBeforeCppTargets=')+(Join-Path $PSScriptRoot 'SupportBuild.props')) /m:2 /v:minimal /nologo
         if($LASTEXITCODE -ne 0){throw ('Build failed: '+$taskProject)}

@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "0007-grid-tracks",
+  "stage": "pilot",
+  "family": "grid",
+  "features": [
+    "grid",
+    "fr",
+    "minmax",
+    "gap"
+  ],
+  "seed": 20261003,
+  "generatorVersion": "1.0",
+  "scriptless": true,
+  "states": [
+    "initial"
+  ],
+  "viewports": [
+    [
+      384,
+      768
+    ],
+    [
+      800,
+      600
+    ],
+    [
+      1280,
+      800
+    ]
+  ],
+  "dpi": [
+    96,
+    144
+  ],
+  "htmlSha256": "5F73116D91F8FEA0906FED815B3334ECC674E2CB9131136E0D1AD7FE19188A38",
+  "cssSha256": "F3505B94928ABFCF1054FC0E79971FB2125BE33FC896013CF6FCDDFF340C6E19"
+}

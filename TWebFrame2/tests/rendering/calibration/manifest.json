@@ -1,0 +1,225 @@
+{
+  "schemaVersion": 1,
+  "scope": "Independent capture calibration; excluded from the authored corpus count",
+  "documents": [
+    {
+      "id": "color-alpha",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "89B11517A402977F83ACD9F5E66CB74C0A2ABC2EFF259D68C74D77B3C149FCE6"
+        },
+        {
+          "path": "style.css",
+          "sha256": "4574173ECFB29EB2BC8DEEC70DD5299DF6489957346CA3A82546BBA0D13965A6"
+        }
+      ],
+      "samples": [
+        {
+          "label": "red",
+          "x": 30,
+          "y": 30,
+          "rgba": [
+            255,
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "label": "green",
+          "x": 90,
+          "y": 30,
+          "rgba": [
+            0,
+            255,
+            0,
+            255
+          ]
+        },
+        {
+          "label": "blue",
+          "x": 150,
+          "y": 30,
+          "rgba": [
+            0,
+            0,
+            255,
+            255
+          ]
+        },
+        {
+          "label": "black",
+          "x": 30,
+          "y": 90,
+          "rgba": [
+            0,
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "label": "gray-channel-order",
+          "x": 90,
+          "y": 90,
+          "rgba": [
+            127,
+            128,
+            129,
+            255
+          ]
+        },
+        {
+          "label": "white",
+          "x": 150,
+          "y": 90,
+          "rgba": [
+            255,
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "label": "alpha-zero-over-white",
+          "x": 30,
+          "y": 150,
+          "rgba": [
+            255,
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "label": "alpha-128-over-white",
+          "x": 90,
+          "y": 150,
+          "rgba": [
+            255,
+            127,
+            127,
+            255
+          ]
+        },
+        {
+          "label": "alpha-255-over-white",
+          "x": 150,
+          "y": 150,
+          "rgba": [
+            255,
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "label": "alpha-128-over-color",
+          "x": 30,
+          "y": 210,
+          "rgba": [
+            110,
+            70,
+            55,
+            255
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dpi-rulers",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "404FB2C2C755E56D486EE5653EEF4FAB244EBC5BC2FF96090E9EE3C7075D24A1"
+        },
+        {
+          "path": "style.css",
+          "sha256": "896EF296B5FF91AE8BE90289438642330561A6C3D9E9FA8E008A417C49603309"
+        }
+      ],
+      "samples": [
+        {
+          "label": "ruler-fill",
+          "x": 30,
+          "y": 30,
+          "rgba": [
+            40,
+            100,
+            180,
+            255
+          ]
+        }
+      ],
+      "spans": [
+        {
+          "label": "100-css-pixels",
+          "x": 20,
+          "y": 30,
+          "width": 100
+        },
+        {
+          "label": "1-css-pixel",
+          "x": 20,
+          "y": 90,
+          "width": 1
+        },
+        {
+          "label": "2-css-pixels",
+          "x": 140,
+          "y": 90,
+          "width": 2
+        }
+      ]
+    },
+    {
+      "id": "viewport-clip",
+      "files": [
+        {
+          "path": "index.html",
+          "sha256": "5B33DE5EAFB51787411838B850E8BB9AD69B38DE029A131EBA545F9FE7796E85"
+        },
+        {
+          "path": "style.css",
+          "sha256": "3F9FA29040273DE7F3556CC22E8CB8A5DC151C314D92ABCD13ED5B081F3368B8"
+        }
+      ],
+      "samples": [
+        {
+          "label": "top-marker",
+          "x": 30,
+          "y": 30,
+          "rgba": [
+            40,
+            100,
+            180,
+            255
+          ]
+        },
+        {
+          "label": "viewport-fixed-marker",
+          "right": 30,
+          "bottom": 30,
+          "rgba": [
+            207,
+            139,
+            56,
+            255
+          ]
+        },
+        {
+          "label": "clipped-flow-background",
+          "x": 30,
+          "bottom": 30,
+          "rgba": [
+            216,
+            230,
+            239,
+            255
+          ]
+        }
+      ]
+    }
+  ]
+}

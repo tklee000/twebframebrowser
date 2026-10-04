@@ -279,6 +279,30 @@ void CheckScale(float scale){
     }
 }
 
+void CheckCollapsedSpanGeometry(float scale){
+    Document document;StyleSheet styles;std::wstring error;
+    Check(document.Parse(L"<!doctype html><style>body{margin:0}table{width:330px;"
+        L"border-collapse:collapse;table-layout:fixed;margin:12px}td{border:2px solid #253d58;"
+        L"padding:8px;height:34px}</style><table id='table'><tr><td id='a' rowspan='2'></td>"
+        L"<td id='b' colspan='2'></td></tr><tr><td id='c'></td><td id='d'></td></tr>"
+        L"<tr><td id='e' colspan='3'></td></tr></table>",&error),L"collapsed span fixture parses");
+    styles.Parse(document.StyleText(),&error);LayoutEngine layout(document,styles);layout.Layout(800,600,scale);
+    const auto* table=Box(layout,document,L"table");const auto* a=Box(layout,document,L"a");
+    const auto* b=Box(layout,document,L"b");const auto* c=Box(layout,document,L"c");const auto* e=Box(layout,document,L"e");
+    Check(table&&a&&b&&c&&e,L"collapsed span boxes are present");
+    if(!table||!a||!b||!c||!e)return;
+    CheckNear(table->rect.height,158,L"outer half-borders contribute to table height");
+    CheckNear(a->rect.x,13,L"first cell starts after the outer half-border");
+    CheckNear(a->rect.y,13,L"first row starts after the outer half-border");
+    CheckNear(a->rect.height,104,L"rowspan includes shared horizontal half-borders");
+    CheckNear(c->rect.y,65,L"the second row follows the shared row grid");
+    CheckNear(e->rect.width,328,L"a full colspan excludes table outer half-borders");
+    CheckNear(a->content.x,22,L"cell padding follows its used half-border");
+    CheckNear(b->rect.x,a->rect.x+a->rect.width,L"collapsed colspan starts at the preceding grid edge");
+    const float column=scale==1.0f?109.328125f:109.333333f; // measured WebView2 track widths
+    CheckNear(a->rect.width,column,L"column division preserves the reference layout precision at both DPIs");
+}
+
 } // namespace
 
 int wmain(){
@@ -286,6 +310,8 @@ int wmain(){
     CheckImplicitDocumentStructure();
     CheckScale(1.0f);
     CheckScale(1.5f);
+    CheckCollapsedSpanGeometry(1.0f);
+    CheckCollapsedSpanGeometry(1.5f);
     CheckCollapsedBorderRaster(1.0f);
     CheckCollapsedBorderRaster(1.5f);
     if(SUCCEEDED(initialized))CoUninitialize();

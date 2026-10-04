@@ -1,0 +1,3393 @@
+{
+  "schemaVersion": 1,
+  "baselineId": "154.0.4258.53-11f77bf0ecc6175e-20261004-cpu-font-final-1791061810315",
+  "environmentId": "11f77bf0ecc6175e",
+  "referenceEnvironment": {
+    "runtime": "154.0.4258.53",
+    "windows": "Microsoft Windows NT 10.0.26200.0",
+    "sdk": "1.0.3595.46",
+    "fontHashes": [
+      {
+        "sha256": "B3658EADAE55E682B5F69EB64C439C1ECC8F196C0BB8D4756D145D13BC86476A",
+        "file": "arial.ttf"
+      },
+      {
+        "sha256": "E8F4E3BAF6CC35FED6FCCE3A540E8B39E8F6CDA1D22A28F2EC8F526FEF7A43F5",
+        "file": "arialbd.ttf"
+      },
+      {
+        "sha256": "86B32DB9A06F9694E2A3760C42E5117BCDC5CC1255BB5186CA8CE0305E22F288",
+        "file": "ariali.ttf"
+      },
+      {
+        "sha256": "267A411525980D648F10A7222A6FF1EBE4D4FEEEFBF9B3100CAE2B5CFAB5594A",
+        "file": "arialbi.ttf"
+      },
+      {
+        "sha256": "7A183CF1C6C56B9609FCC16EDA8B5229FBC11758A21E669EC00343239B02192F",
+        "file": "malgun.ttf"
+      },
+      {
+        "sha256": "E8CBC0B2AFCC14FB45DFB6086D5102C0B23A96E7B6E708F3122ACDE1B86C9082",
+        "file": "malgunbd.ttf"
+      },
+      {
+        "sha256": "8134DBCD09E7B123C9A7F229D49CFFBCB01352CC72EA5E1076B65D0DCA9F73CD",
+        "file": "segoeui.ttf"
+      },
+      {
+        "sha256": "AEB9E4A6EC5CC59F4D72DF8189032D7DBB28F45161CF1552174818B5465DAC4E",
+        "file": "segoeuib.ttf"
+      },
+      {
+        "sha256": "27CA1AB4BD5AD3B0404EE6A9A03B143408DBD7E5A4C9E4B2054639C03FC0F682",
+        "file": "SegUIVar.ttf"
+      },
+      {
+        "sha256": "A4A35DCC62CD30E1A6C97B695ECEF83E59D2B149E3AF834F6A49F11851D56B37",
+        "file": "seguisym.ttf"
+      },
+      {
+        "sha256": "451DF9BB5546055AF625FF86AA72695DF43E8E170B4C6C1316FE44E9C7A22F7C",
+        "file": "seguiemj.ttf"
+      },
+      {
+        "sha256": "9AF03D4AD44A3B413D92F7DE48B94AA7CC8A1471A75D498406EAE837F62EE1D1",
+        "file": "tahoma.ttf"
+      },
+      {
+        "sha256": "B16ED1A15E0CABEA8D41D9F8899C253CD61AC466AF5E3980D02BD0CF311C2267",
+        "file": "tahomabd.ttf"
+      },
+      {
+        "sha256": "931C5DE5C70401D9324D5014C123802B4FB753000360CEB2F56C589403CD58C5",
+        "file": "times.ttf"
+      },
+      {
+        "sha256": "54FBE2C70AF7C85A97BED0573227E3CCC4B2486012E3CA2A40C6BC77065846F5",
+        "file": "timesbd.ttf"
+      },
+      {
+        "sha256": "E7F7A88B65188328AEA58670F955022E23C712F55679524729DA1E4E03C49D88",
+        "file": "timesi.ttf"
+      },
+      {
+        "sha256": "3A29D114CB5229E8DBDA5BEF6C69BE4A210A13B7277DE4D66E9FC86963226F6C",
+        "file": "timesbi.ttf"
+      },
+      {
+        "sha256": "CF00B507B3286870CC5064EBD0633C303F70B491A4AF25EEC2D32DF413DB0179",
+        "file": "consola.ttf"
+      },
+      {
+        "sha256": "7E8DE70C92A891722BD3FBD623DB005CAAB2BFE267E5DAB5BE46B95A44E0C7F1",
+        "file": "consolab.ttf"
+      },
+      {
+        "sha256": "0B5B0484CF69AE973BD39380069F141271A4C9299B8885FA2D13F42AADBEFEF9",
+        "file": "consolai.ttf"
+      },
+      {
+        "sha256": "9BC225EC52AA8F4B88B98BB735B1908BD72C9E31A12139FAFCC1BD6C86BED3B4",
+        "file": "consolaz.ttf"
+      },
+      {
+        "sha256": "05A38FF214EE932C6147A4E697B494040FD68CE654795F10F723C01D7BB8EE12",
+        "file": "gulim.ttc"
+      },
+      {
+        "sha256": "018174E8CDD366AFF67C8D366C7DC806A7BABBE7F2819FC23B00D59F7B8353D0",
+        "file": "NotoSansKR-VF.ttf"
+      }
+    ],
+    "dpi": [
+      96,
+      144
+    ],
+    "viewports": [
+      "384x768",
+      "800x600",
+      "1280x800"
+    ],
+    "pageZoom": 1.0,
+    "capture": "WebView2 CapturePreview PNG; explicit rasterization scale; opaque BGRA8",
+    "measurementHashes": [
+      {
+        "sha256": "AF81E336DB4D7E08D4E16E289C872CD6139BDE590DE9DFAD08FE9B4F35A8DCDA",
+        "file": "TWebFrame2\\tests\\rendering\\comparison-contract.json"
+      },
+      {
+        "sha256": "46BB1FCA4BDF954D9752026541136D0F2C6AB3C893B50D345233BAE0319BCC6D",
+        "file": "TWebFrame2\\tests\\rendering\\harness\\measure.js"
+      }
+    ],
+    "fontLocale": {
+      "culture": "ko-KR",
+      "uiCulture": "ko-KR"
+    },
+    "enumeratedGraphicsAdapters": [
+      {
+        "deviceId": "PCI\\VEN_10DE&DEV_1B06&SUBSYS_1B0610DE&REV_A1\\4&8BD6E8D&0&0008",
+        "name": "NVIDIA GeForce GTX 1080 Ti",
+        "driverVersion": "32.0.15.8266"
+      },
+      {
+        "deviceId": "SWD\\REMOTEDISPLAYENUM\\RDPIDD_INDIRECTDISPLAY&SESSIONID_0001",
+        "name": "Microsoft Remote Display Adapter",
+        "driverVersion": "10.0.26100.9278"
+      },
+      {
+        "deviceId": "PCI\\VEN_8086&DEV_A780&SUBSYS_D0001458&REV_04\\3&11583659&0&10",
+        "name": "Intel(R) UHD Graphics 770",
+        "driverVersion": "32.0.101.6129"
+      }
+    ]
+  },
+  "archiveCatalog": "../../archives/20261004-cpu-font-final-1791061810315.json",
+  "archiveSha256": "B377C493E4CBB56965568293C1AA5D461C3859F799028D7B88C092952B17D146",
+  "storage": "Immutable ZIP entries; restore with Restore-RenderingArchive.ps1",
+  "referencePairCount": 120,
+  "entries": [
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0001-solid-box/reference.png",
+          "sha256": "95482D9C36D7407AA53EA6FC73BA2B34E316C415832DE7899C5E09C022F7DA81"
+        },
+        {
+          "entry": "run/96dpi/384x768/0001-solid-box/reference.json",
+          "sha256": "F4C335EC974EBF2CFB98205A5EF7C0049DB6FA7C9B2E14A1558ECB7B48D62F0E"
+        },
+        {
+          "entry": "run/96dpi/384x768/0001-solid-box/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0001-solid-box/reference-dom-snapshot.json",
+          "sha256": "A651CEB4D198B52473DDA414E39865F8A9F7002603083E1210C3311A936BF2F5"
+        },
+        {
+          "entry": "run/96dpi/384x768/0001-solid-box/reference-fonts.json",
+          "sha256": "877A1C525CA3219EE61E0AB42F139B5862C2E2986DBCE9AD6365CA1487E04C08"
+        }
+      ],
+      "caseId": "0001-solid-box"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0002-fractional-box/reference.png",
+          "sha256": "7046A46A1859FCC974F88904989B18D46C1AB1DE43D9A6267C47E6BCDB6224FA"
+        },
+        {
+          "entry": "run/96dpi/384x768/0002-fractional-box/reference.json",
+          "sha256": "DF05AE47D579175AA9549E396ABB3654F48B865657DC5C620835CD5C0B27B237"
+        },
+        {
+          "entry": "run/96dpi/384x768/0002-fractional-box/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0002-fractional-box/reference-dom-snapshot.json",
+          "sha256": "EFD02F379756EF1F7CF02B1880E84D49C7C89978BDF9F8D35EA7FC826A46C073"
+        },
+        {
+          "entry": "run/96dpi/384x768/0002-fractional-box/reference-fonts.json",
+          "sha256": "0342C84A131F9E52E0AD2B2F36E1C73267C924B18401998EBFB2EF1C1086FE0F"
+        }
+      ],
+      "caseId": "0002-fractional-box"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0003-margin-collapse/reference.png",
+          "sha256": "52CEB9B4E18AFE534A7F033F1729067A21088882FE0C39CEEFC184EB472824F3"
+        },
+        {
+          "entry": "run/96dpi/384x768/0003-margin-collapse/reference.json",
+          "sha256": "FD8FD84B638B4BA1CDA4850F2AA05E9CD80B7C024E7A0D4D64339BBDEFE54D2D"
+        },
+        {
+          "entry": "run/96dpi/384x768/0003-margin-collapse/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0003-margin-collapse/reference-dom-snapshot.json",
+          "sha256": "9254750AF3ABF3F09A913D69C710FAAED0658822F407F17949EEF604CA3D2CB9"
+        },
+        {
+          "entry": "run/96dpi/384x768/0003-margin-collapse/reference-fonts.json",
+          "sha256": "2459FA60C3A85407D8B8E52051BEA187FDCB4FCBD135E58308B1C0710CA1CD14"
+        }
+      ],
+      "caseId": "0003-margin-collapse"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0004-flex-distribution/reference.png",
+          "sha256": "68A709F72CAE8693ADD4C1E7F9DA16F7FB1B9FDB94475A0174B1BA396E2E4EA7"
+        },
+        {
+          "entry": "run/96dpi/384x768/0004-flex-distribution/reference.json",
+          "sha256": "E6C65CE69A7503CF9DAF082B4852502DA0ACCC76B27EA3B2BB391AA88F19CFDF"
+        },
+        {
+          "entry": "run/96dpi/384x768/0004-flex-distribution/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0004-flex-distribution/reference-dom-snapshot.json",
+          "sha256": "B60E47540D8E06EBA064B4F12482EF912D7BF3BD3260BB962559310967E4144B"
+        },
+        {
+          "entry": "run/96dpi/384x768/0004-flex-distribution/reference-fonts.json",
+          "sha256": "38DCB12DF6C6A3EF189B911FE3CBFE7A438CE05D12FF4A33C480AC1C9E5D03A0"
+        }
+      ],
+      "caseId": "0004-flex-distribution"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0005-flex-wrap/reference.png",
+          "sha256": "B4AA77168D504FE4940EE5760BC53A339541FDB50A64F543BBC73DC109439121"
+        },
+        {
+          "entry": "run/96dpi/384x768/0005-flex-wrap/reference.json",
+          "sha256": "A540DE3FF762430B3C68B036165D38B350A50A7B05212FAF4B31C6D7DF7F18AC"
+        },
+        {
+          "entry": "run/96dpi/384x768/0005-flex-wrap/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0005-flex-wrap/reference-dom-snapshot.json",
+          "sha256": "1F05DBD0A3D6C30E342255987D7BD97B639AF0F72A9C338FB0F3342A17C5DC26"
+        },
+        {
+          "entry": "run/96dpi/384x768/0005-flex-wrap/reference-fonts.json",
+          "sha256": "3598AE6A56C572CBB0139A3F9BA4351E0ECD734A567E92437779796D0B9C7237"
+        }
+      ],
+      "caseId": "0005-flex-wrap"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0006-nested-flex-grid/reference.png",
+          "sha256": "2F6FC1D110546CE7AE3C911E2FF027DE913214AE481F14F95FFBA047F5CC132E"
+        },
+        {
+          "entry": "run/96dpi/384x768/0006-nested-flex-grid/reference.json",
+          "sha256": "6AAD15261B1D5624BC85868E3EEFB88E54B2D479A8359FFB296B3699C2C520AC"
+        },
+        {
+          "entry": "run/96dpi/384x768/0006-nested-flex-grid/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0006-nested-flex-grid/reference-dom-snapshot.json",
+          "sha256": "E8F1BA3F949B74B41F581E51D9ABD0E071A9B86FB1797BB986503DB97CE363C1"
+        },
+        {
+          "entry": "run/96dpi/384x768/0006-nested-flex-grid/reference-fonts.json",
+          "sha256": "613181CA8D7EC6A1719A5B5121028F712D5A5C0F9ACC7AE4F6FC9C4FC02AD99E"
+        }
+      ],
+      "caseId": "0006-nested-flex-grid"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0007-grid-tracks/reference.png",
+          "sha256": "133EAAEA22FE1FB013AB3AA42A0A1DF6CC8DBBCFAFD1353D216259E85C60F5E9"
+        },
+        {
+          "entry": "run/96dpi/384x768/0007-grid-tracks/reference.json",
+          "sha256": "E9815FA86F51BAEB6BBE8D303D46F304382C9B3E779495F83263D5A70A64F382"
+        },
+        {
+          "entry": "run/96dpi/384x768/0007-grid-tracks/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0007-grid-tracks/reference-dom-snapshot.json",
+          "sha256": "E80BA1377181A5F403B322D84747D9BAC8749F568E03661B4B18B4951EF5F85A"
+        },
+        {
+          "entry": "run/96dpi/384x768/0007-grid-tracks/reference-fonts.json",
+          "sha256": "A2F3E0C4F9FEEB61E9EE29B374232F7A989A56C17DF79D3BFA0A6FFB0697B77E"
+        }
+      ],
+      "caseId": "0007-grid-tracks"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0008-grid-spanning/reference.png",
+          "sha256": "0C577DD82670936B046431423AD58488A404935596B96849A0DEEC5F7EE04BE1"
+        },
+        {
+          "entry": "run/96dpi/384x768/0008-grid-spanning/reference.json",
+          "sha256": "BED511B5D7339F3AB81B5002249270D5C1196CBDA808E5D5D3FCF1F1070BFFE9"
+        },
+        {
+          "entry": "run/96dpi/384x768/0008-grid-spanning/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0008-grid-spanning/reference-dom-snapshot.json",
+          "sha256": "352FCBA144597674CE7C890FD8089A81D6EFB46B633E44A34CE0AE9AEE197DF4"
+        },
+        {
+          "entry": "run/96dpi/384x768/0008-grid-spanning/reference-fonts.json",
+          "sha256": "B0CE1C7D7F9B25EF8CFC166C15DB235C7EFFC043F9AD572E1EDF5B6EF863642B"
+        }
+      ],
+      "caseId": "0008-grid-spanning"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0009-table-spans/reference.png",
+          "sha256": "930B61E6518F062DC412489EBCA56DF7CB6E27BC7B8960DE1F3E3E595FFB7F86"
+        },
+        {
+          "entry": "run/96dpi/384x768/0009-table-spans/reference.json",
+          "sha256": "D6CC854CF8A5CE7600CF5187FE592F68B0A4D5DC78F99E3D3C81FE42791AA4DA"
+        },
+        {
+          "entry": "run/96dpi/384x768/0009-table-spans/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0009-table-spans/reference-dom-snapshot.json",
+          "sha256": "009D3AF61B88D5347E3B0064589A4C3D345ADBC6E9AB11DF8EB39FB8AD0B010A"
+        },
+        {
+          "entry": "run/96dpi/384x768/0009-table-spans/reference-fonts.json",
+          "sha256": "2C6E28765C86C5872D181D8500953F1C8D08E104EA4CDECAF23E1722302D446B"
+        }
+      ],
+      "caseId": "0009-table-spans"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0010-position-stacking/reference.png",
+          "sha256": "64770813593BB90D4D719001C4FB940A0048AB24F6A1164E93EA153A0F743015"
+        },
+        {
+          "entry": "run/96dpi/384x768/0010-position-stacking/reference.json",
+          "sha256": "84E1D5E5CDBD1CF8548377399B271A95C27F8486209A430D6597090836DB6E89"
+        },
+        {
+          "entry": "run/96dpi/384x768/0010-position-stacking/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0010-position-stacking/reference-dom-snapshot.json",
+          "sha256": "D295320C4AF3769A5D4B2E950393333B2527E19460B377A3BD86B8D985390137"
+        },
+        {
+          "entry": "run/96dpi/384x768/0010-position-stacking/reference-fonts.json",
+          "sha256": "5296B168DE7D32A5F7F1799AAD42827A9CC5EB82A3BA629B02F05B1650E07738"
+        }
+      ],
+      "caseId": "0010-position-stacking"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0011-nested-overflow/reference.png",
+          "sha256": "752AF0893B9C09D97AC0470BB35A8BC6550FACD16C202DFE1C49E8481F03C99D"
+        },
+        {
+          "entry": "run/96dpi/384x768/0011-nested-overflow/reference.json",
+          "sha256": "649E438B0505D5B3951F93D23B2AC585B1177A8A4BEB834D8A786554BEABA653"
+        },
+        {
+          "entry": "run/96dpi/384x768/0011-nested-overflow/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0011-nested-overflow/reference-dom-snapshot.json",
+          "sha256": "2A9188F59B92D9219220610A07D20D25023F300D768C43F9437E5BDC365F36ED"
+        },
+        {
+          "entry": "run/96dpi/384x768/0011-nested-overflow/reference-fonts.json",
+          "sha256": "527A46FC7E3B7AB39FEA29477891EE707D426D3E4C5C5D0414B38D727FC423E9"
+        }
+      ],
+      "caseId": "0011-nested-overflow"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0012-radius-gradient/reference.png",
+          "sha256": "3A488115E61E075B46DB3C326D02F11160BEBBD11FE4572C9C01B62DBACCA330"
+        },
+        {
+          "entry": "run/96dpi/384x768/0012-radius-gradient/reference.json",
+          "sha256": "38A2E10C735DFB67F027AD0552F4C73C559C30CE3FF0ED459581AF63650E0687"
+        },
+        {
+          "entry": "run/96dpi/384x768/0012-radius-gradient/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0012-radius-gradient/reference-dom-snapshot.json",
+          "sha256": "36F529A30D707C359AC95C01977258D3DB6B87CFEBB025B92F17C4C4078165D8"
+        },
+        {
+          "entry": "run/96dpi/384x768/0012-radius-gradient/reference-fonts.json",
+          "sha256": "6BEBE6D49825E1AE8F1B5EAD57AF774991635B8E7146DB72682A89164DAFC992"
+        }
+      ],
+      "caseId": "0012-radius-gradient"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0013-svg-paint/reference.png",
+          "sha256": "2F26757914BC572C0A0186DEBC2E890A944D9B3021D325BA5F004222D25331CE"
+        },
+        {
+          "entry": "run/96dpi/384x768/0013-svg-paint/reference.json",
+          "sha256": "3A1C92B2E48AAE42925EDB996744B8925B46970EE4B1E34C7522C673E0ABF140"
+        },
+        {
+          "entry": "run/96dpi/384x768/0013-svg-paint/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0013-svg-paint/reference-dom-snapshot.json",
+          "sha256": "F181341974323A553B4C68738A050CA4247C87286DDB15B77FD361D5B0A2FF26"
+        },
+        {
+          "entry": "run/96dpi/384x768/0013-svg-paint/reference-fonts.json",
+          "sha256": "01BD8FFFEB848B41D010B95DA9701F6806B84F5D6CD26CA0A2DBE9CBD8AA9F56"
+        }
+      ],
+      "caseId": "0013-svg-paint"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0014-generated-boxes/reference.png",
+          "sha256": "EDF7359E30B8D53081119CA081A6862476465946ECD18A8BDF6ACF298FE28C14"
+        },
+        {
+          "entry": "run/96dpi/384x768/0014-generated-boxes/reference.json",
+          "sha256": "8AC2E7E63E9381DF7948040166AA044B141563500058FDE09D2829E7426E3359"
+        },
+        {
+          "entry": "run/96dpi/384x768/0014-generated-boxes/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0014-generated-boxes/reference-dom-snapshot.json",
+          "sha256": "0F3985C55BA23C065D74308D96B912D4DC2B138208674D38B0D1F9B35F00943E"
+        },
+        {
+          "entry": "run/96dpi/384x768/0014-generated-boxes/reference-fonts.json",
+          "sha256": "567D5E9CB7EFC63EF2D6916FD4F8DE45B960329B1495C23C156AE78DB4412540"
+        }
+      ],
+      "caseId": "0014-generated-boxes"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0015-variables-layers-nesting/reference.png",
+          "sha256": "F1DBAEB7039AE17FD3602F375719E7C53CEB721EB4E4171702547BBF120D1A74"
+        },
+        {
+          "entry": "run/96dpi/384x768/0015-variables-layers-nesting/reference.json",
+          "sha256": "C71C754FACE16B524EAF92C7E4065A2557E8A6C086D622C2B074011E926ABB0B"
+        },
+        {
+          "entry": "run/96dpi/384x768/0015-variables-layers-nesting/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0015-variables-layers-nesting/reference-dom-snapshot.json",
+          "sha256": "803ECE36952040D08E76ADFD6364731BF832D5C695014C75E94656FF22DACAC9"
+        },
+        {
+          "entry": "run/96dpi/384x768/0015-variables-layers-nesting/reference-fonts.json",
+          "sha256": "1B06F64CB8E45070C303C87F3C1C6277CF4B6A2FC773A66014592D7246364D10"
+        }
+      ],
+      "caseId": "0015-variables-layers-nesting"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0016-responsive-grid/reference.png",
+          "sha256": "FF7D76CDB9DF682DEEC66F0B66234E1E42883E7C5BF60DF7E74F57E6BCE38747"
+        },
+        {
+          "entry": "run/96dpi/384x768/0016-responsive-grid/reference.json",
+          "sha256": "5807286C4C03DB23A74877A5387F7D3981DD39D071976F71DD71D58398A5F317"
+        },
+        {
+          "entry": "run/96dpi/384x768/0016-responsive-grid/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0016-responsive-grid/reference-dom-snapshot.json",
+          "sha256": "87FDF48064312B10267CCAB136776170444CBAD3C5FDEF8360B284282DE2C315"
+        },
+        {
+          "entry": "run/96dpi/384x768/0016-responsive-grid/reference-fonts.json",
+          "sha256": "E971BAA63D753BDFD8803D7B3AE6F74987F034F6465F4CE86FC7C113BA33EF61"
+        }
+      ],
+      "caseId": "0016-responsive-grid"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0017-latin-inline/reference.png",
+          "sha256": "190B2F80D54E7F3A0C0862E0A9E4A2C478B2AFE375CDA155506F3F7A9A878146"
+        },
+        {
+          "entry": "run/96dpi/384x768/0017-latin-inline/reference.json",
+          "sha256": "0743ED609F3083F72B68DCEE156AEB592D27804AA9872A735B74E5AEA6D2F307"
+        },
+        {
+          "entry": "run/96dpi/384x768/0017-latin-inline/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0017-latin-inline/reference-dom-snapshot.json",
+          "sha256": "3C9FA37EBC184885DE356B42FB3A9340B2C8AF0F29078510F20CBD0C68B67164"
+        },
+        {
+          "entry": "run/96dpi/384x768/0017-latin-inline/reference-fonts.json",
+          "sha256": "D18D88102E81A427352A34B9918F1506210F65CB7CA90BFCD7BBAF8992BD20A6"
+        }
+      ],
+      "caseId": "0017-latin-inline"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0018-mixed-writing/reference.png",
+          "sha256": "9983B4D2097A4B01A0A533961EAABB34C4B88325C9A5E70D63226BB75A0C35FD"
+        },
+        {
+          "entry": "run/96dpi/384x768/0018-mixed-writing/reference.json",
+          "sha256": "029AA7E8967D24527108FD1EF085C7F4EA0CE6BACBB5BB5B8FBCE234B7752D3F"
+        },
+        {
+          "entry": "run/96dpi/384x768/0018-mixed-writing/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0018-mixed-writing/reference-dom-snapshot.json",
+          "sha256": "A8111147048E6F204A0B7D149336297FFA158F3768F955EF0AE8232E45220A86"
+        },
+        {
+          "entry": "run/96dpi/384x768/0018-mixed-writing/reference-fonts.json",
+          "sha256": "88A794C2B13FC24830F65529C7C884AE64112C4FDA41D12B2E455E5E1612213E"
+        }
+      ],
+      "caseId": "0018-mixed-writing"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0019-form-initial-state/reference.png",
+          "sha256": "FF9D1805676FA3F81A6B9596A3F44F565DA01D4F217CA1B241B58829D7EAC770"
+        },
+        {
+          "entry": "run/96dpi/384x768/0019-form-initial-state/reference.json",
+          "sha256": "A6D72DACFCA6A8E7764B253345DA7A1D7F2BB127CCDEE560F4290847A7B33A8E"
+        },
+        {
+          "entry": "run/96dpi/384x768/0019-form-initial-state/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0019-form-initial-state/reference-dom-snapshot.json",
+          "sha256": "44D893F67C86828929302245A164D740690474B8BA66D5854860CFBFD569A166"
+        },
+        {
+          "entry": "run/96dpi/384x768/0019-form-initial-state/reference-fonts.json",
+          "sha256": "E8AC62983867CBF328CCB8375C4C610293EDDDDC1193749CFEA9B24D0366A3D5"
+        }
+      ],
+      "caseId": "0019-form-initial-state"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/384x768/0020-complex-dashboard/reference.png",
+          "sha256": "D74C41F1DA0D40BA24B58A636A32D063A7252737522DF8DCF9027FFE400AA7B0"
+        },
+        {
+          "entry": "run/96dpi/384x768/0020-complex-dashboard/reference.json",
+          "sha256": "867696614102DE1BD07C6E432B1EFF956B49D25387903BAD8832B84FB12EE3C8"
+        },
+        {
+          "entry": "run/96dpi/384x768/0020-complex-dashboard/reference-metrics.json",
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743"
+        },
+        {
+          "entry": "run/96dpi/384x768/0020-complex-dashboard/reference-dom-snapshot.json",
+          "sha256": "8F90F0EDE7FD18C695C5EEBFD0332077EB34ADB6E8607206D39F2203D001C873"
+        },
+        {
+          "entry": "run/96dpi/384x768/0020-complex-dashboard/reference-fonts.json",
+          "sha256": "98C4939D56C53009C36997DD6BF2E8616E1F842BEF976D94C7647198D5C2F419"
+        }
+      ],
+      "caseId": "0020-complex-dashboard"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0001-solid-box/reference.png",
+          "sha256": "F55FDFF7F67249CC9744BB66F2C0DE93F3DAB27B97C87F48D4C93AF573951D3D"
+        },
+        {
+          "entry": "run/96dpi/800x600/0001-solid-box/reference.json",
+          "sha256": "F0D6F6E492891DFAF8D25EEE74D66DFDCB8281A0C6647F54663EE463D9BE2DBF"
+        },
+        {
+          "entry": "run/96dpi/800x600/0001-solid-box/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0001-solid-box/reference-dom-snapshot.json",
+          "sha256": "FFE8F00E4F10F98D79FD38EE39925F9E1DF9C32FEE3949F36545BF79E349FA28"
+        },
+        {
+          "entry": "run/96dpi/800x600/0001-solid-box/reference-fonts.json",
+          "sha256": "877A1C525CA3219EE61E0AB42F139B5862C2E2986DBCE9AD6365CA1487E04C08"
+        }
+      ],
+      "caseId": "0001-solid-box"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0002-fractional-box/reference.png",
+          "sha256": "7C0FF18762B73794689C679B690E1B7FFB8BED431FBDEAB24AFC4339408511A2"
+        },
+        {
+          "entry": "run/96dpi/800x600/0002-fractional-box/reference.json",
+          "sha256": "ACA781F18C4D803666170E9FAC596906769FA94F67A30B2FC35CED20397554F4"
+        },
+        {
+          "entry": "run/96dpi/800x600/0002-fractional-box/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0002-fractional-box/reference-dom-snapshot.json",
+          "sha256": "C16A2D0FC87D58B3BC3C0D387A398321F8CB89C7AFDCAEA0F6C9D8D326B91B6A"
+        },
+        {
+          "entry": "run/96dpi/800x600/0002-fractional-box/reference-fonts.json",
+          "sha256": "0342C84A131F9E52E0AD2B2F36E1C73267C924B18401998EBFB2EF1C1086FE0F"
+        }
+      ],
+      "caseId": "0002-fractional-box"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0003-margin-collapse/reference.png",
+          "sha256": "AADFC132A7669BD05764074DE403A6DF5A3B3E28617DE8718CCFF40DA2B5A888"
+        },
+        {
+          "entry": "run/96dpi/800x600/0003-margin-collapse/reference.json",
+          "sha256": "E5CF5065493DAEC86DD5B383DBC0D26D23337DECF6CEC9D79768B95888DAC391"
+        },
+        {
+          "entry": "run/96dpi/800x600/0003-margin-collapse/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0003-margin-collapse/reference-dom-snapshot.json",
+          "sha256": "78521BEE590C599D86576586B098F354DB97088481F11C795503C75BD1FCF049"
+        },
+        {
+          "entry": "run/96dpi/800x600/0003-margin-collapse/reference-fonts.json",
+          "sha256": "2459FA60C3A85407D8B8E52051BEA187FDCB4FCBD135E58308B1C0710CA1CD14"
+        }
+      ],
+      "caseId": "0003-margin-collapse"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0004-flex-distribution/reference.png",
+          "sha256": "DA1C87E85CAA93A99B746A6EEB079DC7B57FF8CA0EA46BE8BF94D39DC5FF5F93"
+        },
+        {
+          "entry": "run/96dpi/800x600/0004-flex-distribution/reference.json",
+          "sha256": "47A4B0BA4F211E6702E4C86FDAA06E18D0343F94B55FD8CF51348EF728769597"
+        },
+        {
+          "entry": "run/96dpi/800x600/0004-flex-distribution/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0004-flex-distribution/reference-dom-snapshot.json",
+          "sha256": "C36ADB2AE9E2C659E7085E3425D349A2C30C1C068267490C80B7B3B5C4A06A9C"
+        },
+        {
+          "entry": "run/96dpi/800x600/0004-flex-distribution/reference-fonts.json",
+          "sha256": "38DCB12DF6C6A3EF189B911FE3CBFE7A438CE05D12FF4A33C480AC1C9E5D03A0"
+        }
+      ],
+      "caseId": "0004-flex-distribution"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0005-flex-wrap/reference.png",
+          "sha256": "D1A3495B822503943AB55A202A55799B712352CC03C2EC3D72B67054E9846ADA"
+        },
+        {
+          "entry": "run/96dpi/800x600/0005-flex-wrap/reference.json",
+          "sha256": "B115934D61A19E6D3742DEE821BAF651F6424C007CCA633A141E359740C984E4"
+        },
+        {
+          "entry": "run/96dpi/800x600/0005-flex-wrap/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0005-flex-wrap/reference-dom-snapshot.json",
+          "sha256": "67FEBC675C07BE9A1E47621FE7690FB7206D5248344A7315D26D25DBB48FA1EB"
+        },
+        {
+          "entry": "run/96dpi/800x600/0005-flex-wrap/reference-fonts.json",
+          "sha256": "3598AE6A56C572CBB0139A3F9BA4351E0ECD734A567E92437779796D0B9C7237"
+        }
+      ],
+      "caseId": "0005-flex-wrap"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0006-nested-flex-grid/reference.png",
+          "sha256": "6577CFB792CA2AA3C1BE91AD046A296E3DA453A10507CF6CAA2FF4FD89B38727"
+        },
+        {
+          "entry": "run/96dpi/800x600/0006-nested-flex-grid/reference.json",
+          "sha256": "1E872B7A583C7BE043E85115A7870A48FD17207A48112CFE499B780302E9AA75"
+        },
+        {
+          "entry": "run/96dpi/800x600/0006-nested-flex-grid/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0006-nested-flex-grid/reference-dom-snapshot.json",
+          "sha256": "0AFC018A10C98DFAEF315CF2BCE2489957B9351E1220361586FFC74E11637A8E"
+        },
+        {
+          "entry": "run/96dpi/800x600/0006-nested-flex-grid/reference-fonts.json",
+          "sha256": "613181CA8D7EC6A1719A5B5121028F712D5A5C0F9ACC7AE4F6FC9C4FC02AD99E"
+        }
+      ],
+      "caseId": "0006-nested-flex-grid"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0007-grid-tracks/reference.png",
+          "sha256": "B4C779C6289831D6B0BE33F4F02517FAD56D4740B002E1D0561C4EDD07CA94CB"
+        },
+        {
+          "entry": "run/96dpi/800x600/0007-grid-tracks/reference.json",
+          "sha256": "07D9C5B82C0B8C2673985760B917ED264AA8D83F28B02D8FD0C5706CEE2F7E49"
+        },
+        {
+          "entry": "run/96dpi/800x600/0007-grid-tracks/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0007-grid-tracks/reference-dom-snapshot.json",
+          "sha256": "0532321250D5A451A477A913D97698AB16C09AF3E376B721F13B64D65E139DCA"
+        },
+        {
+          "entry": "run/96dpi/800x600/0007-grid-tracks/reference-fonts.json",
+          "sha256": "A2F3E0C4F9FEEB61E9EE29B374232F7A989A56C17DF79D3BFA0A6FFB0697B77E"
+        }
+      ],
+      "caseId": "0007-grid-tracks"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0008-grid-spanning/reference.png",
+          "sha256": "AACFB5042F0A58A8AE7319145B0A80C6A89E5FB869C836E54F05058DAB0004EC"
+        },
+        {
+          "entry": "run/96dpi/800x600/0008-grid-spanning/reference.json",
+          "sha256": "1A8326D3D38CA9441A97B3B6A17530A44E7BB2EBD49C0D28656A7C64D2D39948"
+        },
+        {
+          "entry": "run/96dpi/800x600/0008-grid-spanning/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0008-grid-spanning/reference-dom-snapshot.json",
+          "sha256": "FA035EB385B3E9C187FF43CDBF16CCCA4C375B8CC40C00625327CF11A720E7D9"
+        },
+        {
+          "entry": "run/96dpi/800x600/0008-grid-spanning/reference-fonts.json",
+          "sha256": "B0CE1C7D7F9B25EF8CFC166C15DB235C7EFFC043F9AD572E1EDF5B6EF863642B"
+        }
+      ],
+      "caseId": "0008-grid-spanning"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0009-table-spans/reference.png",
+          "sha256": "9147BDDDE068CFE47606419CAAD9119381CD263EC936FB342C4531E843ECB18D"
+        },
+        {
+          "entry": "run/96dpi/800x600/0009-table-spans/reference.json",
+          "sha256": "FD1F2196E652928B2DF6D6FBE78EBBBECF5AFD7CD20AA6DE4FE97907540DB0FF"
+        },
+        {
+          "entry": "run/96dpi/800x600/0009-table-spans/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0009-table-spans/reference-dom-snapshot.json",
+          "sha256": "B5D6C1477D8383EB416A0C9CE21B26A0534F8468E411CF3C221616CFA101E12F"
+        },
+        {
+          "entry": "run/96dpi/800x600/0009-table-spans/reference-fonts.json",
+          "sha256": "2C6E28765C86C5872D181D8500953F1C8D08E104EA4CDECAF23E1722302D446B"
+        }
+      ],
+      "caseId": "0009-table-spans"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0010-position-stacking/reference.png",
+          "sha256": "0EF36932E36F440D09BA1AEBD35E55F75047B0522E3B22BC05136F0DE7B65293"
+        },
+        {
+          "entry": "run/96dpi/800x600/0010-position-stacking/reference.json",
+          "sha256": "AADFCB951AD5408B58AF6CDBF5EDC9A72A33430F1E2E73A63A1817E567E806FB"
+        },
+        {
+          "entry": "run/96dpi/800x600/0010-position-stacking/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0010-position-stacking/reference-dom-snapshot.json",
+          "sha256": "02D8E074374F48B5CEAA6F984EEAC71268E1A3189F3A03F31EEC2124F2489CF9"
+        },
+        {
+          "entry": "run/96dpi/800x600/0010-position-stacking/reference-fonts.json",
+          "sha256": "5296B168DE7D32A5F7F1799AAD42827A9CC5EB82A3BA629B02F05B1650E07738"
+        }
+      ],
+      "caseId": "0010-position-stacking"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0011-nested-overflow/reference.png",
+          "sha256": "26BF9DEA3081D6D3FDCC08D468596538B3571A0585E4B4B423A7C02758447819"
+        },
+        {
+          "entry": "run/96dpi/800x600/0011-nested-overflow/reference.json",
+          "sha256": "E672E31F0EC118CB17B8A61432F965908D0E84A9DBA2608A6222DADDB186CF08"
+        },
+        {
+          "entry": "run/96dpi/800x600/0011-nested-overflow/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0011-nested-overflow/reference-dom-snapshot.json",
+          "sha256": "42D4EEE3964C57F14FD2A4B7DF383279D5F9B1DEC0E44AEF1BD8838CEF5FE0D4"
+        },
+        {
+          "entry": "run/96dpi/800x600/0011-nested-overflow/reference-fonts.json",
+          "sha256": "527A46FC7E3B7AB39FEA29477891EE707D426D3E4C5C5D0414B38D727FC423E9"
+        }
+      ],
+      "caseId": "0011-nested-overflow"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0012-radius-gradient/reference.png",
+          "sha256": "816534A6C0C1C1C44B74302C797F1317F4BEEB9630C24AC10941FC0ABD94F713"
+        },
+        {
+          "entry": "run/96dpi/800x600/0012-radius-gradient/reference.json",
+          "sha256": "AAEEDEC86566C7F60E0D3C1861701C19A137EF8132DD7778A76801071971006A"
+        },
+        {
+          "entry": "run/96dpi/800x600/0012-radius-gradient/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0012-radius-gradient/reference-dom-snapshot.json",
+          "sha256": "A3C920B48FCA4E1B8132D9FBCAB561010AC1F763226A6F742F7E9B7D4A357CA3"
+        },
+        {
+          "entry": "run/96dpi/800x600/0012-radius-gradient/reference-fonts.json",
+          "sha256": "6BEBE6D49825E1AE8F1B5EAD57AF774991635B8E7146DB72682A89164DAFC992"
+        }
+      ],
+      "caseId": "0012-radius-gradient"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0013-svg-paint/reference.png",
+          "sha256": "95C9BF46FBB60331917013FC1C0CEE92683C699DF68661FDDDA17A269B41BF94"
+        },
+        {
+          "entry": "run/96dpi/800x600/0013-svg-paint/reference.json",
+          "sha256": "7C182F88F6E6C868D0FC59DB681FD90DDC9D1C0E1D9B7DFBDC2C8B31C11958F6"
+        },
+        {
+          "entry": "run/96dpi/800x600/0013-svg-paint/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0013-svg-paint/reference-dom-snapshot.json",
+          "sha256": "5CF9DFF985B23CB18BA5CE1D6F96460A5C2AC82577BC06EF94C5F012F164D42E"
+        },
+        {
+          "entry": "run/96dpi/800x600/0013-svg-paint/reference-fonts.json",
+          "sha256": "01BD8FFFEB848B41D010B95DA9701F6806B84F5D6CD26CA0A2DBE9CBD8AA9F56"
+        }
+      ],
+      "caseId": "0013-svg-paint"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0014-generated-boxes/reference.png",
+          "sha256": "3AFD1226B2B61969882168BE82CE2429A9ACC0F08A2B3968A92727D505856CCE"
+        },
+        {
+          "entry": "run/96dpi/800x600/0014-generated-boxes/reference.json",
+          "sha256": "C47CE086A0663AA92340FCEADE0B71ACB1343F900EC1314F761E6141AC49ACAF"
+        },
+        {
+          "entry": "run/96dpi/800x600/0014-generated-boxes/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0014-generated-boxes/reference-dom-snapshot.json",
+          "sha256": "92A198D0E94A766BEAA341CEC82D9DEDC2876EEED77933BFC1D790A3E3A8A733"
+        },
+        {
+          "entry": "run/96dpi/800x600/0014-generated-boxes/reference-fonts.json",
+          "sha256": "567D5E9CB7EFC63EF2D6916FD4F8DE45B960329B1495C23C156AE78DB4412540"
+        }
+      ],
+      "caseId": "0014-generated-boxes"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0015-variables-layers-nesting/reference.png",
+          "sha256": "C757F2995DF8DD9AC152BD7CE2A0F379FCE914D4C91D8A910E43955D09124B5F"
+        },
+        {
+          "entry": "run/96dpi/800x600/0015-variables-layers-nesting/reference.json",
+          "sha256": "F41C70C57D556EEABCCC220C167BDFDCF95CCC9BD9A297BA96EFDD326E8706F1"
+        },
+        {
+          "entry": "run/96dpi/800x600/0015-variables-layers-nesting/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0015-variables-layers-nesting/reference-dom-snapshot.json",
+          "sha256": "04594A2D75867B5D06CE33D1D2413A8D546430180FB7ED3D09592E9FFD03A175"
+        },
+        {
+          "entry": "run/96dpi/800x600/0015-variables-layers-nesting/reference-fonts.json",
+          "sha256": "1B06F64CB8E45070C303C87F3C1C6277CF4B6A2FC773A66014592D7246364D10"
+        }
+      ],
+      "caseId": "0015-variables-layers-nesting"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0016-responsive-grid/reference.png",
+          "sha256": "2A15548DB0664B28DA5EB31D156C9BD41ACDCD7D5331CC8AAD5DB14D0A5ACEEF"
+        },
+        {
+          "entry": "run/96dpi/800x600/0016-responsive-grid/reference.json",
+          "sha256": "DC1E0B15604157BBA5FDAA6927B8236273386167F0565021C43760731A39AFAB"
+        },
+        {
+          "entry": "run/96dpi/800x600/0016-responsive-grid/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0016-responsive-grid/reference-dom-snapshot.json",
+          "sha256": "99D8D223904D0F64655B3F5B35C269C78FDC9EE0BE2BFD59A85A63012809BC60"
+        },
+        {
+          "entry": "run/96dpi/800x600/0016-responsive-grid/reference-fonts.json",
+          "sha256": "E971BAA63D753BDFD8803D7B3AE6F74987F034F6465F4CE86FC7C113BA33EF61"
+        }
+      ],
+      "caseId": "0016-responsive-grid"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0017-latin-inline/reference.png",
+          "sha256": "3CDD4BF3C4C0B1A7EA5CB5FD5861D221907189DA1D98E5DEEB3A8217C8EDC069"
+        },
+        {
+          "entry": "run/96dpi/800x600/0017-latin-inline/reference.json",
+          "sha256": "B2B9EA6C1AA46E55FBD0FC0B929730CB26BD2CF3F4F3C79AD82DF0A84959EDDD"
+        },
+        {
+          "entry": "run/96dpi/800x600/0017-latin-inline/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0017-latin-inline/reference-dom-snapshot.json",
+          "sha256": "BDF2BBC16FE5673FC9288A71D838C5A3230FF75019AAFE5FF4DBB49326ED037E"
+        },
+        {
+          "entry": "run/96dpi/800x600/0017-latin-inline/reference-fonts.json",
+          "sha256": "D18D88102E81A427352A34B9918F1506210F65CB7CA90BFCD7BBAF8992BD20A6"
+        }
+      ],
+      "caseId": "0017-latin-inline"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0018-mixed-writing/reference.png",
+          "sha256": "0E16A6206C5455C6FA38E234BDABF8BFC7D439272A13BC81D46859EBFBCF0CA5"
+        },
+        {
+          "entry": "run/96dpi/800x600/0018-mixed-writing/reference.json",
+          "sha256": "2ACDD9368F7CEE8BF89826E13457E636ADD30B94DDB1E5307E84BB49FACF566D"
+        },
+        {
+          "entry": "run/96dpi/800x600/0018-mixed-writing/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0018-mixed-writing/reference-dom-snapshot.json",
+          "sha256": "E4DF7FD82A4F4B986AA9F928AB6B1518F164A5E3FE5CF5440F77FEB6DA9DB99C"
+        },
+        {
+          "entry": "run/96dpi/800x600/0018-mixed-writing/reference-fonts.json",
+          "sha256": "88A794C2B13FC24830F65529C7C884AE64112C4FDA41D12B2E455E5E1612213E"
+        }
+      ],
+      "caseId": "0018-mixed-writing"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0019-form-initial-state/reference.png",
+          "sha256": "635CED0D3356C60A673B10A7833D720E5FAD0CCA305F90E3AD93DC42C9130CC3"
+        },
+        {
+          "entry": "run/96dpi/800x600/0019-form-initial-state/reference.json",
+          "sha256": "344D9A1B6BB9815FD1FE32AAFF56ECE9B85DF5CFC762B3C8132FD2BEBDCE0EDF"
+        },
+        {
+          "entry": "run/96dpi/800x600/0019-form-initial-state/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0019-form-initial-state/reference-dom-snapshot.json",
+          "sha256": "81BC68680D1E05C37EC94F6D4AB02DD68C15D4B4567110A28487CD9F542B9ABF"
+        },
+        {
+          "entry": "run/96dpi/800x600/0019-form-initial-state/reference-fonts.json",
+          "sha256": "E8AC62983867CBF328CCB8375C4C610293EDDDDC1193749CFEA9B24D0366A3D5"
+        }
+      ],
+      "caseId": "0019-form-initial-state"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/800x600/0020-complex-dashboard/reference.png",
+          "sha256": "6F94F5D0C923BBAFAA2BFA28575B3CCD2B2DF26629D3BD5340BAEF88F293FFD7"
+        },
+        {
+          "entry": "run/96dpi/800x600/0020-complex-dashboard/reference.json",
+          "sha256": "F5192C07C893157B1B2A5EAB88B7356E5042D6565F3900BF84474C8D7A2CEF70"
+        },
+        {
+          "entry": "run/96dpi/800x600/0020-complex-dashboard/reference-metrics.json",
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B"
+        },
+        {
+          "entry": "run/96dpi/800x600/0020-complex-dashboard/reference-dom-snapshot.json",
+          "sha256": "998967DD1C314CFCB28BEEB4A6E548A69018D075F7E06545FCF7B159E895D091"
+        },
+        {
+          "entry": "run/96dpi/800x600/0020-complex-dashboard/reference-fonts.json",
+          "sha256": "98C4939D56C53009C36997DD6BF2E8616E1F842BEF976D94C7647198D5C2F419"
+        }
+      ],
+      "caseId": "0020-complex-dashboard"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0001-solid-box/reference.png",
+          "sha256": "F9C472E3ED3EA826B148A94C466ED226097E7DE3063C5EF7EB5C7FAB14AA88D6"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0001-solid-box/reference.json",
+          "sha256": "E2EBA6599839514D43CC5EEDA6880F6615E14D82F924B748A1CB08CF0EFE391F"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0001-solid-box/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0001-solid-box/reference-dom-snapshot.json",
+          "sha256": "E86667DCAAADEB8BA6D943F06D8B0265D4089334ADF72FCCA8F2B0C3643EA946"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0001-solid-box/reference-fonts.json",
+          "sha256": "877A1C525CA3219EE61E0AB42F139B5862C2E2986DBCE9AD6365CA1487E04C08"
+        }
+      ],
+      "caseId": "0001-solid-box"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0002-fractional-box/reference.png",
+          "sha256": "92358C57C4E8F4889F7937B93D886C75E1CF9D93E8031EC576560A6719C9A051"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0002-fractional-box/reference.json",
+          "sha256": "E1D6A3E30503E8177EF5B2830CA1738B51B88FDB9CA26635DF603ABD48B020F7"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0002-fractional-box/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0002-fractional-box/reference-dom-snapshot.json",
+          "sha256": "F48F1017A133F8468AA776969FA690CF631FE0674DB390125497455755BB938E"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0002-fractional-box/reference-fonts.json",
+          "sha256": "0342C84A131F9E52E0AD2B2F36E1C73267C924B18401998EBFB2EF1C1086FE0F"
+        }
+      ],
+      "caseId": "0002-fractional-box"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0003-margin-collapse/reference.png",
+          "sha256": "69DFC2E985675771AC2974A0E14E2CC9135136F31F69251CB0687822630CA5E7"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0003-margin-collapse/reference.json",
+          "sha256": "2A2FD2539E03E3E6621A687FFB3DB036E99808E65BB2369DB7A2FA1C593D9EB1"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0003-margin-collapse/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0003-margin-collapse/reference-dom-snapshot.json",
+          "sha256": "646844BD898044967DB7B98944983DB70CE9556FE62046812F430920F7B61551"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0003-margin-collapse/reference-fonts.json",
+          "sha256": "2459FA60C3A85407D8B8E52051BEA187FDCB4FCBD135E58308B1C0710CA1CD14"
+        }
+      ],
+      "caseId": "0003-margin-collapse"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0004-flex-distribution/reference.png",
+          "sha256": "607DF40CDA8A87D29DAA44E55190D167D39001860CACAE26DA75F63436282968"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0004-flex-distribution/reference.json",
+          "sha256": "201998CD8F4B23616ED63F9BDEB47CD6CC89CE64267F8D116688B7AFAE077A99"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0004-flex-distribution/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0004-flex-distribution/reference-dom-snapshot.json",
+          "sha256": "04A6443B8BA2CC4A270AFF3A284099744764D594FE89EF8B6722119AD2A62A6C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0004-flex-distribution/reference-fonts.json",
+          "sha256": "38DCB12DF6C6A3EF189B911FE3CBFE7A438CE05D12FF4A33C480AC1C9E5D03A0"
+        }
+      ],
+      "caseId": "0004-flex-distribution"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0005-flex-wrap/reference.png",
+          "sha256": "3DC1E13AEB1BD5ABFE954F87D3C2CCC15261EFA281C85FC52693B4558F8B08D6"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0005-flex-wrap/reference.json",
+          "sha256": "5EC96353E07713267F2B6A114FD85160B53D9198C29F93799B0394B1ED93D9F9"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0005-flex-wrap/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0005-flex-wrap/reference-dom-snapshot.json",
+          "sha256": "400332F81DF8EAD98144D192C20FAACB78AF53BF0BE9F3649FFA8D2501720A06"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0005-flex-wrap/reference-fonts.json",
+          "sha256": "3598AE6A56C572CBB0139A3F9BA4351E0ECD734A567E92437779796D0B9C7237"
+        }
+      ],
+      "caseId": "0005-flex-wrap"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0006-nested-flex-grid/reference.png",
+          "sha256": "058518D7033F0636E76BCA6319358BFBE13EC91ACCEA3CAECF8588F5A145E6C7"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0006-nested-flex-grid/reference.json",
+          "sha256": "0414E2754C03BE9BA578880EF02EA88BF607DD068330B894E3EC12F56556EA90"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0006-nested-flex-grid/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0006-nested-flex-grid/reference-dom-snapshot.json",
+          "sha256": "D4E97418F96260B72733A60EDE83224067A71E6ECCD86B22A2ABCA748E3E1B8B"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0006-nested-flex-grid/reference-fonts.json",
+          "sha256": "613181CA8D7EC6A1719A5B5121028F712D5A5C0F9ACC7AE4F6FC9C4FC02AD99E"
+        }
+      ],
+      "caseId": "0006-nested-flex-grid"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0007-grid-tracks/reference.png",
+          "sha256": "DD73C581B35B2C5A6AE21CC7E6247CA811BAEC984F1C973D5B298E7C1A1C738F"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0007-grid-tracks/reference.json",
+          "sha256": "7E770EC982E9445E53CAD6857D9A86521DA3C51420BC8761502BE3D4437A3B21"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0007-grid-tracks/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0007-grid-tracks/reference-dom-snapshot.json",
+          "sha256": "526BF44CC30BDA669136E96A868FD305ABA73F92533A15542B7A12A9CD60AB3F"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0007-grid-tracks/reference-fonts.json",
+          "sha256": "A2F3E0C4F9FEEB61E9EE29B374232F7A989A56C17DF79D3BFA0A6FFB0697B77E"
+        }
+      ],
+      "caseId": "0007-grid-tracks"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0008-grid-spanning/reference.png",
+          "sha256": "CB208E46C7C3E0A4574AF7011EE24AA93D0829CF81430C214F6253EE3B70CA98"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0008-grid-spanning/reference.json",
+          "sha256": "24D490248AE33BFBED182304A24469CB36B7BDC616228B9383F76B275BACEC6A"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0008-grid-spanning/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0008-grid-spanning/reference-dom-snapshot.json",
+          "sha256": "FF78B95280F133582ECE8948F43941B67AEE251110D165C606FF4BD8EF643F69"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0008-grid-spanning/reference-fonts.json",
+          "sha256": "B0CE1C7D7F9B25EF8CFC166C15DB235C7EFFC043F9AD572E1EDF5B6EF863642B"
+        }
+      ],
+      "caseId": "0008-grid-spanning"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0009-table-spans/reference.png",
+          "sha256": "E8EE725A3EA7B2ABBC56038634025947959E7E1D994AC9E14E49213C26539C78"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0009-table-spans/reference.json",
+          "sha256": "A436B86B859EFB6A8821EAC43995CBE95DB96F62FFA55BBFAF847CD85B7A8024"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0009-table-spans/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0009-table-spans/reference-dom-snapshot.json",
+          "sha256": "6C8F2EE26781F86528DF817197858C995602BC56B0DA19E96D73FC050F1D9590"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0009-table-spans/reference-fonts.json",
+          "sha256": "2C6E28765C86C5872D181D8500953F1C8D08E104EA4CDECAF23E1722302D446B"
+        }
+      ],
+      "caseId": "0009-table-spans"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0010-position-stacking/reference.png",
+          "sha256": "C7277D96316C8FC6B5FE14712B5D8EF857F936689BA0EAA782F9149F7BA83DED"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0010-position-stacking/reference.json",
+          "sha256": "27C3905F70EC3DA67BFA3BE4CFEE89A231E8707F152B7BF6186E707846DE99EB"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0010-position-stacking/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0010-position-stacking/reference-dom-snapshot.json",
+          "sha256": "9FFB2097589B1208C6A92AB78864C68BCFEE9AA4FC111B2B970422A31978EA74"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0010-position-stacking/reference-fonts.json",
+          "sha256": "5296B168DE7D32A5F7F1799AAD42827A9CC5EB82A3BA629B02F05B1650E07738"
+        }
+      ],
+      "caseId": "0010-position-stacking"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0011-nested-overflow/reference.png",
+          "sha256": "EA03D358CDB8ABD0568126CEC958DB24214420159C162C3C3A717B7B52AD1A6F"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0011-nested-overflow/reference.json",
+          "sha256": "F9350B1F2AC14DECA94143B9E9F3CBA171C3874CB1B966EBCB7B3D6213A73898"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0011-nested-overflow/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0011-nested-overflow/reference-dom-snapshot.json",
+          "sha256": "8657BA6E7AD27B615A4B7A21049FDC74224686285EA94A974F9A695E475248D8"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0011-nested-overflow/reference-fonts.json",
+          "sha256": "527A46FC7E3B7AB39FEA29477891EE707D426D3E4C5C5D0414B38D727FC423E9"
+        }
+      ],
+      "caseId": "0011-nested-overflow"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0012-radius-gradient/reference.png",
+          "sha256": "4F1647AEE972EF317BBEA0A2476593E92D1024EA5923D0D623FA449D5238DE2E"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0012-radius-gradient/reference.json",
+          "sha256": "60F7F8C7EA7DFEA43CFD1F49D66E33616F01932D3C761DF1ACE2A27F9E865244"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0012-radius-gradient/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0012-radius-gradient/reference-dom-snapshot.json",
+          "sha256": "42D3D976E26D48D6C80DC6FF08D9F910AEB9BF2C132A2E88AE5BBE0951B95A33"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0012-radius-gradient/reference-fonts.json",
+          "sha256": "6BEBE6D49825E1AE8F1B5EAD57AF774991635B8E7146DB72682A89164DAFC992"
+        }
+      ],
+      "caseId": "0012-radius-gradient"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0013-svg-paint/reference.png",
+          "sha256": "F1EA1B26790A733B7B36CE0BAEBC9DF2BA9CCE3FAEFEEB1BA4D17A6EC83239BF"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0013-svg-paint/reference.json",
+          "sha256": "A9C512B7629D097C88AD6D39039227B1FA9374795D8AC67D42EC559F4C974261"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0013-svg-paint/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0013-svg-paint/reference-dom-snapshot.json",
+          "sha256": "53F2DC0564C37E7F23F139659BF325CD0B90616717A8643BE1ED80CAEA19B1CC"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0013-svg-paint/reference-fonts.json",
+          "sha256": "01BD8FFFEB848B41D010B95DA9701F6806B84F5D6CD26CA0A2DBE9CBD8AA9F56"
+        }
+      ],
+      "caseId": "0013-svg-paint"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0014-generated-boxes/reference.png",
+          "sha256": "1A41E937B416AE66F307C0F1AEFD4D0A9CEAABFA68756AD6B7E6E97884668075"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0014-generated-boxes/reference.json",
+          "sha256": "C93DA7B5BFB499A303A352D9E543DDD3B99B3C47EAD77321E426C3036C53B275"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0014-generated-boxes/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0014-generated-boxes/reference-dom-snapshot.json",
+          "sha256": "C760F5D508B5DFE9AEBF780E86E0C5F7A8F4E2CC6ED76E9FD4FB9B8E370D30AF"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0014-generated-boxes/reference-fonts.json",
+          "sha256": "567D5E9CB7EFC63EF2D6916FD4F8DE45B960329B1495C23C156AE78DB4412540"
+        }
+      ],
+      "caseId": "0014-generated-boxes"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0015-variables-layers-nesting/reference.png",
+          "sha256": "0AE7F2AA8CABBD1BBF89C0B6695254E0909216325185E319E7910432F15F8382"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0015-variables-layers-nesting/reference.json",
+          "sha256": "C4DBBB4656996C448E7636336E78BBAB9BCD2BA471046B1D49019155E42ECB1C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0015-variables-layers-nesting/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0015-variables-layers-nesting/reference-dom-snapshot.json",
+          "sha256": "126B23E89E74C4EB24624E073B1122CBED399DCEB74C0F1E02EF34E95216B911"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0015-variables-layers-nesting/reference-fonts.json",
+          "sha256": "1B06F64CB8E45070C303C87F3C1C6277CF4B6A2FC773A66014592D7246364D10"
+        }
+      ],
+      "caseId": "0015-variables-layers-nesting"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0016-responsive-grid/reference.png",
+          "sha256": "A9F3B789DDD5DEF34DD8AEBF366C65550B79C5051B2728208335637708F3CFD1"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0016-responsive-grid/reference.json",
+          "sha256": "07F10EE536A2735463FF6AD7FEBB9E72D97C9EFC7A88808995EEC40F27E76BFD"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0016-responsive-grid/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0016-responsive-grid/reference-dom-snapshot.json",
+          "sha256": "BDD76076889DEBDFFD33194C41A7DC3718940233DB00368E10AA10C78F3280CC"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0016-responsive-grid/reference-fonts.json",
+          "sha256": "E971BAA63D753BDFD8803D7B3AE6F74987F034F6465F4CE86FC7C113BA33EF61"
+        }
+      ],
+      "caseId": "0016-responsive-grid"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0017-latin-inline/reference.png",
+          "sha256": "820886208F6152818EB108D4DE242EA412FDA6B5CFB9404EE308827D373026AB"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0017-latin-inline/reference.json",
+          "sha256": "76B39AA0D408543B7DE5D802F48C75D2055F719201D9DFA104C597CB5433D062"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0017-latin-inline/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0017-latin-inline/reference-dom-snapshot.json",
+          "sha256": "DCA2E598A8F454E90661D8C880FAD105B34542FC427FF9C8E0853B0D74F91F5E"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0017-latin-inline/reference-fonts.json",
+          "sha256": "D18D88102E81A427352A34B9918F1506210F65CB7CA90BFCD7BBAF8992BD20A6"
+        }
+      ],
+      "caseId": "0017-latin-inline"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0018-mixed-writing/reference.png",
+          "sha256": "EEA39291BA4C0C0F0D9176ACF6B2A86D4CE9DBD3FD8877D6B169E1E8511FABE6"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0018-mixed-writing/reference.json",
+          "sha256": "135B2065ABF7D49A874A4905054D5651059F49F848277CDF87107259C329D376"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0018-mixed-writing/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0018-mixed-writing/reference-dom-snapshot.json",
+          "sha256": "D3C49E581A28462867FA29AB46FD39110C4BA1E1293E38E94459BB947CD00D02"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0018-mixed-writing/reference-fonts.json",
+          "sha256": "88A794C2B13FC24830F65529C7C884AE64112C4FDA41D12B2E455E5E1612213E"
+        }
+      ],
+      "caseId": "0018-mixed-writing"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0019-form-initial-state/reference.png",
+          "sha256": "30E8FD743C2DFCD3771152BCBC1F242A5C080D6CE003E65B11044BB7A9D2EDCA"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0019-form-initial-state/reference.json",
+          "sha256": "FEE5F497B3EB423D024EBC74C20B755E9B8FE1930E28B803C64482DD6AD9014B"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0019-form-initial-state/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0019-form-initial-state/reference-dom-snapshot.json",
+          "sha256": "8C0EA36D683765708D115A4621C60D18BC589D668CFDD5170991C283F91781C0"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0019-form-initial-state/reference-fonts.json",
+          "sha256": "E8AC62983867CBF328CCB8375C4C610293EDDDDC1193749CFEA9B24D0366A3D5"
+        }
+      ],
+      "caseId": "0019-form-initial-state"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 96,
+      "files": [
+        {
+          "entry": "run/96dpi/1280x800/0020-complex-dashboard/reference.png",
+          "sha256": "CCE0EA3A95187D71374E383068B38D3B9A798DE5FED3B88B6C41FF0799C2F29A"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0020-complex-dashboard/reference.json",
+          "sha256": "3B28043D8597E3263850780217ABBD19D701BDAFC0F6678D9155A7554DB35C78"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0020-complex-dashboard/reference-metrics.json",
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0020-complex-dashboard/reference-dom-snapshot.json",
+          "sha256": "70422B874E8F17E5CE0511BEE3F7ACD2B20A3C8EE60F7AC8D3017F2C5800C89A"
+        },
+        {
+          "entry": "run/96dpi/1280x800/0020-complex-dashboard/reference-fonts.json",
+          "sha256": "98C4939D56C53009C36997DD6BF2E8616E1F842BEF976D94C7647198D5C2F419"
+        }
+      ],
+      "caseId": "0020-complex-dashboard"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0001-solid-box/reference.png",
+          "sha256": "E3AB5579F85CC0FC83329FC39808CDD0463E9C1FB752CA2883A7C932F0B022C0"
+        },
+        {
+          "entry": "run/144dpi/384x768/0001-solid-box/reference.json",
+          "sha256": "21758EBD4ED80829B30FEDA966903F76E09DE3AEA7F048940C6B947D1119787E"
+        },
+        {
+          "entry": "run/144dpi/384x768/0001-solid-box/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0001-solid-box/reference-dom-snapshot.json",
+          "sha256": "AF1E7B949584F0855FC334B0AA7131AA29F4D2D37BC5579D5A5A556EC0B6555E"
+        },
+        {
+          "entry": "run/144dpi/384x768/0001-solid-box/reference-fonts.json",
+          "sha256": "877A1C525CA3219EE61E0AB42F139B5862C2E2986DBCE9AD6365CA1487E04C08"
+        }
+      ],
+      "caseId": "0001-solid-box"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0002-fractional-box/reference.png",
+          "sha256": "AA72F9922FE9D36A60439C7A4358F7AB8756DF84387A25D503632D4F21CA2F04"
+        },
+        {
+          "entry": "run/144dpi/384x768/0002-fractional-box/reference.json",
+          "sha256": "2F3FE01DE1CE3ED0C8EC0E8FA72C9BA05E2281C3F5F3B452DAC1A0C631038CCA"
+        },
+        {
+          "entry": "run/144dpi/384x768/0002-fractional-box/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0002-fractional-box/reference-dom-snapshot.json",
+          "sha256": "5239D0EDD01E988D042BC07E0F549E7B498728E61F2307842050C0CFC003D99E"
+        },
+        {
+          "entry": "run/144dpi/384x768/0002-fractional-box/reference-fonts.json",
+          "sha256": "0342C84A131F9E52E0AD2B2F36E1C73267C924B18401998EBFB2EF1C1086FE0F"
+        }
+      ],
+      "caseId": "0002-fractional-box"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0003-margin-collapse/reference.png",
+          "sha256": "9FBB5BE569B54AC8697C5D1ABB40CFED0115883C253698350BC8426323C756A1"
+        },
+        {
+          "entry": "run/144dpi/384x768/0003-margin-collapse/reference.json",
+          "sha256": "E979CB65B92B7C08CC48AFC9C82AAB2D2A8F6C51D2FF7CA239E66ACF81BB3899"
+        },
+        {
+          "entry": "run/144dpi/384x768/0003-margin-collapse/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0003-margin-collapse/reference-dom-snapshot.json",
+          "sha256": "5D66B71E16D671E1DB8DA90978E91CFE78F274E4E868F00A5EAB88025A2AC865"
+        },
+        {
+          "entry": "run/144dpi/384x768/0003-margin-collapse/reference-fonts.json",
+          "sha256": "2459FA60C3A85407D8B8E52051BEA187FDCB4FCBD135E58308B1C0710CA1CD14"
+        }
+      ],
+      "caseId": "0003-margin-collapse"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0004-flex-distribution/reference.png",
+          "sha256": "4470394F7976B3750B26BA57FDA0C3F15E92806ED2966FA3BFA49AC33E295C35"
+        },
+        {
+          "entry": "run/144dpi/384x768/0004-flex-distribution/reference.json",
+          "sha256": "166EEFEFE4CE126B3674C93F1FB89521D62812CED0A9663A2B83588904C6D20A"
+        },
+        {
+          "entry": "run/144dpi/384x768/0004-flex-distribution/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0004-flex-distribution/reference-dom-snapshot.json",
+          "sha256": "79975AFF7AACF7F81D0F29064C4232F6DE28A07B2B6F9D837CB79F59B5B860DD"
+        },
+        {
+          "entry": "run/144dpi/384x768/0004-flex-distribution/reference-fonts.json",
+          "sha256": "38DCB12DF6C6A3EF189B911FE3CBFE7A438CE05D12FF4A33C480AC1C9E5D03A0"
+        }
+      ],
+      "caseId": "0004-flex-distribution"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0005-flex-wrap/reference.png",
+          "sha256": "4CE5FE3845A1DDB24791E2175091A89F980C456E4B2F80B343BF804C3D8CB637"
+        },
+        {
+          "entry": "run/144dpi/384x768/0005-flex-wrap/reference.json",
+          "sha256": "D4C0485257CBF79A9664B7D5ABA0AF144500FFC34FE1E9EA592E385409804607"
+        },
+        {
+          "entry": "run/144dpi/384x768/0005-flex-wrap/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0005-flex-wrap/reference-dom-snapshot.json",
+          "sha256": "AB6F7300DD2CAA21E6312CCBD68F993FA12E8CEF05137F421EA1BDCE8C2502BB"
+        },
+        {
+          "entry": "run/144dpi/384x768/0005-flex-wrap/reference-fonts.json",
+          "sha256": "3598AE6A56C572CBB0139A3F9BA4351E0ECD734A567E92437779796D0B9C7237"
+        }
+      ],
+      "caseId": "0005-flex-wrap"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0006-nested-flex-grid/reference.png",
+          "sha256": "71073E68152412EE6AAC5BA80AD3D5DB3810999F732766CEED3381B326E7E0DB"
+        },
+        {
+          "entry": "run/144dpi/384x768/0006-nested-flex-grid/reference.json",
+          "sha256": "F93106BA5BBEF50FBF2CA7C112DE86303510D2F00DA32F108E95FCD28E8F47FA"
+        },
+        {
+          "entry": "run/144dpi/384x768/0006-nested-flex-grid/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0006-nested-flex-grid/reference-dom-snapshot.json",
+          "sha256": "24579D4D99375129EA478B6E6085DAA107EFA751B83FCA51A8322F54F9FC8576"
+        },
+        {
+          "entry": "run/144dpi/384x768/0006-nested-flex-grid/reference-fonts.json",
+          "sha256": "613181CA8D7EC6A1719A5B5121028F712D5A5C0F9ACC7AE4F6FC9C4FC02AD99E"
+        }
+      ],
+      "caseId": "0006-nested-flex-grid"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0007-grid-tracks/reference.png",
+          "sha256": "756F4D88718E6F044CDB257B04F36CB23E07167716F624893A02F1EB311CBC36"
+        },
+        {
+          "entry": "run/144dpi/384x768/0007-grid-tracks/reference.json",
+          "sha256": "A54EBF263F6628C49DC0012C7CB369AF1DF70C4D537C737D4066C75A31C9C971"
+        },
+        {
+          "entry": "run/144dpi/384x768/0007-grid-tracks/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0007-grid-tracks/reference-dom-snapshot.json",
+          "sha256": "426EED3C32860869898A97EEE10EFC011B0271C80C3FF0281D8967C4DD9641E6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0007-grid-tracks/reference-fonts.json",
+          "sha256": "A2F3E0C4F9FEEB61E9EE29B374232F7A989A56C17DF79D3BFA0A6FFB0697B77E"
+        }
+      ],
+      "caseId": "0007-grid-tracks"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0008-grid-spanning/reference.png",
+          "sha256": "13AB0BA2F7809728C4B81CF6B923458CD189F10C4AF7E2441952E7AC7610CEDB"
+        },
+        {
+          "entry": "run/144dpi/384x768/0008-grid-spanning/reference.json",
+          "sha256": "63B05A03F9A63390D2B63C9774B88E66695A40D9D71991357665D0DECA4C495F"
+        },
+        {
+          "entry": "run/144dpi/384x768/0008-grid-spanning/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0008-grid-spanning/reference-dom-snapshot.json",
+          "sha256": "5012285D9C6399FBA7D5C643BE52CC34DF7A2F6C360AFAE403911F66F8646119"
+        },
+        {
+          "entry": "run/144dpi/384x768/0008-grid-spanning/reference-fonts.json",
+          "sha256": "B0CE1C7D7F9B25EF8CFC166C15DB235C7EFFC043F9AD572E1EDF5B6EF863642B"
+        }
+      ],
+      "caseId": "0008-grid-spanning"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0009-table-spans/reference.png",
+          "sha256": "970E96903778417517A87FBF82C198739FA9E1B517ABD8B659C409DBEA1A7B28"
+        },
+        {
+          "entry": "run/144dpi/384x768/0009-table-spans/reference.json",
+          "sha256": "08FA906F7043BD04706703144D501C37C19C212B6D071C536484C74381C59352"
+        },
+        {
+          "entry": "run/144dpi/384x768/0009-table-spans/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0009-table-spans/reference-dom-snapshot.json",
+          "sha256": "EECFD6E0AEFEA6929CFDAAF9B8D6320DE0A92E969CAA758611AB539DE2C51863"
+        },
+        {
+          "entry": "run/144dpi/384x768/0009-table-spans/reference-fonts.json",
+          "sha256": "2C6E28765C86C5872D181D8500953F1C8D08E104EA4CDECAF23E1722302D446B"
+        }
+      ],
+      "caseId": "0009-table-spans"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0010-position-stacking/reference.png",
+          "sha256": "F1F77FD34AD120A54F3107F3CC9D2E0DA49822440EAA5C1937DAD07EAFB75C3D"
+        },
+        {
+          "entry": "run/144dpi/384x768/0010-position-stacking/reference.json",
+          "sha256": "1B4C1CA8304331CCC9686C6701E2A2C54A3C9BF488219959C222E1A381721025"
+        },
+        {
+          "entry": "run/144dpi/384x768/0010-position-stacking/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0010-position-stacking/reference-dom-snapshot.json",
+          "sha256": "5406224EEA73B6D56F0C6B64511AFE70841D456D09DA10FFE1C682E587146C2C"
+        },
+        {
+          "entry": "run/144dpi/384x768/0010-position-stacking/reference-fonts.json",
+          "sha256": "5296B168DE7D32A5F7F1799AAD42827A9CC5EB82A3BA629B02F05B1650E07738"
+        }
+      ],
+      "caseId": "0010-position-stacking"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0011-nested-overflow/reference.png",
+          "sha256": "AE1362A1FAEAF6C17EC6B7333B441BF1807263B9DBBBC81525A84521A26731EF"
+        },
+        {
+          "entry": "run/144dpi/384x768/0011-nested-overflow/reference.json",
+          "sha256": "ED278BC83F2150A2E4B75CDFC38C8B0C1DF8EF25F8345638B0A2A025CB9C75FE"
+        },
+        {
+          "entry": "run/144dpi/384x768/0011-nested-overflow/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0011-nested-overflow/reference-dom-snapshot.json",
+          "sha256": "34BD34F33742191952C169B032A6F0FB04D2696CADFF9315994EED6BE1BD7D29"
+        },
+        {
+          "entry": "run/144dpi/384x768/0011-nested-overflow/reference-fonts.json",
+          "sha256": "527A46FC7E3B7AB39FEA29477891EE707D426D3E4C5C5D0414B38D727FC423E9"
+        }
+      ],
+      "caseId": "0011-nested-overflow"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0012-radius-gradient/reference.png",
+          "sha256": "ED60E5330CDF541635000E532F5F2B64759FB62A2CC7B15EE22BA68F745FBE6D"
+        },
+        {
+          "entry": "run/144dpi/384x768/0012-radius-gradient/reference.json",
+          "sha256": "037186BEC88C9B67846A419275ACE633C8813627EF7180AC63ED0DC149DC40AA"
+        },
+        {
+          "entry": "run/144dpi/384x768/0012-radius-gradient/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0012-radius-gradient/reference-dom-snapshot.json",
+          "sha256": "589E49B70D25C02257AAFC0494ABCB7EB47AF90768257C3A330C64AEA2A3659F"
+        },
+        {
+          "entry": "run/144dpi/384x768/0012-radius-gradient/reference-fonts.json",
+          "sha256": "6BEBE6D49825E1AE8F1B5EAD57AF774991635B8E7146DB72682A89164DAFC992"
+        }
+      ],
+      "caseId": "0012-radius-gradient"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0013-svg-paint/reference.png",
+          "sha256": "5666655606CDB20E8E85237A2D433B2C8C008DD3686A7F94F251B8EFD9E417F5"
+        },
+        {
+          "entry": "run/144dpi/384x768/0013-svg-paint/reference.json",
+          "sha256": "3EDE9932749BE91230D4E6D7B22EF08DCA65FD0CF41C72EA6587F1ABDB1BA9F4"
+        },
+        {
+          "entry": "run/144dpi/384x768/0013-svg-paint/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0013-svg-paint/reference-dom-snapshot.json",
+          "sha256": "8D6923B7E560B89A26FC9F2CDFFC5079BD87101C1F7C02440EDF558E8B330C19"
+        },
+        {
+          "entry": "run/144dpi/384x768/0013-svg-paint/reference-fonts.json",
+          "sha256": "01BD8FFFEB848B41D010B95DA9701F6806B84F5D6CD26CA0A2DBE9CBD8AA9F56"
+        }
+      ],
+      "caseId": "0013-svg-paint"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0014-generated-boxes/reference.png",
+          "sha256": "FBA18C0E6D5CBFAE61381F7166E19C30BF0BEFC478A3A5D6B905401BA8B4DE21"
+        },
+        {
+          "entry": "run/144dpi/384x768/0014-generated-boxes/reference.json",
+          "sha256": "5D2AF508D83428564687C75969D9DB4679EDE3E108117F99AB0E403354D63FEB"
+        },
+        {
+          "entry": "run/144dpi/384x768/0014-generated-boxes/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0014-generated-boxes/reference-dom-snapshot.json",
+          "sha256": "AA9C09A8F03D2E41CD288F1BE9C6E3640E4346E428B157D83334F17BA317F4BB"
+        },
+        {
+          "entry": "run/144dpi/384x768/0014-generated-boxes/reference-fonts.json",
+          "sha256": "567D5E9CB7EFC63EF2D6916FD4F8DE45B960329B1495C23C156AE78DB4412540"
+        }
+      ],
+      "caseId": "0014-generated-boxes"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0015-variables-layers-nesting/reference.png",
+          "sha256": "ADF0163BA92DEE5CCA5F2A03DE7ED9E0741F9D38CF364D91F808F5CDE320A7BA"
+        },
+        {
+          "entry": "run/144dpi/384x768/0015-variables-layers-nesting/reference.json",
+          "sha256": "7B80C4B83BF1D27DB57C13355E75CBBA1B438643FDE0584E91148DDC4675649C"
+        },
+        {
+          "entry": "run/144dpi/384x768/0015-variables-layers-nesting/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0015-variables-layers-nesting/reference-dom-snapshot.json",
+          "sha256": "E903EBA04C7CD08E43655D88D43FBF2BF2E80FFF8EAA5D21D3EE22EF699AC337"
+        },
+        {
+          "entry": "run/144dpi/384x768/0015-variables-layers-nesting/reference-fonts.json",
+          "sha256": "1B06F64CB8E45070C303C87F3C1C6277CF4B6A2FC773A66014592D7246364D10"
+        }
+      ],
+      "caseId": "0015-variables-layers-nesting"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0016-responsive-grid/reference.png",
+          "sha256": "B37E2101BF1EF01B465CD1F4CB580C0000007159EF4B8DF2C421E3680D55B42D"
+        },
+        {
+          "entry": "run/144dpi/384x768/0016-responsive-grid/reference.json",
+          "sha256": "4C090A06F00FF1060A8AAE3437A392B0687F30064CBB238F3C321A6622C5880D"
+        },
+        {
+          "entry": "run/144dpi/384x768/0016-responsive-grid/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0016-responsive-grid/reference-dom-snapshot.json",
+          "sha256": "06184B5F15CF0F8DFF2353DB19037FEAF2AC0BDF7EE5B3963755EFA5C34112C0"
+        },
+        {
+          "entry": "run/144dpi/384x768/0016-responsive-grid/reference-fonts.json",
+          "sha256": "E971BAA63D753BDFD8803D7B3AE6F74987F034F6465F4CE86FC7C113BA33EF61"
+        }
+      ],
+      "caseId": "0016-responsive-grid"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0017-latin-inline/reference.png",
+          "sha256": "87271E94ED51A599E602E483D2E83B3537538239456EA941F3369E22B15D7052"
+        },
+        {
+          "entry": "run/144dpi/384x768/0017-latin-inline/reference.json",
+          "sha256": "DE96FBEB1B5CBF9900D961B52D8F0C4D0351A2E799F3F36FB454BB1E9F6BD5BF"
+        },
+        {
+          "entry": "run/144dpi/384x768/0017-latin-inline/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0017-latin-inline/reference-dom-snapshot.json",
+          "sha256": "555E16D000937D6B24715D88147ED5EF1A7D27269EB07BD00379A2A955D05560"
+        },
+        {
+          "entry": "run/144dpi/384x768/0017-latin-inline/reference-fonts.json",
+          "sha256": "D18D88102E81A427352A34B9918F1506210F65CB7CA90BFCD7BBAF8992BD20A6"
+        }
+      ],
+      "caseId": "0017-latin-inline"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0018-mixed-writing/reference.png",
+          "sha256": "0C952DCCD6F6287ABB73A3E892FB472702C76FFF6416B0C2BB299E12B1DCC890"
+        },
+        {
+          "entry": "run/144dpi/384x768/0018-mixed-writing/reference.json",
+          "sha256": "31BEAC2292A751222587B058F1B0CD018677A12FDAA7C28A9803782E7FB70EAB"
+        },
+        {
+          "entry": "run/144dpi/384x768/0018-mixed-writing/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0018-mixed-writing/reference-dom-snapshot.json",
+          "sha256": "AA5712D03A384AD0708F251BF899A078942CEEBDAEC96B82AF63E90FDC26C410"
+        },
+        {
+          "entry": "run/144dpi/384x768/0018-mixed-writing/reference-fonts.json",
+          "sha256": "88A794C2B13FC24830F65529C7C884AE64112C4FDA41D12B2E455E5E1612213E"
+        }
+      ],
+      "caseId": "0018-mixed-writing"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0019-form-initial-state/reference.png",
+          "sha256": "6FCDD522F5AFD5331D0287604984EDA9524C7E4616E566F392C62EE8CF5CC73B"
+        },
+        {
+          "entry": "run/144dpi/384x768/0019-form-initial-state/reference.json",
+          "sha256": "74809C0F8B0BEA551B258C34AD3B7B7F3C76B3260B7BDAF4691874C2E39A6F3E"
+        },
+        {
+          "entry": "run/144dpi/384x768/0019-form-initial-state/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0019-form-initial-state/reference-dom-snapshot.json",
+          "sha256": "232261322534D18A544EE30D6D4766F540851975B74C6CD72565F15995367FBF"
+        },
+        {
+          "entry": "run/144dpi/384x768/0019-form-initial-state/reference-fonts.json",
+          "sha256": "E8AC62983867CBF328CCB8375C4C610293EDDDDC1193749CFEA9B24D0366A3D5"
+        }
+      ],
+      "caseId": "0019-form-initial-state"
+    },
+    {
+      "viewport": "384x768",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/384x768/0020-complex-dashboard/reference.png",
+          "sha256": "63A7355F1978D874AE140A8D5018ACA3DFA1CD0C508722FB6A790666E52DDF26"
+        },
+        {
+          "entry": "run/144dpi/384x768/0020-complex-dashboard/reference.json",
+          "sha256": "69A5B7E8185CD627FB276CC629B280B9715B35D0E4283E59977B68BDB74F78E5"
+        },
+        {
+          "entry": "run/144dpi/384x768/0020-complex-dashboard/reference-metrics.json",
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6"
+        },
+        {
+          "entry": "run/144dpi/384x768/0020-complex-dashboard/reference-dom-snapshot.json",
+          "sha256": "202D44017EF986AD78548CE2B9DFDFD7834CCE383A01B16CC71D4C68AAFD93AA"
+        },
+        {
+          "entry": "run/144dpi/384x768/0020-complex-dashboard/reference-fonts.json",
+          "sha256": "98C4939D56C53009C36997DD6BF2E8616E1F842BEF976D94C7647198D5C2F419"
+        }
+      ],
+      "caseId": "0020-complex-dashboard"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0001-solid-box/reference.png",
+          "sha256": "3A56628FDB45B2BA36A54EB5B60BCF3719A4F3F4186A2ED6C1A4B0D6DE12D7B3"
+        },
+        {
+          "entry": "run/144dpi/800x600/0001-solid-box/reference.json",
+          "sha256": "29EA7DE3414B7A498DFEAAA777C170AC98D8B61AA3DCF0A2B4ADD63F86150203"
+        },
+        {
+          "entry": "run/144dpi/800x600/0001-solid-box/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0001-solid-box/reference-dom-snapshot.json",
+          "sha256": "94D60E43C352F9B31423A51A3790062E7003D32F324E34F9C92C512684223E24"
+        },
+        {
+          "entry": "run/144dpi/800x600/0001-solid-box/reference-fonts.json",
+          "sha256": "877A1C525CA3219EE61E0AB42F139B5862C2E2986DBCE9AD6365CA1487E04C08"
+        }
+      ],
+      "caseId": "0001-solid-box"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0002-fractional-box/reference.png",
+          "sha256": "336599A2174FE53369D59A7B0FCA4DA2F07027E98075EA0079C71400E68A0A4C"
+        },
+        {
+          "entry": "run/144dpi/800x600/0002-fractional-box/reference.json",
+          "sha256": "574B5489DA2688721C117EC7DBE052A68A392F65F9C52F8C35EAB60A4E6F2F32"
+        },
+        {
+          "entry": "run/144dpi/800x600/0002-fractional-box/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0002-fractional-box/reference-dom-snapshot.json",
+          "sha256": "65C5CBFC29C2A9034B323F7F5334884F71C3EA2499C98DF4C521C8406303AC49"
+        },
+        {
+          "entry": "run/144dpi/800x600/0002-fractional-box/reference-fonts.json",
+          "sha256": "0342C84A131F9E52E0AD2B2F36E1C73267C924B18401998EBFB2EF1C1086FE0F"
+        }
+      ],
+      "caseId": "0002-fractional-box"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0003-margin-collapse/reference.png",
+          "sha256": "4EEA8B867DEDA7BD5436B2650B00D9320084CC4DF9B92BD61CEE222D482C9F1A"
+        },
+        {
+          "entry": "run/144dpi/800x600/0003-margin-collapse/reference.json",
+          "sha256": "38A1E7797AB0AE31BC5AE7A44D8746C0BB43168C485F3E9BD2FED9B05F088E42"
+        },
+        {
+          "entry": "run/144dpi/800x600/0003-margin-collapse/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0003-margin-collapse/reference-dom-snapshot.json",
+          "sha256": "52FCDEF3F7CDACB192CE081231222603EC86E0D77460656D06F890C1D4B50CEA"
+        },
+        {
+          "entry": "run/144dpi/800x600/0003-margin-collapse/reference-fonts.json",
+          "sha256": "2459FA60C3A85407D8B8E52051BEA187FDCB4FCBD135E58308B1C0710CA1CD14"
+        }
+      ],
+      "caseId": "0003-margin-collapse"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0004-flex-distribution/reference.png",
+          "sha256": "14BE92707873272221B859727C3814FC4A53B163FE6501E8D24513B40625222D"
+        },
+        {
+          "entry": "run/144dpi/800x600/0004-flex-distribution/reference.json",
+          "sha256": "2CE7028C0B145F8C634FF1274913DF4AA4F93A81B1EF5483CBBBAB38DF0DF485"
+        },
+        {
+          "entry": "run/144dpi/800x600/0004-flex-distribution/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0004-flex-distribution/reference-dom-snapshot.json",
+          "sha256": "B94855A76C76CA34977B3FD3739D022AC34D183693F42FA4DEC695F07C13F45B"
+        },
+        {
+          "entry": "run/144dpi/800x600/0004-flex-distribution/reference-fonts.json",
+          "sha256": "38DCB12DF6C6A3EF189B911FE3CBFE7A438CE05D12FF4A33C480AC1C9E5D03A0"
+        }
+      ],
+      "caseId": "0004-flex-distribution"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0005-flex-wrap/reference.png",
+          "sha256": "128525D5B39B332942B9B290BFCDA4AFD1638DB93BA5FE5ED8A983AC567DA48F"
+        },
+        {
+          "entry": "run/144dpi/800x600/0005-flex-wrap/reference.json",
+          "sha256": "14BAE6A4E783449C03E9A5EF34288FDCB394AADDFD44F22733111149372BF2EE"
+        },
+        {
+          "entry": "run/144dpi/800x600/0005-flex-wrap/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0005-flex-wrap/reference-dom-snapshot.json",
+          "sha256": "2582E33FFB18CE2ABD266750E29072300343A2C5DEEDDF9999E6CA38721EDF46"
+        },
+        {
+          "entry": "run/144dpi/800x600/0005-flex-wrap/reference-fonts.json",
+          "sha256": "3598AE6A56C572CBB0139A3F9BA4351E0ECD734A567E92437779796D0B9C7237"
+        }
+      ],
+      "caseId": "0005-flex-wrap"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0006-nested-flex-grid/reference.png",
+          "sha256": "53542CEFB76C4B91DA0CCF3B413FC2D6C1FD725D7DF236547C2DAC0722340198"
+        },
+        {
+          "entry": "run/144dpi/800x600/0006-nested-flex-grid/reference.json",
+          "sha256": "E9704D3DDE596873250F5F9EB78D4FFDA496F68DC8CEAC198F4EA3C6EC9388E7"
+        },
+        {
+          "entry": "run/144dpi/800x600/0006-nested-flex-grid/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0006-nested-flex-grid/reference-dom-snapshot.json",
+          "sha256": "89D12C6A967755BA2051BC93D306F04A52F7E0E26C2F005F19354BA0F2D90FF2"
+        },
+        {
+          "entry": "run/144dpi/800x600/0006-nested-flex-grid/reference-fonts.json",
+          "sha256": "613181CA8D7EC6A1719A5B5121028F712D5A5C0F9ACC7AE4F6FC9C4FC02AD99E"
+        }
+      ],
+      "caseId": "0006-nested-flex-grid"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0007-grid-tracks/reference.png",
+          "sha256": "AC818EF314C6F7B30564357E96D2C41072F33A8999EB28CDC01EA84F0562EAD7"
+        },
+        {
+          "entry": "run/144dpi/800x600/0007-grid-tracks/reference.json",
+          "sha256": "70D9F45601EC1186162459CC0D83B5B183A03325C41FFEA256433FCCE5612F6D"
+        },
+        {
+          "entry": "run/144dpi/800x600/0007-grid-tracks/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0007-grid-tracks/reference-dom-snapshot.json",
+          "sha256": "A3967E32165E92C68B5ACA93141C927A15A6E2F8014DF782519855EE77D42239"
+        },
+        {
+          "entry": "run/144dpi/800x600/0007-grid-tracks/reference-fonts.json",
+          "sha256": "A2F3E0C4F9FEEB61E9EE29B374232F7A989A56C17DF79D3BFA0A6FFB0697B77E"
+        }
+      ],
+      "caseId": "0007-grid-tracks"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0008-grid-spanning/reference.png",
+          "sha256": "58E647AE1646E54A14D5D7433757FE24AC8BCE8AD9BE0385F9B83BD97B9704C4"
+        },
+        {
+          "entry": "run/144dpi/800x600/0008-grid-spanning/reference.json",
+          "sha256": "0C40A48A589ECB5AEEC07F46FB534C5B3A800787F23EA26829800A927F7DC222"
+        },
+        {
+          "entry": "run/144dpi/800x600/0008-grid-spanning/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0008-grid-spanning/reference-dom-snapshot.json",
+          "sha256": "0FCBBBDC22FDCFC6F3C9F0A031614ACC845D572A425BFCCB16BC79D17E909216"
+        },
+        {
+          "entry": "run/144dpi/800x600/0008-grid-spanning/reference-fonts.json",
+          "sha256": "B0CE1C7D7F9B25EF8CFC166C15DB235C7EFFC043F9AD572E1EDF5B6EF863642B"
+        }
+      ],
+      "caseId": "0008-grid-spanning"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0009-table-spans/reference.png",
+          "sha256": "7C4593F8FB76E4C97F92579A428AFBE8F157636CA00E902940D8A0355BDB1E41"
+        },
+        {
+          "entry": "run/144dpi/800x600/0009-table-spans/reference.json",
+          "sha256": "A57388B577ED2454B159499B81F5AF4BD386617A912C00DD3AE11848A50090E7"
+        },
+        {
+          "entry": "run/144dpi/800x600/0009-table-spans/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0009-table-spans/reference-dom-snapshot.json",
+          "sha256": "A60485130A12323B672123130F7815147F82ACDE51C168D9FA98B4D2844E216D"
+        },
+        {
+          "entry": "run/144dpi/800x600/0009-table-spans/reference-fonts.json",
+          "sha256": "2C6E28765C86C5872D181D8500953F1C8D08E104EA4CDECAF23E1722302D446B"
+        }
+      ],
+      "caseId": "0009-table-spans"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0010-position-stacking/reference.png",
+          "sha256": "C9D26A109658EA5845CB5811F540ED96C686AD48B876020158B8CCCB6EA86F20"
+        },
+        {
+          "entry": "run/144dpi/800x600/0010-position-stacking/reference.json",
+          "sha256": "2C2F2EA8B8C2E8DF1CE62DB8D0ED2363BBCECB49000344F310D38E515C67E48B"
+        },
+        {
+          "entry": "run/144dpi/800x600/0010-position-stacking/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0010-position-stacking/reference-dom-snapshot.json",
+          "sha256": "5EC9992062AC01B47582568BC1763DB488FAC45A0D2FB9BF42B7367621415B80"
+        },
+        {
+          "entry": "run/144dpi/800x600/0010-position-stacking/reference-fonts.json",
+          "sha256": "5296B168DE7D32A5F7F1799AAD42827A9CC5EB82A3BA629B02F05B1650E07738"
+        }
+      ],
+      "caseId": "0010-position-stacking"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0011-nested-overflow/reference.png",
+          "sha256": "7C7FAE04A0A4419A23F5D6431C73AC8131998543CF6FE3D884E1DED835CFE72A"
+        },
+        {
+          "entry": "run/144dpi/800x600/0011-nested-overflow/reference.json",
+          "sha256": "886D89F70382B3386AA701196C3A6736ABB4073A341B8F283E49376763928B2D"
+        },
+        {
+          "entry": "run/144dpi/800x600/0011-nested-overflow/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0011-nested-overflow/reference-dom-snapshot.json",
+          "sha256": "6A21D11602AA145A208E83219B0A1ED263C7C17718FDADED5A58CA1D5016245B"
+        },
+        {
+          "entry": "run/144dpi/800x600/0011-nested-overflow/reference-fonts.json",
+          "sha256": "527A46FC7E3B7AB39FEA29477891EE707D426D3E4C5C5D0414B38D727FC423E9"
+        }
+      ],
+      "caseId": "0011-nested-overflow"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0012-radius-gradient/reference.png",
+          "sha256": "E81AD0ACA58425E304BDEF9E6A5FA5850011F16EBAB6EC45387C2E0617FBA127"
+        },
+        {
+          "entry": "run/144dpi/800x600/0012-radius-gradient/reference.json",
+          "sha256": "2C60DFDD483B2D34E4AA446B56154390901C57D013F88D7DABAC01398A94CAA2"
+        },
+        {
+          "entry": "run/144dpi/800x600/0012-radius-gradient/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0012-radius-gradient/reference-dom-snapshot.json",
+          "sha256": "87A89B4F967C349E05E509377C54031115CE19587CE21A61533086F20E05EE9A"
+        },
+        {
+          "entry": "run/144dpi/800x600/0012-radius-gradient/reference-fonts.json",
+          "sha256": "6BEBE6D49825E1AE8F1B5EAD57AF774991635B8E7146DB72682A89164DAFC992"
+        }
+      ],
+      "caseId": "0012-radius-gradient"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0013-svg-paint/reference.png",
+          "sha256": "A98AEEC51F359D4FE6B88F9E4C797FAACACE6BDD5A02B0470DD4CB366B69BB52"
+        },
+        {
+          "entry": "run/144dpi/800x600/0013-svg-paint/reference.json",
+          "sha256": "A6D183105782A37088DA1AB36A2621DE51F6BC8C51A440FE219BE4BECAA275C1"
+        },
+        {
+          "entry": "run/144dpi/800x600/0013-svg-paint/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0013-svg-paint/reference-dom-snapshot.json",
+          "sha256": "A5BB02C84B892F18F3A428764133C4DC4D2703175EC1FDA9FB4A2977653A6FB5"
+        },
+        {
+          "entry": "run/144dpi/800x600/0013-svg-paint/reference-fonts.json",
+          "sha256": "01BD8FFFEB848B41D010B95DA9701F6806B84F5D6CD26CA0A2DBE9CBD8AA9F56"
+        }
+      ],
+      "caseId": "0013-svg-paint"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0014-generated-boxes/reference.png",
+          "sha256": "EB7744BE43A53267EE0A1099E6DB9A3D5B14CFE28FD0663049B78C0E946B7BBD"
+        },
+        {
+          "entry": "run/144dpi/800x600/0014-generated-boxes/reference.json",
+          "sha256": "B23329A9A689152ACBCC5A8138E483FDA759E711AB0635BC7B29182C3F838793"
+        },
+        {
+          "entry": "run/144dpi/800x600/0014-generated-boxes/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0014-generated-boxes/reference-dom-snapshot.json",
+          "sha256": "C851EEDEF4CC8D20AE722F734D25491F634482E18D49F61CB32EA32D937F6E93"
+        },
+        {
+          "entry": "run/144dpi/800x600/0014-generated-boxes/reference-fonts.json",
+          "sha256": "567D5E9CB7EFC63EF2D6916FD4F8DE45B960329B1495C23C156AE78DB4412540"
+        }
+      ],
+      "caseId": "0014-generated-boxes"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0015-variables-layers-nesting/reference.png",
+          "sha256": "0BB3C21DDDD607F5B110FF22E09DBCAC216E1464852C2966923C89CC6570CBC0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0015-variables-layers-nesting/reference.json",
+          "sha256": "F53219EA18DD3518542E9D1DE89FF0B561F7D1BA3B357CA0D2003A2FF87088E0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0015-variables-layers-nesting/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0015-variables-layers-nesting/reference-dom-snapshot.json",
+          "sha256": "838CB19BB38432BB9CA0923A62557FC3A7F3F439AC97AC7FB86C9469AE84653D"
+        },
+        {
+          "entry": "run/144dpi/800x600/0015-variables-layers-nesting/reference-fonts.json",
+          "sha256": "1B06F64CB8E45070C303C87F3C1C6277CF4B6A2FC773A66014592D7246364D10"
+        }
+      ],
+      "caseId": "0015-variables-layers-nesting"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0016-responsive-grid/reference.png",
+          "sha256": "3466B20DA91E61F37CF7FF909C534A43A8F26AC936E98544EA6529A3E580E79B"
+        },
+        {
+          "entry": "run/144dpi/800x600/0016-responsive-grid/reference.json",
+          "sha256": "34C66DCFC415DFE7C4F26D338FA8BC0F794F1F17A263E5A96EA50A7D4AEC4671"
+        },
+        {
+          "entry": "run/144dpi/800x600/0016-responsive-grid/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0016-responsive-grid/reference-dom-snapshot.json",
+          "sha256": "63524D92D6717620ACA8EA5128D61BA7544983D14993A04493239576682EA8E5"
+        },
+        {
+          "entry": "run/144dpi/800x600/0016-responsive-grid/reference-fonts.json",
+          "sha256": "E971BAA63D753BDFD8803D7B3AE6F74987F034F6465F4CE86FC7C113BA33EF61"
+        }
+      ],
+      "caseId": "0016-responsive-grid"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0017-latin-inline/reference.png",
+          "sha256": "0714584E971735C897B019D03916FD14E42627991A757897F080820A234530D6"
+        },
+        {
+          "entry": "run/144dpi/800x600/0017-latin-inline/reference.json",
+          "sha256": "7883ED3201D3703045DBE73DB3799ABF892AFEAA7819C06808469982719D23D2"
+        },
+        {
+          "entry": "run/144dpi/800x600/0017-latin-inline/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0017-latin-inline/reference-dom-snapshot.json",
+          "sha256": "F79E25C8DFE5E244B3F0F73BB74013B0E64C4FCFF6116A0D2B210E28AF094AE0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0017-latin-inline/reference-fonts.json",
+          "sha256": "D18D88102E81A427352A34B9918F1506210F65CB7CA90BFCD7BBAF8992BD20A6"
+        }
+      ],
+      "caseId": "0017-latin-inline"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0018-mixed-writing/reference.png",
+          "sha256": "75DFFC4F7CD95E77C7F39AAC25EF97FB08EC623E4BA228C81068F1184844EB24"
+        },
+        {
+          "entry": "run/144dpi/800x600/0018-mixed-writing/reference.json",
+          "sha256": "EAE5842C4DFCB307AF1E537D2671B383931EF4A1F4A7AA29857F103B9053B42D"
+        },
+        {
+          "entry": "run/144dpi/800x600/0018-mixed-writing/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0018-mixed-writing/reference-dom-snapshot.json",
+          "sha256": "E037990CCCAD051E2BABEE94923F87E1D7A4A422F91D6D29555D09191DA32730"
+        },
+        {
+          "entry": "run/144dpi/800x600/0018-mixed-writing/reference-fonts.json",
+          "sha256": "88A794C2B13FC24830F65529C7C884AE64112C4FDA41D12B2E455E5E1612213E"
+        }
+      ],
+      "caseId": "0018-mixed-writing"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0019-form-initial-state/reference.png",
+          "sha256": "BAE5A1E26E6203AE7621074967CCDA9D9AAA9D2865953C07D27CAAF4EB5D1B47"
+        },
+        {
+          "entry": "run/144dpi/800x600/0019-form-initial-state/reference.json",
+          "sha256": "8248D4282FCFB6E6ED10E6A431825BF1565AA2DA19483E55F2BC14038185DCD7"
+        },
+        {
+          "entry": "run/144dpi/800x600/0019-form-initial-state/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0019-form-initial-state/reference-dom-snapshot.json",
+          "sha256": "506623C9A6776CF58BC3A0AA0651D5775A9B859CB60DEE7AAE22FB88EECC781E"
+        },
+        {
+          "entry": "run/144dpi/800x600/0019-form-initial-state/reference-fonts.json",
+          "sha256": "E8AC62983867CBF328CCB8375C4C610293EDDDDC1193749CFEA9B24D0366A3D5"
+        }
+      ],
+      "caseId": "0019-form-initial-state"
+    },
+    {
+      "viewport": "800x600",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/800x600/0020-complex-dashboard/reference.png",
+          "sha256": "957E195AEB2062BA43EC70DA7E70BEB58B78CCC0278FBEF96BB552EE24745AC7"
+        },
+        {
+          "entry": "run/144dpi/800x600/0020-complex-dashboard/reference.json",
+          "sha256": "56374222E06575898D2EE90DC4A9EC39014B4DE74025F667641ABFE633F9472C"
+        },
+        {
+          "entry": "run/144dpi/800x600/0020-complex-dashboard/reference-metrics.json",
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0"
+        },
+        {
+          "entry": "run/144dpi/800x600/0020-complex-dashboard/reference-dom-snapshot.json",
+          "sha256": "30624D738CC1A68E9D80F96D9CD1E383EB543FC47CD8296FEC7001021976171E"
+        },
+        {
+          "entry": "run/144dpi/800x600/0020-complex-dashboard/reference-fonts.json",
+          "sha256": "98C4939D56C53009C36997DD6BF2E8616E1F842BEF976D94C7647198D5C2F419"
+        }
+      ],
+      "caseId": "0020-complex-dashboard"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0001-solid-box/reference.png",
+          "sha256": "93CCE97DDBE4F81CAC43DCA1D5CCB205451903692B30154EF948523C3E95EE5F"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0001-solid-box/reference.json",
+          "sha256": "DAFC50A4DCA6AECA5F24ECC5A6B706BB11FE0E2B40D35AEA80600E401DB03C70"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0001-solid-box/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0001-solid-box/reference-dom-snapshot.json",
+          "sha256": "E630AB5051A2C6E750F4C9D82C0CC6DC39D270228B72A33348439CDE179D7AB4"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0001-solid-box/reference-fonts.json",
+          "sha256": "877A1C525CA3219EE61E0AB42F139B5862C2E2986DBCE9AD6365CA1487E04C08"
+        }
+      ],
+      "caseId": "0001-solid-box"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0002-fractional-box/reference.png",
+          "sha256": "F08A9768B36192B1CDFEF054B43CFD89501DD54B5A470D3AA63267D182BACA71"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0002-fractional-box/reference.json",
+          "sha256": "BAA3920D966D85DC51719F8DD77DE1F5000816C47534BB8161B1B5011BDD6F35"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0002-fractional-box/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0002-fractional-box/reference-dom-snapshot.json",
+          "sha256": "8DBDDCE1F30F66C7DBF90D85EE18A72383BCBF9BB9D04A35DDC898F3160C7ED1"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0002-fractional-box/reference-fonts.json",
+          "sha256": "0342C84A131F9E52E0AD2B2F36E1C73267C924B18401998EBFB2EF1C1086FE0F"
+        }
+      ],
+      "caseId": "0002-fractional-box"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0003-margin-collapse/reference.png",
+          "sha256": "64B9D50E9373F03B05745808CBD94276F93FB8C48216D66671953AADACBCD7D4"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0003-margin-collapse/reference.json",
+          "sha256": "9B96C8B5B4C79CC77FA957A441786F071B6A5519DFB1F151EDD366F1A6023C7A"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0003-margin-collapse/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0003-margin-collapse/reference-dom-snapshot.json",
+          "sha256": "C7159A09F3960EEC9313A279AF745BCB9EC7418FC937BA84965A252599054A1C"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0003-margin-collapse/reference-fonts.json",
+          "sha256": "2459FA60C3A85407D8B8E52051BEA187FDCB4FCBD135E58308B1C0710CA1CD14"
+        }
+      ],
+      "caseId": "0003-margin-collapse"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0004-flex-distribution/reference.png",
+          "sha256": "F2BF2B74E76F536E5108DDA5C7963A761F4CE1656355A3069BAB3951B83F2EA8"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0004-flex-distribution/reference.json",
+          "sha256": "D3D3E4A3DAD3A60ED6CB034857222A115A1AC953787D9C90461409F30DE28799"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0004-flex-distribution/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0004-flex-distribution/reference-dom-snapshot.json",
+          "sha256": "BA0871C84B4A2345D7EAB6CB5A69B21E0DD9C48C34F93EF2F67E3C33EA8D9CBE"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0004-flex-distribution/reference-fonts.json",
+          "sha256": "38DCB12DF6C6A3EF189B911FE3CBFE7A438CE05D12FF4A33C480AC1C9E5D03A0"
+        }
+      ],
+      "caseId": "0004-flex-distribution"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0005-flex-wrap/reference.png",
+          "sha256": "872AA292ECC9A185023F47E7DB5B5970DE3E65EC4CDB654ABEAEC4A61872EEF3"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0005-flex-wrap/reference.json",
+          "sha256": "EA190586E2BC17015FF6FE9A447E1FFDA09759B695ACB0A4EE5D0BE6C75F5264"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0005-flex-wrap/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0005-flex-wrap/reference-dom-snapshot.json",
+          "sha256": "C7501C9967A846B01E4A9124724994CF117F663FDBAE04E47B09A711FFF41437"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0005-flex-wrap/reference-fonts.json",
+          "sha256": "3598AE6A56C572CBB0139A3F9BA4351E0ECD734A567E92437779796D0B9C7237"
+        }
+      ],
+      "caseId": "0005-flex-wrap"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0006-nested-flex-grid/reference.png",
+          "sha256": "6ECF978852512BDCB197F1259CE953B38D0CCACA0F1D3625BE56389541C13A13"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0006-nested-flex-grid/reference.json",
+          "sha256": "3BB0D075759239EBB81F549C9E85FEF6B671F96EFC9FE1499216732134EFF874"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0006-nested-flex-grid/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0006-nested-flex-grid/reference-dom-snapshot.json",
+          "sha256": "86E61C12678C77857349695A81116A088477951BC936C4E598DBECE73ACA60A3"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0006-nested-flex-grid/reference-fonts.json",
+          "sha256": "613181CA8D7EC6A1719A5B5121028F712D5A5C0F9ACC7AE4F6FC9C4FC02AD99E"
+        }
+      ],
+      "caseId": "0006-nested-flex-grid"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0007-grid-tracks/reference.png",
+          "sha256": "C491ADBB3354498FF05DCF6BE7BB1970F167D5DF4940BCE4E0329D5AA2F35081"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0007-grid-tracks/reference.json",
+          "sha256": "8CB05A26E8774B0A152BF26B6071450FB4A64F81955BB8FD9952DC525074D857"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0007-grid-tracks/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0007-grid-tracks/reference-dom-snapshot.json",
+          "sha256": "E15A908F4E6AA1976D41FF7F77CB3C534C01331B945C877181C388D3BEB575EE"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0007-grid-tracks/reference-fonts.json",
+          "sha256": "A2F3E0C4F9FEEB61E9EE29B374232F7A989A56C17DF79D3BFA0A6FFB0697B77E"
+        }
+      ],
+      "caseId": "0007-grid-tracks"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0008-grid-spanning/reference.png",
+          "sha256": "F2FEBC3B1D6D287F019092E99CBB0A7878B9E37E7F58DA38A3F50465D254E311"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0008-grid-spanning/reference.json",
+          "sha256": "060214F5D676E96425F64FD7FE40F75C8AC4ACBC9644C9B9FE122CBA4A63836F"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0008-grid-spanning/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0008-grid-spanning/reference-dom-snapshot.json",
+          "sha256": "8D5992CAB3FE08B6B45F44AF91645708F33FC6AAAE0A64B8D7D379FBD2857D2E"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0008-grid-spanning/reference-fonts.json",
+          "sha256": "B0CE1C7D7F9B25EF8CFC166C15DB235C7EFFC043F9AD572E1EDF5B6EF863642B"
+        }
+      ],
+      "caseId": "0008-grid-spanning"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0009-table-spans/reference.png",
+          "sha256": "6B6E2214B90E22EA59AF7D236189F292DBE47C1C1A43B495CC3C153A9C60F422"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0009-table-spans/reference.json",
+          "sha256": "6BBEDA104D1A04ACE127612715120A684A42A92416C5F4CAB635E0A65FBD5894"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0009-table-spans/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0009-table-spans/reference-dom-snapshot.json",
+          "sha256": "7747BD141E1897A50E9A3FD43ACDDD47209EE39CA4128CECC1D918C0AF55E2B6"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0009-table-spans/reference-fonts.json",
+          "sha256": "2C6E28765C86C5872D181D8500953F1C8D08E104EA4CDECAF23E1722302D446B"
+        }
+      ],
+      "caseId": "0009-table-spans"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0010-position-stacking/reference.png",
+          "sha256": "60E047577E5A6378EF4F29F29507CF9479F5024E95376E0BAECFE6A5F138778F"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0010-position-stacking/reference.json",
+          "sha256": "22244CC9994462D1235FFEC2A802DE1A51CF2A06BAFC91EFECBA9F050106B38F"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0010-position-stacking/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0010-position-stacking/reference-dom-snapshot.json",
+          "sha256": "FF3CA210F8B973FA5553BE9F26657AF9D722FEC0DF868977528D3531C987FB77"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0010-position-stacking/reference-fonts.json",
+          "sha256": "5296B168DE7D32A5F7F1799AAD42827A9CC5EB82A3BA629B02F05B1650E07738"
+        }
+      ],
+      "caseId": "0010-position-stacking"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0011-nested-overflow/reference.png",
+          "sha256": "B2B6701A088033677B15CABBDD34F7E60DB37BAD84AC5E220EEA2168FE8105EC"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0011-nested-overflow/reference.json",
+          "sha256": "699B8B17C9393EFFEF86C326B26452EDDCC1B42D73E34F45E7DD95A75289AB08"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0011-nested-overflow/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0011-nested-overflow/reference-dom-snapshot.json",
+          "sha256": "2744B281DBFE6CB4FCE52503110CB862244AF0D03DB18589FF3BB7479DF7CC69"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0011-nested-overflow/reference-fonts.json",
+          "sha256": "527A46FC7E3B7AB39FEA29477891EE707D426D3E4C5C5D0414B38D727FC423E9"
+        }
+      ],
+      "caseId": "0011-nested-overflow"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0012-radius-gradient/reference.png",
+          "sha256": "005A4BB9575B979814A1BEFACAA5AF94B47D4EDAE7E8FBB24AF041BEBCDF2DB2"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0012-radius-gradient/reference.json",
+          "sha256": "DDCEB48874E54F2E9F1D0C6830B5546CDBCEBC1BB263DB5679B6EF6D64393FB3"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0012-radius-gradient/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0012-radius-gradient/reference-dom-snapshot.json",
+          "sha256": "121CEA8CA401A8B3279A7818B9F8F644A6A0020C53348A4CD35D786FDE99D9D7"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0012-radius-gradient/reference-fonts.json",
+          "sha256": "6BEBE6D49825E1AE8F1B5EAD57AF774991635B8E7146DB72682A89164DAFC992"
+        }
+      ],
+      "caseId": "0012-radius-gradient"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0013-svg-paint/reference.png",
+          "sha256": "6980AAB6379AC7EF3E82D817F34DE7FF4B4107749E68637D812D167D0887455F"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0013-svg-paint/reference.json",
+          "sha256": "5375925A4A571B31C901BA48A3BA5C7C973470FDD7CE5CB7745445FB32509455"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0013-svg-paint/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0013-svg-paint/reference-dom-snapshot.json",
+          "sha256": "427AACEB822ED2B55BAF63C483D20A3B344BC5C53AF7B627FDA65BD97120A93C"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0013-svg-paint/reference-fonts.json",
+          "sha256": "01BD8FFFEB848B41D010B95DA9701F6806B84F5D6CD26CA0A2DBE9CBD8AA9F56"
+        }
+      ],
+      "caseId": "0013-svg-paint"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0014-generated-boxes/reference.png",
+          "sha256": "FCAD780462B9C2E731B3E56674064EF160A618C0EFCEC04FBBAE85F1BBC8AAAA"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0014-generated-boxes/reference.json",
+          "sha256": "570E02214DA7A8E28B9DD34EA9F7E27928C42E08C43E425A000553C849790DE1"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0014-generated-boxes/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0014-generated-boxes/reference-dom-snapshot.json",
+          "sha256": "F7510F74D593D76C712704262EA7C0A2EC60671450B3317F91E5B24696616203"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0014-generated-boxes/reference-fonts.json",
+          "sha256": "567D5E9CB7EFC63EF2D6916FD4F8DE45B960329B1495C23C156AE78DB4412540"
+        }
+      ],
+      "caseId": "0014-generated-boxes"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0015-variables-layers-nesting/reference.png",
+          "sha256": "850F8C6E0406396757648B1FAFA0EC25186C3961F51F394EB5E3378D95C003D8"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0015-variables-layers-nesting/reference.json",
+          "sha256": "540A041FE4FFEDE1E965340650B63F856C668EB9C534B347AF43E011279CBA5F"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0015-variables-layers-nesting/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0015-variables-layers-nesting/reference-dom-snapshot.json",
+          "sha256": "50AB26DD87A0A0ECD59536C49C5D0951D4E2562689164641E28F3C4C47723CEB"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0015-variables-layers-nesting/reference-fonts.json",
+          "sha256": "1B06F64CB8E45070C303C87F3C1C6277CF4B6A2FC773A66014592D7246364D10"
+        }
+      ],
+      "caseId": "0015-variables-layers-nesting"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0016-responsive-grid/reference.png",
+          "sha256": "43C562C3447753EE130AE6953DCE832D15DDF9197FA06FE1F2624C29A5E01E14"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0016-responsive-grid/reference.json",
+          "sha256": "41EE3847AEA41E5666199513C654953A5D311DEC15594CD9373B213EBC8336DC"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0016-responsive-grid/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0016-responsive-grid/reference-dom-snapshot.json",
+          "sha256": "5F8C17258F5D22BCBBDBC47E47C0728EECCCC55038DB0C3037624F3AB971878D"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0016-responsive-grid/reference-fonts.json",
+          "sha256": "E971BAA63D753BDFD8803D7B3AE6F74987F034F6465F4CE86FC7C113BA33EF61"
+        }
+      ],
+      "caseId": "0016-responsive-grid"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0017-latin-inline/reference.png",
+          "sha256": "F230F41306B593365D17AD5F9B9A142B3EC85678350A14970F7AB04D5D8A1596"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0017-latin-inline/reference.json",
+          "sha256": "BFBF13A25A883AB3D7F4DFAE60EF28BE7D7CE0448D1E68302931EFA867AE66A6"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0017-latin-inline/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0017-latin-inline/reference-dom-snapshot.json",
+          "sha256": "EAC9678960211476C0AC7D1772F20E304C977CFCC2383F7DB5BE93615F9EF28F"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0017-latin-inline/reference-fonts.json",
+          "sha256": "D18D88102E81A427352A34B9918F1506210F65CB7CA90BFCD7BBAF8992BD20A6"
+        }
+      ],
+      "caseId": "0017-latin-inline"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0018-mixed-writing/reference.png",
+          "sha256": "E0E2961CFABE3DEEDD0B676CBAE447A21F711EBD51F452E6FB62FF579854D982"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0018-mixed-writing/reference.json",
+          "sha256": "516ACFB417C8C922FEF47777444E428001397EE427783314648B5B0A6892804A"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0018-mixed-writing/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0018-mixed-writing/reference-dom-snapshot.json",
+          "sha256": "DD1512942BAF2D1D3C1B8C29452FACA40C77B62885D359E0A0EB86EF3DC31191"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0018-mixed-writing/reference-fonts.json",
+          "sha256": "88A794C2B13FC24830F65529C7C884AE64112C4FDA41D12B2E455E5E1612213E"
+        }
+      ],
+      "caseId": "0018-mixed-writing"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0019-form-initial-state/reference.png",
+          "sha256": "7DDC15653CD1A09CC34B5B280B59F5DCDA778C610A6B46414541BD6C26FC812B"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0019-form-initial-state/reference.json",
+          "sha256": "EE31BB31BBC2B1FB45E00EDC0A626DCA0760949670028C0C0A021C78559BB95A"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0019-form-initial-state/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0019-form-initial-state/reference-dom-snapshot.json",
+          "sha256": "87A47B72216ED8F09B3F7BC2358165D32B5500D41A75CDA3B649786E2378CDC6"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0019-form-initial-state/reference-fonts.json",
+          "sha256": "E8AC62983867CBF328CCB8375C4C610293EDDDDC1193749CFEA9B24D0366A3D5"
+        }
+      ],
+      "caseId": "0019-form-initial-state"
+    },
+    {
+      "viewport": "1280x800",
+      "dpi": 144,
+      "files": [
+        {
+          "entry": "run/144dpi/1280x800/0020-complex-dashboard/reference.png",
+          "sha256": "1706219D483B70ED4A185EDEB32212BE92DA001865ACDA0A000D7316697108E1"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0020-complex-dashboard/reference.json",
+          "sha256": "D8E035B2D4B0C3B78F4D7479DF0F7E4F52F389B99E546D560C6A241EA6FD0705"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0020-complex-dashboard/reference-metrics.json",
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0020-complex-dashboard/reference-dom-snapshot.json",
+          "sha256": "A294B43C05F50A068F3E88EEE534E1994DB09025C77B071264B562A20DA73C4B"
+        },
+        {
+          "entry": "run/144dpi/1280x800/0020-complex-dashboard/reference-fonts.json",
+          "sha256": "98C4939D56C53009C36997DD6BF2E8616E1F842BEF976D94C7647198D5C2F419"
+        }
+      ],
+      "caseId": "0020-complex-dashboard"
+    }
+  ],
+  "note": "Native failures are retained in the run archive; a baseline does not assert native conformance"
+}

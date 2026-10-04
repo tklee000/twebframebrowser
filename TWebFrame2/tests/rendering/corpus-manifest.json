@@ -1,0 +1,765 @@
+{
+  "schemaVersion": 1,
+  "generatorVersion": "1.0",
+  "seed": 20261003,
+  "count": 20,
+  "cases": [
+    {
+      "schemaVersion": 1,
+      "id": "0001-solid-box",
+      "stage": "pilot",
+      "family": "block",
+      "features": [
+        "box",
+        "solid-fill"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "0E8ECAD3C65899CF1B675376759698A1732CE38E49A758D9B128C8422841300A",
+      "cssSha256": "99A01C17E5528B6ECB7FA6E64C59101631A64E6A119CB1DD38AAE166DE5B68CF"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0002-fractional-box",
+      "stage": "pilot",
+      "family": "block",
+      "features": [
+        "fractional-sizing",
+        "border",
+        "padding"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "8F2BDEA92E16691819EB66246575E42AE929412F99522C9667621718E2186DFC",
+      "cssSha256": "3620603DBB6E9BA5918F81D910EC22EA3DF35F1E609D9BA69FB35E49650BD18F"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0003-margin-collapse",
+      "stage": "pilot",
+      "family": "block",
+      "features": [
+        "margin-collapse",
+        "nested-block",
+        "negative-margin"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "9033B0C3C1D97B03B5BA78C7EBEA39AD9DAD10FF24118262CF99E25F206C3021",
+      "cssSha256": "930DB5858522978387E4261CB0D4E414F944A51148265BD948CC395EF9E9DD61"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0004-flex-distribution",
+      "stage": "pilot",
+      "family": "flex",
+      "features": [
+        "flex",
+        "grow",
+        "gap",
+        "min-width"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "70EFADDC4761B28A4C64C95665BAE306F1E3FE48BAB46D9D5B90E75C3C1FE5E1",
+      "cssSha256": "D5D2D7DCBF7ACCD7F73C2262B9E07A20D3DD35CAF2F1CD1F0CBF5A092469584D"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0005-flex-wrap",
+      "stage": "pilot",
+      "family": "flex",
+      "features": [
+        "flex",
+        "wrap",
+        "align-content",
+        "border"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "C46182E9EFEF0DE58A62F1BDF895412662BAA9DA9780DF4EA4B09726A7044CAC",
+      "cssSha256": "57474B11CE6628656083F67F3711D6523B96E33A0477ED1F67B109D0014864C7"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0006-nested-flex-grid",
+      "stage": "pilot",
+      "family": "flex",
+      "features": [
+        "flex",
+        "grid",
+        "percentage",
+        "nested-sizing"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "C125086E556769EACFA685549498690BF61DD3E2434BD5CF48518D359767E8C8",
+      "cssSha256": "2BEDEF6FC4216BB5632FD8BE9E9CCEC07004D0430C8DB479EB847778D0D9B979"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0007-grid-tracks",
+      "stage": "pilot",
+      "family": "grid",
+      "features": [
+        "grid",
+        "fr",
+        "minmax",
+        "gap"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "5F73116D91F8FEA0906FED815B3334ECC674E2CB9131136E0D1AD7FE19188A38",
+      "cssSha256": "F3505B94928ABFCF1054FC0E79971FB2125BE33FC896013CF6FCDDFF340C6E19"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0008-grid-spanning",
+      "stage": "pilot",
+      "family": "grid",
+      "features": [
+        "grid",
+        "span",
+        "implicit-track",
+        "nested-block"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "534C4C2D7767D2B55E2E97F04F8C606ED5406385CE72084766979748BE41AA84",
+      "cssSha256": "E81B88AE5C6A14FD505106EB63E71AC77A1B18D1AEF82868B39D92BC95ED0532"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0009-table-spans",
+      "stage": "pilot",
+      "family": "table",
+      "features": [
+        "table",
+        "colspan",
+        "rowspan",
+        "border-collapse"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "FC261D7B2C970A1733FA349007C4EF00FDDB92EDDB280F6DD4D4E6D26FE5B161",
+      "cssSha256": "1EEF6EC29A546FC881C38858C821E803DB67E8CE6040665E7B999EFC22DBEFF6"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0010-position-stacking",
+      "stage": "pilot",
+      "family": "position",
+      "features": [
+        "absolute",
+        "z-index",
+        "containing-block",
+        "opacity"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "6E54F4528EEA8A44975DCD8C6ABFDE59386E85CB0A78C362141826BD1964B041",
+      "cssSha256": "E4E179CE165C742E692CF970BEA73CA28E12FAB4DE8F3D9DF188F5636FBF8BFD"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0011-nested-overflow",
+      "stage": "pilot",
+      "family": "position",
+      "features": [
+        "overflow-hidden",
+        "nested-clip",
+        "absolute"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "F5F32E9BD3F395B79CD7A003C981146DD22C4E9FD1423A440AFB26DE9662FFF6",
+      "cssSha256": "EB994FDED6CF258A467699E2D196062FE7FBF33D4331FD279BA66E4E6F9C01BF"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0012-radius-gradient",
+      "stage": "pilot",
+      "family": "paint",
+      "features": [
+        "border-radius",
+        "gradient",
+        "border",
+        "shadow"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "EA441914197CA152EA5D9FEAD97E14B0AE66D4F76C16639A430B2B4CEADEAE11",
+      "cssSha256": "3EC6521580940F28A18F97254657C76C91D1F90C180E16EEBA5EE1FE55A9A256"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0013-svg-paint",
+      "stage": "pilot",
+      "family": "paint",
+      "features": [
+        "svg",
+        "viewbox",
+        "stroke",
+        "transform"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "135C72F43A5BEE4BEA58252545ED5FA2A3B4239C4E6540371F9B05AD24DB6DA4",
+      "cssSha256": "5BDD9B7842398256D6A86EA5CB8B7607907D22EA2EA1B6A257A714D19F024B87"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0014-generated-boxes",
+      "stage": "pilot",
+      "family": "cascade",
+      "features": [
+        "pseudo-element",
+        "content",
+        "absolute",
+        "cascade"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "EB87603E3C287DD5BB41739335669F61BD526CE7255BA5BBCCD4EEFB71727514",
+      "cssSha256": "470820E57BB1CEC4DCED857A87474477640BAC643656A2F64D92C9CFF2B444DF"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0015-variables-layers-nesting",
+      "stage": "pilot",
+      "family": "cascade",
+      "features": [
+        "variables",
+        "layer",
+        "nesting",
+        "grid"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "A8D48AE8390D26DE7065C13AB8F7F80F4BF0679116B1FF28AF5D8B7104780780",
+      "cssSha256": "4C1C325DC77039CD2EA164B3FF77BB6EFF89C930C1317E6CE0C89010E31C9AD7"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0016-responsive-grid",
+      "stage": "pilot",
+      "family": "responsive",
+      "features": [
+        "media",
+        "grid",
+        "flex",
+        "viewport-width"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "CB782303002D4D49546604D326133EE4342257C363557BBC3B05346BA0DD47D8",
+      "cssSha256": "D84C4F98572CAD9EC2B52299E15DE0C09FDD648024DE6F75AF7D1CBF04AE5E0A"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0017-latin-inline",
+      "stage": "pilot",
+      "family": "text",
+      "features": [
+        "text",
+        "inline",
+        "line-height",
+        "wrap"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "D98DA94134BAA25BBB756A789177499AC955A6821D19941F6A491801313B0EB6",
+      "cssSha256": "EF6BAD3D267BEEE365BA742E62953E26BD19766592CF7DA7FFEDBFCE3968AA80"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0018-mixed-writing",
+      "stage": "pilot",
+      "family": "text",
+      "features": [
+        "text",
+        "korean",
+        "bidi",
+        "white-space"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "B228A3FFAEF0065CE31A47C1E19892EBDC6B77EE26B9BE2A934BCB98DE25AB28",
+      "cssSha256": "107CE26C46918AFBD18BCAF76FEB20D58BBC75EC5C4CDBB9C0D720E0B513D8B7"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0019-form-initial-state",
+      "stage": "pilot",
+      "family": "cascade",
+      "features": [
+        "form",
+        "ua-style",
+        "checked",
+        "disabled"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "0BDDD9F17CE1FAEB60DC8764E2499A44AF901FC71E08F4C2B288EE3837E64EE8",
+      "cssSha256": "E842E3FA6BEE1A602A6ED8A9411491536E793C886002D7C8C4F980AED0BF2913"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "0020-complex-dashboard",
+      "stage": "pilot",
+      "family": "integration",
+      "features": [
+        "flex",
+        "grid",
+        "table",
+        "text",
+        "absolute",
+        "clip"
+      ],
+      "seed": 20261003,
+      "generatorVersion": "1.0",
+      "scriptless": true,
+      "states": [
+        "initial"
+      ],
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "dpi": [
+        96,
+        144
+      ],
+      "htmlSha256": "9808C287628C15853AA3C853ED3E9E5F0083E9D66ABB0FA046FC49D108D23117",
+      "cssSha256": "40EE2B3E020984D17A404277757F8552176D72932F4EEC980361F8BCFE908F49"
+    }
+  ]
+}

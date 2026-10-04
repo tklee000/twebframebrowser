@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "0006-nested-flex-grid",
+  "stage": "pilot",
+  "family": "flex",
+  "features": [
+    "flex",
+    "grid",
+    "percentage",
+    "nested-sizing"
+  ],
+  "seed": 20261003,
+  "generatorVersion": "1.0",
+  "scriptless": true,
+  "states": [
+    "initial"
+  ],
+  "viewports": [
+    [
+      384,
+      768
+    ],
+    [
+      800,
+      600
+    ],
+    [
+      1280,
+      800
+    ]
+  ],
+  "dpi": [
+    96,
+    144
+  ],
+  "htmlSha256": "C125086E556769EACFA685549498690BF61DD3E2434BD5CF48518D359767E8C8",
+  "cssSha256": "2BEDEF6FC4216BB5632FD8BE9E9CCEC07004D0430C8DB479EB847778D0D9B979"
+}

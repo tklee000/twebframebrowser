@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "archiveId": "20261004-required-styles-v8-final",
+  "createdUtc": "2026-10-03T23:38:06.4246874Z",
+  "zipFile": "20261004-required-styles-v8-final.zip",
+  "zipSha256": "E8CA8C3350E993C6042001E3E9CAC85B07AB54739199C1699E5E0A7D5811D6C5",
+  "bytes": 54863479,
+  "entryCount": 5501,
+  "everyEntryRecoveryVerified": true,
+  "sourceSnapshotIncluded": true,
+  "rendererExecutableIncluded": true,
+  "excluded": "Disposable WebView2 profile cache only; originals remain in run directory",
+  "summary": {
+    "count": 120,
+    "failed": 0,
+    "passed": 120,
+    "fullContractComplete": false
+  }
+}

@@ -332,6 +332,58 @@ void CheckOverflowingAncestor(float scale) {
     }
     layout.DiscardDeviceResources();
 }
+
+void CheckPaddedScrollRanges(float scale) {
+    Document document;
+    StyleSheet styles;
+    Check(document.Parse(LR"HTML(<style>
+        *{box-sizing:border-box;margin:0}
+        .box{position:absolute;top:10px;width:240px;height:150px;padding:20px;
+            overflow:auto;font:14px/24px Arial;white-space:pre-wrap;border:0}
+        #plain{left:10px}#code{left:270px}#edit{left:530px}
+        .content{height:96px}
+        </style><div id='plain' class='box'><div class='content'>Fitting content</div></div>
+        <pre id='code' class='box'>one
+two
+three
+four</pre><textarea id='edit' class='box'></textarea>)HTML"),
+        L"padded code view fixture parses");
+    Check(styles.Parse(document.StyleText()), L"padded code view CSS parses");
+    const auto editor = document.QuerySelector(L"#edit");
+    editor->SetAttribute(L"value", L"one\ntwo\nthree\nfour");
+    LayoutEngine layout(document, styles);
+    layout.Layout(800, 400, scale);
+    for (const auto* selector : {L"#plain", L"#code", L"#edit"}) {
+        const auto node = document.QuerySelector(selector);
+        const auto* box = layout.BoxFor(node);
+        Check(box != nullptr, L"padded scroll box has layout");
+        if (!box) continue;
+        std::shared_ptr<Node> dragNode;
+        float dragOffset = 0;
+        bool horizontal = false;
+        Check(!layout.BeginScrollbarInteraction(box->rect.x + box->rect.width - 7, 75,
+            dragNode, dragOffset, horizontal), L"fitting padded content has no scrollbar hit target");
+        node->scrollTop = 1;
+        layout.SyncScroll(node);
+        Check(node->scrollTop == 0, L"fitting padded content has no hidden vertical scroll range");
+    }
+    document.QuerySelector(L".content")->SetAttribute(L"style", L"height:360px");
+    const std::wstring longText =
+        L"one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\nfifteen";
+    document.QuerySelector(L"#code")->SetInnerText(longText);
+    editor->SetAttribute(L"value", longText);
+    layout.Layout(800, 400, scale);
+    for (const auto* selector : {L"#plain", L"#code", L"#edit"}) {
+        const auto node = document.QuerySelector(selector);
+        node->scrollTop = 999;
+        layout.SyncScroll(node);
+        std::wcout << L"Padded scroll DPI " << scale << L" " << selector
+            << L" maximum " << node->scrollTop << L'\n';
+        Check(std::abs(node->scrollTop - 250.0f) < 0.01f,
+            L"long padded content keeps its complete vertical scroll range");
+    }
+    layout.DiscardDeviceResources();
+}
 }
 
 int wmain(int argc, wchar_t** argv) {
@@ -344,6 +396,7 @@ int wmain(int argc, wchar_t** argv) {
             for (bool positioned : {false, true}) Run(scale, positioned, benchmark ? 3000 : 80, benchmark);
             CheckNestedOverflow(scale);
             CheckOverflowingAncestor(scale);
+            CheckPaddedScrollRanges(scale);
         }
         CheckCompositedFrameText(scale);
     }

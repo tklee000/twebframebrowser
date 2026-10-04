@@ -14,4 +14,21 @@
   <ItemGroup><ClInclude Include="src\NativeLoop.inl"><Filter>Source</Filter></ClInclude></ItemGroup>
   <ItemGroup><ClInclude Include="src\NativeLoopCache.inl"><Filter>Source</Filter></ClInclude></ItemGroup>
   <ItemGroup><ClInclude Include="src\WorkerRuntime.inl"><Filter>Source</Filter></ClInclude></ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\CSSSyntax.h"><Filter>Source</Filter></ClInclude>
+    <ClInclude Include="src\RenderingDiagnostics.h"><Filter>Source</Filter></ClInclude>
+    <ClInclude Include="src\RenderingGlyphs.h"><Filter>Source</Filter></ClInclude>
+    <ClInclude Include="src\FontFeatures.h"><Filter>Source</Filter></ClInclude>
+    <ClInclude Include="src\RasterSurface.h"><Filter>Source</Filter></ClInclude>
+    <ClInclude Include="src\RasterPath.h"><Filter>Source</Filter></ClInclude>
+    <ClInclude Include="src\RasterSkia.h"><Filter>Source</Filter></ClInclude>
+    <ClInclude Include="src\RasterGradient.h"><Filter>Source</Filter></ClInclude>
+    <ClInclude Include="src\CSSSelectors.inl"><Filter>Source</Filter></ClInclude>
+    <ClInclude Include="src\CSSParser.inl"><Filter>Source</Filter></ClInclude>
+    <ClInclude Include="src\CSSConditions.inl"><Filter>Source</Filter></ClInclude>
+    <ClInclude Include="src\CSSVariables.inl"><Filter>Source</Filter></ClInclude>
+    <ClInclude Include="src\CSSMath.inl"><Filter>Source</Filter></ClInclude>
+    <ClInclude Include="src\CSSColorFunctions.inl"><Filter>Source</Filter></ClInclude>
+    <ClInclude Include="src\CSSNamedColors.inl"><Filter>Source</Filter></ClInclude>
+  </ItemGroup>
 </Project>

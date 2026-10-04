@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "0002-fractional-box",
+  "stage": "pilot",
+  "family": "block",
+  "features": [
+    "fractional-sizing",
+    "border",
+    "padding"
+  ],
+  "seed": 20261003,
+  "generatorVersion": "1.0",
+  "scriptless": true,
+  "states": [
+    "initial"
+  ],
+  "viewports": [
+    [
+      384,
+      768
+    ],
+    [
+      800,
+      600
+    ],
+    [
+      1280,
+      800
+    ]
+  ],
+  "dpi": [
+    96,
+    144
+  ],
+  "htmlSha256": "8F2BDEA92E16691819EB66246575E42AE929412F99522C9667621718E2186DFC",
+  "cssSha256": "3620603DBB6E9BA5918F81D910EC22EA3DF35F1E609D9BA69FB35E49650BD18F"
+}

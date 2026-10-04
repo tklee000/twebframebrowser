@@ -1,0 +1,6 @@
+# Rendering inputs and evidence catalogs contain hashes of original bytes.
+# Preserve them across Windows and Unix checkouts.
+/TWebFrame2/tests/rendering/** -text
+
+# Keep the pinned runtime and upstream license/notice bytes unchanged.
+/TWebFrame2/vendor/skia/** -text

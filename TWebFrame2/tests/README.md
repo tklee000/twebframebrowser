@@ -1,5 +1,11 @@
 # 회귀검사
 
+`CSSCompatibilityRegression`은 CSS 구문·선택자·중첩·레이어·변수·수학·색상의
+네이티브 계산값과 레이아웃을 100%·150% DPI에서 검사한다. `--webview2`를
+지정하면 설치된 WebView2에서 같은 HTML/CSS를 실행해 비교하고 버전과 결과를
+`artifacts/css-webview2-*`에 저장한다. 이 fixture 집합은 전체 CSS 지원율이
+아니다. [구현 범위와 남은 차이](../../docs/CSS-WEBVIEW2-COMPATIBILITY.md)를 참조한다.
+
 공통 엔진 기능을 검증하는 C++ 검사, JavaScript 회귀 fixture 및 지원 파일을 유지한다. 일회성 사이트 probe·trace·audit·벤치마크 실행기와 임시 브라우저 빌드, 캡처 이미지·프로필·진단 로그를 정리했다.
 
 저장소 루트에서 VS 2019 C++ 빌드 도구로 실행한다.
@@ -8,7 +14,7 @@
 & .\TWebFrame2\tests\Run-SupportCompatibility.ps1 -FullRegression
 ```
 
-이 명령은 SupportCompatibilityRegression, TWebFrameTests, ScrollRenderingRegression, RuntimeHeapRegression, BrowserContextRegression, StandaloneScriptRegression, ScriptHttpRegression, CanvasRegression, PointerEventRegression을 빌드하고 실행한다. TWebFrameTests 다음에는 `platform-integrity-regression.js`도 실행한다. 빌드와 실행 결과는 `tests/bin`, `tests/obj`, `tests/artifacts` 아래에 생성한다. 나머지 `*Regression.vcxproj`는 필요에 따라 개별 실행할 수 있다.
+이 명령은 SupportCompatibilityRegression, TWebFrameTests, CSSCompatibilityRegression, ScrollRenderingRegression, TableSpanRegression, FormControlRegression, RuntimeHeapRegression, BrowserContextRegression, StandaloneScriptRegression, ScriptHttpRegression, CanvasRegression, PointerEventRegression의 12개 실행기를 빌드하고 실행한다. TWebFrameTests 다음에는 `platform-integrity-regression.js`도 실행한다. 빌드와 실행 결과는 `tests/bin`, `tests/obj`, `tests/artifacts` 아래에 생성한다. 나머지 `*Regression.vcxproj`는 필요에 따라 개별 실행할 수 있다.
 
 SupportCompatibilityRegression은 문법·동작 28개, 기존 의미 비교 29개, API 동작 30개(WebAssembly 활성화 시 35개)를 100%·150% DPI와 두 JIT 설정에서 확인한다. 참조 fixture는 저장소에 포함되며 과거 진단 수집 데이터에 의존하지 않는다. 실제 GC cleanup, WebAssembly 플래그에 따른 전역 API 노출과 Worker 일관성, OPFS 재개·origin 격리 및 렌더링·hit test도 확인한다. Node.js가 있으면 실행 후 `node .\TWebFrame2\tests\Verify-SupportResults.cjs`로 결과를 참조와 다시 비교할 수 있다.
 
@@ -45,3 +51,14 @@ StandaloneScriptRegression은 추가로 `StringTransformRegressions.h`의 문자
 Uint8Array 복사는 SSE2로 UTF-16의 하위 바이트를 변환한다. 호스트 취소 콜백과 Worker 종료 신호가 없는 256KiB 이상 복사만 최대 4개 스레드가 서로 겹치지 않는 숫자 슬롯에 기록한다. 실행 엔진과 JavaScript 객체 생성은 이 스레드에 전달하지 않는다. 호스트 콜백이 있으면 4,096바이트 단위로 제어를 돌려주며, ByteCopyRegressions는 전체 출력 바이트와 재진입·중단을 확인한다.
 
 RuntimeBenchmark의 동기 측정은 선택적인 `benchmarkNormalize(result)`를 시간 측정이 끝난 뒤 두 엔진에서 동일하게 호출한다. typed array의 JSON 표현 차이를 제거하면서 반환한 모든 바이트를 비교할 수 있다. 초기 실행도 버리지 않고 중앙값과 범위를 보고한다.
+
+`RenderingComparisonRegression.vcxproj`와 `Run-RenderingComparison.ps1`은 페이지 JavaScript를 끈 영구 HTML/CSS 문서를 실제 WebView2와 자체 `View` 공통 paint 경로로 비교한다. 현재 20개 pilot을 96/144 DPI와 세 CSS viewport에서 120개 비교하며, DOM·box 좌표·필수 계산 스타일 25개(숨김 요소 포함)·UTF-16 글자 좌표·엄격한 장치 픽셀 차이를 저장한다. native baseline·대표 glyph index/advance/offset·실제 font 이름과 reference 노드별 CDP platform font usage를 보존한다. 기준 per-character baseline/glyph, widget 내부 텍스트·전체 glyph coverage와 AA 교정은 보류한다. 실제 창 DPI와 일치하는 경우 `WM_PRINTCLIENT` 결과도 검사한다. 실패 시 종료 코드 1이며 일반 엔진 회귀검사의 성공과 구별한다. 절차는 [렌더링 검증 안내](rendering/README.md), 최신 결과는 [계산 스타일 검증 결과](../../docs/RENDERING-ACCURACY-STYLE-RESULTS.md)에 있다. `-FullRegression`은 렌더링 비교를 자동 실행하지 않는다.
+
+`-FullRegression`에는 `TableSpanRegression`과 `FormControlRegression`을 포함한다. 12개 실행기와 platform integrity를 실행하며 표의 outer half-border/트랙, native 및 작성자 form appearance와 DPI를 확인한다. TWebFrameTests는 kerning·normal 줄 높이·폼 크기·줄바꿈과 DPI cache 왕복도 검사한다. 판정 도구는 40개 교정으로 검출력을 확인하며 문자 좌표 이동/누락/내용/advance/줄/원본 위치, 중복·매핑 오류, null/NaN/무한 좌표, `.notdef`·미수집 glyph·미해결 font 정보를 거절한다.
+
+
+정적 페인트 검증은 [rendering 실행 안내](rendering/README.md)와 [전체 CPU 전환 결과](../../docs/RENDERING-ALL-CPU-RESULTS.md)를 따른다. 폰트·그라디언트·도형·그림자와 View 화면/출력 타깃을 모두 CPU 경로로 전환했다. 픽셀 완전 일치를 기본으로 하되 확인·등록된 폰트·그라디언트·도형 안티앨리어싱 CPU/GPU 차이는 허용하며 raw 차이와 strict 판정도 보존한다. 새 차이와 DOM·스타일·레이아웃·문자 기하 오류는 실패한다. `-StrictPixels`로 예외를 끌 수 있다. 판정 교정은 40개다. GPU 내부 최종 View 합성은 후속 업그레이드다. FormControlRegression은 공유 View 래스터 경로에서 최신 WebView2의 select 화살표 빈 공간·양쪽 선·아래 여백을 두 DPI로 검사한다.
+
+ScrollRenderingRegression은 패딩이 있는 일반 상자·pre·textarea에서 짧은 내용의 세로 스크롤바/스크롤 범위가 생기지 않고, 긴 내용의 전체 스크롤 범위가 유지되는지 100%·150% DPI로 검사한다. MdViewer는 이 엔진 회귀검사에서 재빌드하지 않는다.
+
+최신 정적 비교는 WebView2의 CapturePreview/CDP PNG를 120쌍에서 정확히 대조하며, 같은 브라우저의 GPU/색 프로필을 실행 전후에 기록한다. 기본 120/120(96 완전 일치·24 승인 AA), 별도 색상/DPI/viewport 교정 18/18·표본 357/357, 비교 교정 47개와 환경 예외 거절 교정 6개가 통과했다. 이전 기준을 유지하고 새 그래픽 환경을 분리 보존했으며 공통 엔진 소스는 변경하지 않았다. [독립 캡처·환경 교정 결과](../../docs/RENDERING-ACCURACY-CAPTURE-CALIBRATION-RESULTS.md)를 따른다.

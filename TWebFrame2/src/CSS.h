@@ -24,6 +24,7 @@ struct CssRule {
     std::vector<CssDeclaration> declarations;
     int specificity = 0;
     int order = 0;
+    std::vector<int> layer;
     float minViewportWidth = 0.0f;
     float maxViewportWidth = std::numeric_limits<float>::infinity();
     float minViewportHeight = 0.0f;
@@ -72,6 +73,8 @@ public:
     void SetDisplay(float width,float height,float scale) noexcept;
     static bool MediaQueryMatches(const std::wstring& query,double width,double height,
                                   double displayWidth,double displayHeight,double scale);
+    static bool Supports(const std::wstring& condition);
+    static bool Supports(const std::wstring& property,const std::wstring& value);
     ComputedStyle Compute(const std::shared_ptr<Node>& node,
                           const ComputedStyle* parent = nullptr,
                           const std::wstring& pseudo = L"") const;
@@ -97,7 +100,7 @@ private:
     std::vector<const CssRule*> CandidateRules(const std::shared_ptr<Node>& node) const;
     std::wstring ResolveVariables(const std::wstring& value,
                                   const FastMap<std::wstring, std::wstring>& vars,
-                                  int depth = 0) const;
+                                  int depth = 0,bool* valid = nullptr) const;
     std::vector<CssRule> rules_;
     std::vector<CssKeyframes> keyframes_;
     struct ShadowStyleCache {std::weak_ptr<Node> root;std::wstring css;std::shared_ptr<StyleSheet> sheet;};

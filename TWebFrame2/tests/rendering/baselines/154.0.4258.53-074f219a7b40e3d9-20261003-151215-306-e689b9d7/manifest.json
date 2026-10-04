@@ -1,0 +1,2802 @@
+{
+  "schemaVersion": 1,
+  "baselineId": "154.0.4258.53-074f219a7b40e3d9-20261003-151215-306-e689b9d7",
+  "environmentId": "074f219a7b40e3d9",
+  "referenceEnvironment": {
+    "runtime": "154.0.4258.53",
+    "windows": "Microsoft Windows NT 10.0.26200.0",
+    "sdk": "1.0.3595.46",
+    "fontHashes": [
+      {
+        "file": "arial.ttf",
+        "sha256": "B3658EADAE55E682B5F69EB64C439C1ECC8F196C0BB8D4756D145D13BC86476A"
+      },
+      {
+        "file": "malgun.ttf",
+        "sha256": "7A183CF1C6C56B9609FCC16EDA8B5229FBC11758A21E669EC00343239B02192F"
+      },
+      {
+        "file": "segoeui.ttf",
+        "sha256": "8134DBCD09E7B123C9A7F229D49CFFBCB01352CC72EA5E1076B65D0DCA9F73CD"
+      }
+    ],
+    "dpi": [
+      96,
+      144
+    ],
+    "viewports": [
+      "384x768",
+      "800x600",
+      "1280x800"
+    ],
+    "pageZoom": 1.0,
+    "capture": "WebView2 CapturePreview PNG; explicit rasterization scale; opaque BGRA8"
+  },
+  "archiveCatalog": "../../archives/20261003-151215-306-e689b9d7.json",
+  "archiveSha256": "B8846D51A0A2656A59B5F74D4E6930D69FB0CD9D87ACACEDA9AF99BC3A00FCB0",
+  "storage": "Immutable ZIP entries; restore with Restore-RenderingArchive.ps1",
+  "referencePairCount": 120,
+  "entries": [
+    {
+      "caseId": "0001-solid-box",
+      "files": [
+        {
+          "sha256": "95482D9C36D7407AA53EA6FC73BA2B34E316C415832DE7899C5E09C022F7DA81",
+          "entry": "run/96dpi/384x768/0001-solid-box/reference.png"
+        },
+        {
+          "sha256": "4BAA7846CC1ECBD1F315A299AB2B59E04E6A9A325845C0D09F56FE8717DA9743",
+          "entry": "run/96dpi/384x768/0001-solid-box/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0001-solid-box/reference-metrics.json"
+        },
+        {
+          "sha256": "27D0508D21FFBBD6C89D4856A660BE9D0502DEC36BBC3B9D07BA65BB4AE9E7B6",
+          "entry": "run/96dpi/384x768/0001-solid-box/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0002-fractional-box",
+      "files": [
+        {
+          "sha256": "7046A46A1859FCC974F88904989B18D46C1AB1DE43D9A6267C47E6BCDB6224FA",
+          "entry": "run/96dpi/384x768/0002-fractional-box/reference.png"
+        },
+        {
+          "sha256": "081092326FD2D54D5FF3FE74C2EB8C1AF8592E7C8C5AAE5B124634E5E0474B1F",
+          "entry": "run/96dpi/384x768/0002-fractional-box/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0002-fractional-box/reference-metrics.json"
+        },
+        {
+          "sha256": "A3939F2257CD683A9B61957BB9FB1ECC19B2A1142EB54ED1CF093E1BFA5563E8",
+          "entry": "run/96dpi/384x768/0002-fractional-box/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0003-margin-collapse",
+      "files": [
+        {
+          "sha256": "52CEB9B4E18AFE534A7F033F1729067A21088882FE0C39CEEFC184EB472824F3",
+          "entry": "run/96dpi/384x768/0003-margin-collapse/reference.png"
+        },
+        {
+          "sha256": "E767D8AC042F73D440471C2DE8159D58CE72989320A645C5F66193B8DD63A2D9",
+          "entry": "run/96dpi/384x768/0003-margin-collapse/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0003-margin-collapse/reference-metrics.json"
+        },
+        {
+          "sha256": "5E928BA3FD727C96E07C2A39172F3B7FA97B169B9FF773749B9B5D3C639A9E03",
+          "entry": "run/96dpi/384x768/0003-margin-collapse/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0004-flex-distribution",
+      "files": [
+        {
+          "sha256": "68A709F72CAE8693ADD4C1E7F9DA16F7FB1B9FDB94475A0174B1BA396E2E4EA7",
+          "entry": "run/96dpi/384x768/0004-flex-distribution/reference.png"
+        },
+        {
+          "sha256": "2A745EDE42269D3312D4ED8A2519E934FC5961F8052AC5397737E492DFCC57EF",
+          "entry": "run/96dpi/384x768/0004-flex-distribution/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0004-flex-distribution/reference-metrics.json"
+        },
+        {
+          "sha256": "2D87D7E5EDF4001E8972150955DB08772721FC210AABFC142DE466AAD2A29811",
+          "entry": "run/96dpi/384x768/0004-flex-distribution/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0005-flex-wrap",
+      "files": [
+        {
+          "sha256": "B4AA77168D504FE4940EE5760BC53A339541FDB50A64F543BBC73DC109439121",
+          "entry": "run/96dpi/384x768/0005-flex-wrap/reference.png"
+        },
+        {
+          "sha256": "169DCFA92A2F250AD821A9FF7F59A863E8CEAB796DD4D5E35460D65F89BCE8A1",
+          "entry": "run/96dpi/384x768/0005-flex-wrap/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0005-flex-wrap/reference-metrics.json"
+        },
+        {
+          "sha256": "E5946AD07871F4DDD08B01DA7828B4BB7455CFCE4D5FC3A8DAA9EDBB221C2A0A",
+          "entry": "run/96dpi/384x768/0005-flex-wrap/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0006-nested-flex-grid",
+      "files": [
+        {
+          "sha256": "2F6FC1D110546CE7AE3C911E2FF027DE913214AE481F14F95FFBA047F5CC132E",
+          "entry": "run/96dpi/384x768/0006-nested-flex-grid/reference.png"
+        },
+        {
+          "sha256": "438996B6F2049A9BF3E957D9369ED92A619EE125A3330E974306237C59CD8202",
+          "entry": "run/96dpi/384x768/0006-nested-flex-grid/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0006-nested-flex-grid/reference-metrics.json"
+        },
+        {
+          "sha256": "1CEEE1E4A778BE7CA9099AE56A66B3FC9EE0C4EBA6E00DD66769F475C8BDD344",
+          "entry": "run/96dpi/384x768/0006-nested-flex-grid/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0007-grid-tracks",
+      "files": [
+        {
+          "sha256": "133EAAEA22FE1FB013AB3AA42A0A1DF6CC8DBBCFAFD1353D216259E85C60F5E9",
+          "entry": "run/96dpi/384x768/0007-grid-tracks/reference.png"
+        },
+        {
+          "sha256": "DFB552922C0B468DBDDC9F2170905AD54A252340D2D02542C8B285D447049543",
+          "entry": "run/96dpi/384x768/0007-grid-tracks/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0007-grid-tracks/reference-metrics.json"
+        },
+        {
+          "sha256": "C5C145719AF176BE094377F68A5CEDF65FDA9073E4790567F62BFAC9F6C85D4A",
+          "entry": "run/96dpi/384x768/0007-grid-tracks/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0008-grid-spanning",
+      "files": [
+        {
+          "sha256": "0C577DD82670936B046431423AD58488A404935596B96849A0DEEC5F7EE04BE1",
+          "entry": "run/96dpi/384x768/0008-grid-spanning/reference.png"
+        },
+        {
+          "sha256": "61C5C4AB5BE692CC9D159907FE37F3E321F34C2AC3C7FA6A5922C3DD58D243AA",
+          "entry": "run/96dpi/384x768/0008-grid-spanning/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0008-grid-spanning/reference-metrics.json"
+        },
+        {
+          "sha256": "5615122C4A3C2166F3D02607A0EC7ED76E9A8E18A2B6056121137E8CAF7ABB1B",
+          "entry": "run/96dpi/384x768/0008-grid-spanning/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0009-table-spans",
+      "files": [
+        {
+          "sha256": "930B61E6518F062DC412489EBCA56DF7CB6E27BC7B8960DE1F3E3E595FFB7F86",
+          "entry": "run/96dpi/384x768/0009-table-spans/reference.png"
+        },
+        {
+          "sha256": "BE2C20E8D4328054F4260ED653B4B51576C09C2F42F7F662774E0386278C3783",
+          "entry": "run/96dpi/384x768/0009-table-spans/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0009-table-spans/reference-metrics.json"
+        },
+        {
+          "sha256": "ABE31106D747C3FB54794561C6165678B89E103DAD42FB3B36A0FF36BEB8764F",
+          "entry": "run/96dpi/384x768/0009-table-spans/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0010-position-stacking",
+      "files": [
+        {
+          "sha256": "64770813593BB90D4D719001C4FB940A0048AB24F6A1164E93EA153A0F743015",
+          "entry": "run/96dpi/384x768/0010-position-stacking/reference.png"
+        },
+        {
+          "sha256": "5B53A336DC6AAE8DE27D6E0B9A218C8012F56474778844B479240F2CD1AE3231",
+          "entry": "run/96dpi/384x768/0010-position-stacking/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0010-position-stacking/reference-metrics.json"
+        },
+        {
+          "sha256": "8B6055E26F2CCE44E5E3AEE1E0CB780E8AA88241C599808C3BEFBACB531B9F6C",
+          "entry": "run/96dpi/384x768/0010-position-stacking/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0011-nested-overflow",
+      "files": [
+        {
+          "sha256": "752AF0893B9C09D97AC0470BB35A8BC6550FACD16C202DFE1C49E8481F03C99D",
+          "entry": "run/96dpi/384x768/0011-nested-overflow/reference.png"
+        },
+        {
+          "sha256": "BFFFBFBA278D8190B03466CD8A3745A897BB134109399CC55481BA86490617DB",
+          "entry": "run/96dpi/384x768/0011-nested-overflow/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0011-nested-overflow/reference-metrics.json"
+        },
+        {
+          "sha256": "29CB08818D0556DFADC2B1002DA2514EE995C9F2CFB7B55F4D45AFBA844D1C24",
+          "entry": "run/96dpi/384x768/0011-nested-overflow/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0012-radius-gradient",
+      "files": [
+        {
+          "sha256": "3A488115E61E075B46DB3C326D02F11160BEBBD11FE4572C9C01B62DBACCA330",
+          "entry": "run/96dpi/384x768/0012-radius-gradient/reference.png"
+        },
+        {
+          "sha256": "F90D336535946358947CD42B2F155D221B801A106D69A111AEB375CAA1CB5E7A",
+          "entry": "run/96dpi/384x768/0012-radius-gradient/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0012-radius-gradient/reference-metrics.json"
+        },
+        {
+          "sha256": "3931166580E6269ECAD2DBDA82B26FD098BBE87E8639054774A5DA65BB6827D6",
+          "entry": "run/96dpi/384x768/0012-radius-gradient/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0013-svg-paint",
+      "files": [
+        {
+          "sha256": "2F26757914BC572C0A0186DEBC2E890A944D9B3021D325BA5F004222D25331CE",
+          "entry": "run/96dpi/384x768/0013-svg-paint/reference.png"
+        },
+        {
+          "sha256": "8F25CB75D0D00E22A43B45F1B9D62569F13113A00BF9F8140DAB58A650CE2208",
+          "entry": "run/96dpi/384x768/0013-svg-paint/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0013-svg-paint/reference-metrics.json"
+        },
+        {
+          "sha256": "85D8C091353F6B8EB24397F121F047CBD76D0148D0352A8C2885A0057D850C4E",
+          "entry": "run/96dpi/384x768/0013-svg-paint/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0014-generated-boxes",
+      "files": [
+        {
+          "sha256": "EDF7359E30B8D53081119CA081A6862476465946ECD18A8BDF6ACF298FE28C14",
+          "entry": "run/96dpi/384x768/0014-generated-boxes/reference.png"
+        },
+        {
+          "sha256": "5CA89A185B26FB50F771F5F34C72D4AA46CE7A0091979B76E19CF42454ED13A8",
+          "entry": "run/96dpi/384x768/0014-generated-boxes/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0014-generated-boxes/reference-metrics.json"
+        },
+        {
+          "sha256": "C3140FFA25CF63B3BEA694D2F22E450E1C1B667C44F5DA4DA69CA91C23534E15",
+          "entry": "run/96dpi/384x768/0014-generated-boxes/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0015-variables-layers-nesting",
+      "files": [
+        {
+          "sha256": "F1DBAEB7039AE17FD3602F375719E7C53CEB721EB4E4171702547BBF120D1A74",
+          "entry": "run/96dpi/384x768/0015-variables-layers-nesting/reference.png"
+        },
+        {
+          "sha256": "6B465AA714167BEB85DB5590A3CBFA6579C5B67E5B0D09F45D2E4D07201F01AF",
+          "entry": "run/96dpi/384x768/0015-variables-layers-nesting/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0015-variables-layers-nesting/reference-metrics.json"
+        },
+        {
+          "sha256": "FE0981C15FEBE3A891FABB9A73E92D8E8AAADD7F98AAA1C08EE8668827D4E96C",
+          "entry": "run/96dpi/384x768/0015-variables-layers-nesting/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0016-responsive-grid",
+      "files": [
+        {
+          "sha256": "FF7D76CDB9DF682DEEC66F0B66234E1E42883E7C5BF60DF7E74F57E6BCE38747",
+          "entry": "run/96dpi/384x768/0016-responsive-grid/reference.png"
+        },
+        {
+          "sha256": "CB51D9FA8D3D1A488A259A5C01F390AFB0C4D33F4BB9DDF0A7AFFF000CF08FE7",
+          "entry": "run/96dpi/384x768/0016-responsive-grid/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0016-responsive-grid/reference-metrics.json"
+        },
+        {
+          "sha256": "106A9CF888F6A9DD8D8AEB10E9F607EFFE5E14C8E67244D3E410F1E69FB9D4B3",
+          "entry": "run/96dpi/384x768/0016-responsive-grid/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0017-latin-inline",
+      "files": [
+        {
+          "sha256": "190B2F80D54E7F3A0C0862E0A9E4A2C478B2AFE375CDA155506F3F7A9A878146",
+          "entry": "run/96dpi/384x768/0017-latin-inline/reference.png"
+        },
+        {
+          "sha256": "CA5F3E23E28ECD2E225F24587C528A9C9428E9FE9DDD656709FC5C05F7C718CD",
+          "entry": "run/96dpi/384x768/0017-latin-inline/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0017-latin-inline/reference-metrics.json"
+        },
+        {
+          "sha256": "1DBF7811941A90247421241D25CFF64FECDF03851BBD269E2DAD5C9EA960359F",
+          "entry": "run/96dpi/384x768/0017-latin-inline/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0018-mixed-writing",
+      "files": [
+        {
+          "sha256": "9983B4D2097A4B01A0A533961EAABB34C4B88325C9A5E70D63226BB75A0C35FD",
+          "entry": "run/96dpi/384x768/0018-mixed-writing/reference.png"
+        },
+        {
+          "sha256": "B3031A0F5B33F9E929C1009546B64BE05AF8196FFBDBDDEB5C19DA9D4AB9B1A6",
+          "entry": "run/96dpi/384x768/0018-mixed-writing/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0018-mixed-writing/reference-metrics.json"
+        },
+        {
+          "sha256": "9F04A7D8B6121920000B3D9E57F4D7A2B8F79621AE624F9F5DFFAD949714799C",
+          "entry": "run/96dpi/384x768/0018-mixed-writing/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0019-form-initial-state",
+      "files": [
+        {
+          "sha256": "FF9D1805676FA3F81A6B9596A3F44F565DA01D4F217CA1B241B58829D7EAC770",
+          "entry": "run/96dpi/384x768/0019-form-initial-state/reference.png"
+        },
+        {
+          "sha256": "79BBB8A8DC5A247024DC07A35FA352ADFA68E6200EA84360EF45971557A6A824",
+          "entry": "run/96dpi/384x768/0019-form-initial-state/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0019-form-initial-state/reference-metrics.json"
+        },
+        {
+          "sha256": "A125D63B674B385FDF6E42251BE248FD55B1ED6B1CD8991A058288CADEA02161",
+          "entry": "run/96dpi/384x768/0019-form-initial-state/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0020-complex-dashboard",
+      "files": [
+        {
+          "sha256": "D74C41F1DA0D40BA24B58A636A32D063A7252737522DF8DCF9027FFE400AA7B0",
+          "entry": "run/96dpi/384x768/0020-complex-dashboard/reference.png"
+        },
+        {
+          "sha256": "CFB59CBE1BFFD2F78F5F1E7B17F5BCD7E413A5C8E23134E9425654D7F9F83183",
+          "entry": "run/96dpi/384x768/0020-complex-dashboard/reference.json"
+        },
+        {
+          "sha256": "79976A2D2592EF2AB475BCA786E8B16B1340015F9E08AFD7573C76C49931D743",
+          "entry": "run/96dpi/384x768/0020-complex-dashboard/reference-metrics.json"
+        },
+        {
+          "sha256": "C752218D564EF171FE3E39FBBB786DC814EA45DB5BB81479E5138BF489EB033A",
+          "entry": "run/96dpi/384x768/0020-complex-dashboard/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0001-solid-box",
+      "files": [
+        {
+          "sha256": "F55FDFF7F67249CC9744BB66F2C0DE93F3DAB27B97C87F48D4C93AF573951D3D",
+          "entry": "run/96dpi/800x600/0001-solid-box/reference.png"
+        },
+        {
+          "sha256": "02B5CF5A8E80B3E4C59C1E36879EC98EFABF19B2611C12D386AA061A57BC1BEB",
+          "entry": "run/96dpi/800x600/0001-solid-box/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0001-solid-box/reference-metrics.json"
+        },
+        {
+          "sha256": "848B97036A6B9B2620BC6B4A030FAC336BEE8A00015DD72EC9FC554D3B919D20",
+          "entry": "run/96dpi/800x600/0001-solid-box/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0002-fractional-box",
+      "files": [
+        {
+          "sha256": "7C0FF18762B73794689C679B690E1B7FFB8BED431FBDEAB24AFC4339408511A2",
+          "entry": "run/96dpi/800x600/0002-fractional-box/reference.png"
+        },
+        {
+          "sha256": "3DA674FC1A26C32124BE1958F8A5A31DD7788ACEC90E5E3AEDA79DBB79333AB9",
+          "entry": "run/96dpi/800x600/0002-fractional-box/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0002-fractional-box/reference-metrics.json"
+        },
+        {
+          "sha256": "78CC1542BCBB9204FAE080A7CECC2BDEA8CDF63E3514C6D8B11383C9DC3B0B4A",
+          "entry": "run/96dpi/800x600/0002-fractional-box/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0003-margin-collapse",
+      "files": [
+        {
+          "sha256": "AADFC132A7669BD05764074DE403A6DF5A3B3E28617DE8718CCFF40DA2B5A888",
+          "entry": "run/96dpi/800x600/0003-margin-collapse/reference.png"
+        },
+        {
+          "sha256": "985D3693599479D2CE3CE4FA21A472D583EBAA6ADA8BEE7967FD46139A186F87",
+          "entry": "run/96dpi/800x600/0003-margin-collapse/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0003-margin-collapse/reference-metrics.json"
+        },
+        {
+          "sha256": "DE20D920BA99DC4BA40E0E3D9D531955A24F69870EE23209599D8C860005BA8A",
+          "entry": "run/96dpi/800x600/0003-margin-collapse/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0004-flex-distribution",
+      "files": [
+        {
+          "sha256": "DA1C87E85CAA93A99B746A6EEB079DC7B57FF8CA0EA46BE8BF94D39DC5FF5F93",
+          "entry": "run/96dpi/800x600/0004-flex-distribution/reference.png"
+        },
+        {
+          "sha256": "39F5E5DD63BCAF1BC0904E5281C308DB1EBE5034881EE770D993BE2EC57950E9",
+          "entry": "run/96dpi/800x600/0004-flex-distribution/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0004-flex-distribution/reference-metrics.json"
+        },
+        {
+          "sha256": "C395013E4E38C2309FCACF9CA243A802882817074DAE0AF56806DA974CEED883",
+          "entry": "run/96dpi/800x600/0004-flex-distribution/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0005-flex-wrap",
+      "files": [
+        {
+          "sha256": "D1A3495B822503943AB55A202A55799B712352CC03C2EC3D72B67054E9846ADA",
+          "entry": "run/96dpi/800x600/0005-flex-wrap/reference.png"
+        },
+        {
+          "sha256": "5706BBB6B692DDD38D2CA8F95281AC61DB27210AFFE87FA76445C9C7F377788A",
+          "entry": "run/96dpi/800x600/0005-flex-wrap/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0005-flex-wrap/reference-metrics.json"
+        },
+        {
+          "sha256": "1D1098521E7D716DB339CD12B73A54E2F1BEAFD511C8C3D991CD5CC4FECA6BE7",
+          "entry": "run/96dpi/800x600/0005-flex-wrap/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0006-nested-flex-grid",
+      "files": [
+        {
+          "sha256": "6577CFB792CA2AA3C1BE91AD046A296E3DA453A10507CF6CAA2FF4FD89B38727",
+          "entry": "run/96dpi/800x600/0006-nested-flex-grid/reference.png"
+        },
+        {
+          "sha256": "989A7BF478F884D8FD11DF6A2BE441C3DD9B7F033B69914C7DC1FB223A0A1D27",
+          "entry": "run/96dpi/800x600/0006-nested-flex-grid/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0006-nested-flex-grid/reference-metrics.json"
+        },
+        {
+          "sha256": "B078FBFC168AD395EBFC4833A60B539D8928F16318F4CF2D32FCCBEDE4CB78CC",
+          "entry": "run/96dpi/800x600/0006-nested-flex-grid/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0007-grid-tracks",
+      "files": [
+        {
+          "sha256": "B4C779C6289831D6B0BE33F4F02517FAD56D4740B002E1D0561C4EDD07CA94CB",
+          "entry": "run/96dpi/800x600/0007-grid-tracks/reference.png"
+        },
+        {
+          "sha256": "63AA38341A8F9C1797C2F6FCA66A1C723F4E2BE14D66C06C1DD0B5B844AFF5E5",
+          "entry": "run/96dpi/800x600/0007-grid-tracks/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0007-grid-tracks/reference-metrics.json"
+        },
+        {
+          "sha256": "96BE63F12226ED8DF4C2600023762320F9170CAE5853DB24BB8DE8F670AD0A23",
+          "entry": "run/96dpi/800x600/0007-grid-tracks/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0008-grid-spanning",
+      "files": [
+        {
+          "sha256": "AACFB5042F0A58A8AE7319145B0A80C6A89E5FB869C836E54F05058DAB0004EC",
+          "entry": "run/96dpi/800x600/0008-grid-spanning/reference.png"
+        },
+        {
+          "sha256": "7981D82A48F5DE2ECEFF80571AA69C05C2E89D59F45C9F9291D2218F3481D77A",
+          "entry": "run/96dpi/800x600/0008-grid-spanning/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0008-grid-spanning/reference-metrics.json"
+        },
+        {
+          "sha256": "9B1FE84144AB4C1E40131605CACB7C1CC7EB619B1C35DC5974DA24886168488B",
+          "entry": "run/96dpi/800x600/0008-grid-spanning/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0009-table-spans",
+      "files": [
+        {
+          "sha256": "9147BDDDE068CFE47606419CAAD9119381CD263EC936FB342C4531E843ECB18D",
+          "entry": "run/96dpi/800x600/0009-table-spans/reference.png"
+        },
+        {
+          "sha256": "06A4D1374E9CB81CE964036A3A34B3CBDA2DB896141DEE41142CD2BE283A6DD5",
+          "entry": "run/96dpi/800x600/0009-table-spans/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0009-table-spans/reference-metrics.json"
+        },
+        {
+          "sha256": "DF0981347EC8B83675661A16A2039412B021877C525970968DBAC5B32661F243",
+          "entry": "run/96dpi/800x600/0009-table-spans/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0010-position-stacking",
+      "files": [
+        {
+          "sha256": "0EF36932E36F440D09BA1AEBD35E55F75047B0522E3B22BC05136F0DE7B65293",
+          "entry": "run/96dpi/800x600/0010-position-stacking/reference.png"
+        },
+        {
+          "sha256": "B531081220B066BE4EE4ABDC73557C9A9B5B00C80758A6EDCF55A864CCCB3214",
+          "entry": "run/96dpi/800x600/0010-position-stacking/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0010-position-stacking/reference-metrics.json"
+        },
+        {
+          "sha256": "54FE3E6DC3FAC7FB878B882B01E7B45F323FA0038E44F1357487AF91019BDADC",
+          "entry": "run/96dpi/800x600/0010-position-stacking/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0011-nested-overflow",
+      "files": [
+        {
+          "sha256": "26BF9DEA3081D6D3FDCC08D468596538B3571A0585E4B4B423A7C02758447819",
+          "entry": "run/96dpi/800x600/0011-nested-overflow/reference.png"
+        },
+        {
+          "sha256": "8F890D8BF234C086371EEE7DCE1CD5BB784C794524F53DBB61A281CBD5995B5C",
+          "entry": "run/96dpi/800x600/0011-nested-overflow/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0011-nested-overflow/reference-metrics.json"
+        },
+        {
+          "sha256": "C8EDA45C18599E9871871453DC9E036B96B8003CF3D10B8139EF4E7363940A6F",
+          "entry": "run/96dpi/800x600/0011-nested-overflow/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0012-radius-gradient",
+      "files": [
+        {
+          "sha256": "816534A6C0C1C1C44B74302C797F1317F4BEEB9630C24AC10941FC0ABD94F713",
+          "entry": "run/96dpi/800x600/0012-radius-gradient/reference.png"
+        },
+        {
+          "sha256": "68940AC6C48903BEEE7642D99B3C9CDEF6A6FEE009F74B5F67AD9A6534BA1671",
+          "entry": "run/96dpi/800x600/0012-radius-gradient/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0012-radius-gradient/reference-metrics.json"
+        },
+        {
+          "sha256": "E42A95A8EDF2E3970B2FCEC6B6D00162510C2071019C382ECC08E2815CADD2B9",
+          "entry": "run/96dpi/800x600/0012-radius-gradient/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0013-svg-paint",
+      "files": [
+        {
+          "sha256": "95C9BF46FBB60331917013FC1C0CEE92683C699DF68661FDDDA17A269B41BF94",
+          "entry": "run/96dpi/800x600/0013-svg-paint/reference.png"
+        },
+        {
+          "sha256": "656A27818F46D437FD8DC1B0576254DB192907DD23E9811441C51F057924F9FD",
+          "entry": "run/96dpi/800x600/0013-svg-paint/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0013-svg-paint/reference-metrics.json"
+        },
+        {
+          "sha256": "5683EAC5B06CBC1DA859A1C957A0696FF31D5576578D350A64F0C8CE3C2AD24F",
+          "entry": "run/96dpi/800x600/0013-svg-paint/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0014-generated-boxes",
+      "files": [
+        {
+          "sha256": "3AFD1226B2B61969882168BE82CE2429A9ACC0F08A2B3968A92727D505856CCE",
+          "entry": "run/96dpi/800x600/0014-generated-boxes/reference.png"
+        },
+        {
+          "sha256": "F06C92A36C4475152AA37AD33917AE0104C84E9E4509CD0C65F228509B610E00",
+          "entry": "run/96dpi/800x600/0014-generated-boxes/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0014-generated-boxes/reference-metrics.json"
+        },
+        {
+          "sha256": "C4D18958D0186E432A30440FD467460532537EE14817784819331347A7971152",
+          "entry": "run/96dpi/800x600/0014-generated-boxes/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0015-variables-layers-nesting",
+      "files": [
+        {
+          "sha256": "C757F2995DF8DD9AC152BD7CE2A0F379FCE914D4C91D8A910E43955D09124B5F",
+          "entry": "run/96dpi/800x600/0015-variables-layers-nesting/reference.png"
+        },
+        {
+          "sha256": "13C18CD50B63FB0170B6AD132D61AA49371CBE768E644DBED47239DFB0A171CA",
+          "entry": "run/96dpi/800x600/0015-variables-layers-nesting/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0015-variables-layers-nesting/reference-metrics.json"
+        },
+        {
+          "sha256": "1E6E2C07189A3135D7E794F296BEBB3F4EE00B1D8B9432B0EADDCF56FD37C251",
+          "entry": "run/96dpi/800x600/0015-variables-layers-nesting/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0016-responsive-grid",
+      "files": [
+        {
+          "sha256": "2A15548DB0664B28DA5EB31D156C9BD41ACDCD7D5331CC8AAD5DB14D0A5ACEEF",
+          "entry": "run/96dpi/800x600/0016-responsive-grid/reference.png"
+        },
+        {
+          "sha256": "9B83975364696CD176AA56CCD10708001C20207B6462B756F14A78B17A199CBE",
+          "entry": "run/96dpi/800x600/0016-responsive-grid/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0016-responsive-grid/reference-metrics.json"
+        },
+        {
+          "sha256": "9FB6CE85D7B25ABC083A2D51BFD95620B5F0AD37CD873321468A31D089B70DA1",
+          "entry": "run/96dpi/800x600/0016-responsive-grid/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0017-latin-inline",
+      "files": [
+        {
+          "sha256": "3CDD4BF3C4C0B1A7EA5CB5FD5861D221907189DA1D98E5DEEB3A8217C8EDC069",
+          "entry": "run/96dpi/800x600/0017-latin-inline/reference.png"
+        },
+        {
+          "sha256": "3033420BBE9EC4F7ED4A67AF67C7580B711AFC79A0D66558771AF5B377F269BF",
+          "entry": "run/96dpi/800x600/0017-latin-inline/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0017-latin-inline/reference-metrics.json"
+        },
+        {
+          "sha256": "53F2CDCCE22A1BC0FD7679178833EA799E48ACD2B96B923E571217793FD19135",
+          "entry": "run/96dpi/800x600/0017-latin-inline/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0018-mixed-writing",
+      "files": [
+        {
+          "sha256": "0E16A6206C5455C6FA38E234BDABF8BFC7D439272A13BC81D46859EBFBCF0CA5",
+          "entry": "run/96dpi/800x600/0018-mixed-writing/reference.png"
+        },
+        {
+          "sha256": "F44AF9EDA05ECF2037D0A9302A7E7BD0FBCEEB0724584034C33D6DB9CE9AE6D4",
+          "entry": "run/96dpi/800x600/0018-mixed-writing/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0018-mixed-writing/reference-metrics.json"
+        },
+        {
+          "sha256": "CE4B7E422EABB086F15634492E9129EBC11B78E2862BCDBCDAE51215E848BAD8",
+          "entry": "run/96dpi/800x600/0018-mixed-writing/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0019-form-initial-state",
+      "files": [
+        {
+          "sha256": "635CED0D3356C60A673B10A7833D720E5FAD0CCA305F90E3AD93DC42C9130CC3",
+          "entry": "run/96dpi/800x600/0019-form-initial-state/reference.png"
+        },
+        {
+          "sha256": "0E1617FB53E3FD43DFF8DD1D31A4089DA595A6BB143B5FB6C61BCC51D5736D20",
+          "entry": "run/96dpi/800x600/0019-form-initial-state/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0019-form-initial-state/reference-metrics.json"
+        },
+        {
+          "sha256": "8FFBD29448A6B24464411766EB5EA2A14B1EA0C5D81DC4E7D5661AD4C86BDDA7",
+          "entry": "run/96dpi/800x600/0019-form-initial-state/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0020-complex-dashboard",
+      "files": [
+        {
+          "sha256": "6F94F5D0C923BBAFAA2BFA28575B3CCD2B2DF26629D3BD5340BAEF88F293FFD7",
+          "entry": "run/96dpi/800x600/0020-complex-dashboard/reference.png"
+        },
+        {
+          "sha256": "AB3ECD93D5545E465D7B814B25090548D11E5375C0ECEA262F46E0CD7CB80D46",
+          "entry": "run/96dpi/800x600/0020-complex-dashboard/reference.json"
+        },
+        {
+          "sha256": "A8CD47BB546187F0F8D5A34EFC464E13A9EB1CB2470FA5DFA59D853A64D67B9B",
+          "entry": "run/96dpi/800x600/0020-complex-dashboard/reference-metrics.json"
+        },
+        {
+          "sha256": "F4C8E4A9BE1910E3CB7897A6B766019ACD5598977DC8D1A955C0D031C4375EF5",
+          "entry": "run/96dpi/800x600/0020-complex-dashboard/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0001-solid-box",
+      "files": [
+        {
+          "sha256": "F9C472E3ED3EA826B148A94C466ED226097E7DE3063C5EF7EB5C7FAB14AA88D6",
+          "entry": "run/96dpi/1280x800/0001-solid-box/reference.png"
+        },
+        {
+          "sha256": "334C4052EA14757AEE3A81D03E08AF19993C700555216E7A2BFFDE253AA2C285",
+          "entry": "run/96dpi/1280x800/0001-solid-box/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0001-solid-box/reference-metrics.json"
+        },
+        {
+          "sha256": "91B48200402ED911166320C98791B452A2845BDD84094B209E1F1A88AB76B45D",
+          "entry": "run/96dpi/1280x800/0001-solid-box/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0002-fractional-box",
+      "files": [
+        {
+          "sha256": "92358C57C4E8F4889F7937B93D886C75E1CF9D93E8031EC576560A6719C9A051",
+          "entry": "run/96dpi/1280x800/0002-fractional-box/reference.png"
+        },
+        {
+          "sha256": "C9C9A22E68FDB6BE13E96713E046ADB5083B974F44ACB3C40F02C405855FD93C",
+          "entry": "run/96dpi/1280x800/0002-fractional-box/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0002-fractional-box/reference-metrics.json"
+        },
+        {
+          "sha256": "35CAA3F25EC0946D9E012651B9DB21A53BE7FE01C71D3CAF1DF1E50951B14741",
+          "entry": "run/96dpi/1280x800/0002-fractional-box/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0003-margin-collapse",
+      "files": [
+        {
+          "sha256": "69DFC2E985675771AC2974A0E14E2CC9135136F31F69251CB0687822630CA5E7",
+          "entry": "run/96dpi/1280x800/0003-margin-collapse/reference.png"
+        },
+        {
+          "sha256": "6846A0C8A76D3106572BC6FECB472A2829D9E44A199A5F79FA8823B0B1DBBFC4",
+          "entry": "run/96dpi/1280x800/0003-margin-collapse/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0003-margin-collapse/reference-metrics.json"
+        },
+        {
+          "sha256": "5C41865F9055E24E64741F26DDE3F8822026137221EC4EA905A8E87C44E067DF",
+          "entry": "run/96dpi/1280x800/0003-margin-collapse/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0004-flex-distribution",
+      "files": [
+        {
+          "sha256": "607DF40CDA8A87D29DAA44E55190D167D39001860CACAE26DA75F63436282968",
+          "entry": "run/96dpi/1280x800/0004-flex-distribution/reference.png"
+        },
+        {
+          "sha256": "E2435F7F90791CB45D2B69FE3EB8008509F0A3F3B1381EB719A9A6D1E56490C3",
+          "entry": "run/96dpi/1280x800/0004-flex-distribution/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0004-flex-distribution/reference-metrics.json"
+        },
+        {
+          "sha256": "B2F6F995E9E713A676361AF2F2E0E576A2241037346D2D8A57339C3A6EDDA71B",
+          "entry": "run/96dpi/1280x800/0004-flex-distribution/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0005-flex-wrap",
+      "files": [
+        {
+          "sha256": "3DC1E13AEB1BD5ABFE954F87D3C2CCC15261EFA281C85FC52693B4558F8B08D6",
+          "entry": "run/96dpi/1280x800/0005-flex-wrap/reference.png"
+        },
+        {
+          "sha256": "D3A2698371A6A36DCFB2CB171ACEC5CECBFF9686929E512CFE8D5C14CDAA0B7B",
+          "entry": "run/96dpi/1280x800/0005-flex-wrap/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0005-flex-wrap/reference-metrics.json"
+        },
+        {
+          "sha256": "5424D3E36130D17397424BBE7345E0F0E3EE8663C0CB185B63879C2A20BC2AC3",
+          "entry": "run/96dpi/1280x800/0005-flex-wrap/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0006-nested-flex-grid",
+      "files": [
+        {
+          "sha256": "058518D7033F0636E76BCA6319358BFBE13EC91ACCEA3CAECF8588F5A145E6C7",
+          "entry": "run/96dpi/1280x800/0006-nested-flex-grid/reference.png"
+        },
+        {
+          "sha256": "DACBBF4176F03B3CDB2C997D9B046421E87263AA8CC803F1C918895B1040F747",
+          "entry": "run/96dpi/1280x800/0006-nested-flex-grid/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0006-nested-flex-grid/reference-metrics.json"
+        },
+        {
+          "sha256": "FDE43BAC58779D1A1D682407B7D3EB9E3037FAFC8DF04DA91F7371C0E5F7CC8E",
+          "entry": "run/96dpi/1280x800/0006-nested-flex-grid/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0007-grid-tracks",
+      "files": [
+        {
+          "sha256": "DD73C581B35B2C5A6AE21CC7E6247CA811BAEC984F1C973D5B298E7C1A1C738F",
+          "entry": "run/96dpi/1280x800/0007-grid-tracks/reference.png"
+        },
+        {
+          "sha256": "B3340D6B51097CC6AB6D77A5EC213ACB136D6A2188A43AF86B8A3CFCBB70FA50",
+          "entry": "run/96dpi/1280x800/0007-grid-tracks/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0007-grid-tracks/reference-metrics.json"
+        },
+        {
+          "sha256": "C6D2C9F19078B79B1527A1C6479499795CE693C23F655E87BB15F881FAA662AF",
+          "entry": "run/96dpi/1280x800/0007-grid-tracks/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0008-grid-spanning",
+      "files": [
+        {
+          "sha256": "CB208E46C7C3E0A4574AF7011EE24AA93D0829CF81430C214F6253EE3B70CA98",
+          "entry": "run/96dpi/1280x800/0008-grid-spanning/reference.png"
+        },
+        {
+          "sha256": "CC3944A5D7ACDAFE425E824DE0690B9AD3803EC677E163817C9BDBA2542D0499",
+          "entry": "run/96dpi/1280x800/0008-grid-spanning/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0008-grid-spanning/reference-metrics.json"
+        },
+        {
+          "sha256": "3B886F28C5FAE65E99C567B0D96EA055D07D74ABDBDEB41937C65228110BECC8",
+          "entry": "run/96dpi/1280x800/0008-grid-spanning/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0009-table-spans",
+      "files": [
+        {
+          "sha256": "E8EE725A3EA7B2ABBC56038634025947959E7E1D994AC9E14E49213C26539C78",
+          "entry": "run/96dpi/1280x800/0009-table-spans/reference.png"
+        },
+        {
+          "sha256": "F25138373A33ABF8AA2586BDF8E720E1426932CF1D2CF6CA117551233B67C43D",
+          "entry": "run/96dpi/1280x800/0009-table-spans/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0009-table-spans/reference-metrics.json"
+        },
+        {
+          "sha256": "EF89EDCE8AEE323B9741F4E8EAD18DD490EDF47252B18D4397F79DE6AAE91A5E",
+          "entry": "run/96dpi/1280x800/0009-table-spans/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0010-position-stacking",
+      "files": [
+        {
+          "sha256": "C7277D96316C8FC6B5FE14712B5D8EF857F936689BA0EAA782F9149F7BA83DED",
+          "entry": "run/96dpi/1280x800/0010-position-stacking/reference.png"
+        },
+        {
+          "sha256": "2260F56E97248EC200B9955FFE0749688CE091499070E963C9D0FA287EB30125",
+          "entry": "run/96dpi/1280x800/0010-position-stacking/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0010-position-stacking/reference-metrics.json"
+        },
+        {
+          "sha256": "5176523E84D375AF90DC69DD1C1A5B8C350189614AE50BF0449BCAD1691862A0",
+          "entry": "run/96dpi/1280x800/0010-position-stacking/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0011-nested-overflow",
+      "files": [
+        {
+          "sha256": "EA03D358CDB8ABD0568126CEC958DB24214420159C162C3C3A717B7B52AD1A6F",
+          "entry": "run/96dpi/1280x800/0011-nested-overflow/reference.png"
+        },
+        {
+          "sha256": "8C99177261291C1FE820CF903415163C596DB0736DAD2FE055D9DCA4B4AD60C5",
+          "entry": "run/96dpi/1280x800/0011-nested-overflow/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0011-nested-overflow/reference-metrics.json"
+        },
+        {
+          "sha256": "B2FAAFE339CD17F154C36C81FA883A37F6180415A47793E47D0D0B3305CDEA09",
+          "entry": "run/96dpi/1280x800/0011-nested-overflow/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0012-radius-gradient",
+      "files": [
+        {
+          "sha256": "4F1647AEE972EF317BBEA0A2476593E92D1024EA5923D0D623FA449D5238DE2E",
+          "entry": "run/96dpi/1280x800/0012-radius-gradient/reference.png"
+        },
+        {
+          "sha256": "746B001885EC9FA0E7F9D0CA78C6C68C1BEEDD391875F593CA28276E48175E7B",
+          "entry": "run/96dpi/1280x800/0012-radius-gradient/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0012-radius-gradient/reference-metrics.json"
+        },
+        {
+          "sha256": "9C49074DAFBB27A28E050264DCA086A0967B80074A5B55FFC0B3A53986EA10AE",
+          "entry": "run/96dpi/1280x800/0012-radius-gradient/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0013-svg-paint",
+      "files": [
+        {
+          "sha256": "F1EA1B26790A733B7B36CE0BAEBC9DF2BA9CCE3FAEFEEB1BA4D17A6EC83239BF",
+          "entry": "run/96dpi/1280x800/0013-svg-paint/reference.png"
+        },
+        {
+          "sha256": "92674C416549E37122C231E2DE2D33FC80BB2CA6ADB36C8DD0A4C3E16CCC8521",
+          "entry": "run/96dpi/1280x800/0013-svg-paint/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0013-svg-paint/reference-metrics.json"
+        },
+        {
+          "sha256": "FC95DB3A2DFA2DE699F612AF2F80650DFBEEE32E1CA723A295FDFA9131C2D6D9",
+          "entry": "run/96dpi/1280x800/0013-svg-paint/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0014-generated-boxes",
+      "files": [
+        {
+          "sha256": "1A41E937B416AE66F307C0F1AEFD4D0A9CEAABFA68756AD6B7E6E97884668075",
+          "entry": "run/96dpi/1280x800/0014-generated-boxes/reference.png"
+        },
+        {
+          "sha256": "7FA7A5F3BDC938BDD5CA48CFBF7F44E281523C2E061B4C8BDA4F75F51E4DEF74",
+          "entry": "run/96dpi/1280x800/0014-generated-boxes/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0014-generated-boxes/reference-metrics.json"
+        },
+        {
+          "sha256": "1727EDDB1AE727B387EF21B0E6692EA3D9E82E71B9F6CA5E82C8E807A244B92A",
+          "entry": "run/96dpi/1280x800/0014-generated-boxes/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0015-variables-layers-nesting",
+      "files": [
+        {
+          "sha256": "0AE7F2AA8CABBD1BBF89C0B6695254E0909216325185E319E7910432F15F8382",
+          "entry": "run/96dpi/1280x800/0015-variables-layers-nesting/reference.png"
+        },
+        {
+          "sha256": "A699F946C096BEFADE910FE9720F79664606ABEBF442B6743B3CA8EB22201F32",
+          "entry": "run/96dpi/1280x800/0015-variables-layers-nesting/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0015-variables-layers-nesting/reference-metrics.json"
+        },
+        {
+          "sha256": "309D79916F4D6168C3A81CCE7F05E7D22E4E4B85402721EEA048C8147652D519",
+          "entry": "run/96dpi/1280x800/0015-variables-layers-nesting/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0016-responsive-grid",
+      "files": [
+        {
+          "sha256": "A9F3B789DDD5DEF34DD8AEBF366C65550B79C5051B2728208335637708F3CFD1",
+          "entry": "run/96dpi/1280x800/0016-responsive-grid/reference.png"
+        },
+        {
+          "sha256": "4775715B2FA3EDC7A882C2CBE9BCF72D1BEFB509F3275D0CD6E39FCC0A799CC7",
+          "entry": "run/96dpi/1280x800/0016-responsive-grid/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0016-responsive-grid/reference-metrics.json"
+        },
+        {
+          "sha256": "F80BF09F4B91FC74E8488AA3D713182E98B1B04FBEEBE72407E12CAA1F57E8D8",
+          "entry": "run/96dpi/1280x800/0016-responsive-grid/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0017-latin-inline",
+      "files": [
+        {
+          "sha256": "820886208F6152818EB108D4DE242EA412FDA6B5CFB9404EE308827D373026AB",
+          "entry": "run/96dpi/1280x800/0017-latin-inline/reference.png"
+        },
+        {
+          "sha256": "47C8BA48DF6CA0FF8DB72DF05547FB97A039D306FEEB215BB81A08D69E7DD19F",
+          "entry": "run/96dpi/1280x800/0017-latin-inline/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0017-latin-inline/reference-metrics.json"
+        },
+        {
+          "sha256": "5532C6DCE99ED531CF00EF4F301A96D483778CC4546C263E99C0E87FA988BB89",
+          "entry": "run/96dpi/1280x800/0017-latin-inline/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0018-mixed-writing",
+      "files": [
+        {
+          "sha256": "EEA39291BA4C0C0F0D9176ACF6B2A86D4CE9DBD3FD8877D6B169E1E8511FABE6",
+          "entry": "run/96dpi/1280x800/0018-mixed-writing/reference.png"
+        },
+        {
+          "sha256": "88084C9FE78C8FDBC3F7E52BE799DB397411FE628183EB0EBC0E412A86DC93A1",
+          "entry": "run/96dpi/1280x800/0018-mixed-writing/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0018-mixed-writing/reference-metrics.json"
+        },
+        {
+          "sha256": "1B02E5507287E7AB9621EE85C5C4B11CA1D229E74EF66396DC4ADE83ED4E1696",
+          "entry": "run/96dpi/1280x800/0018-mixed-writing/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0019-form-initial-state",
+      "files": [
+        {
+          "sha256": "30E8FD743C2DFCD3771152BCBC1F242A5C080D6CE003E65B11044BB7A9D2EDCA",
+          "entry": "run/96dpi/1280x800/0019-form-initial-state/reference.png"
+        },
+        {
+          "sha256": "2B5D65337F5E92C193BEB96BF8FA32BAD071A7F86B289027594B970671EAE9AA",
+          "entry": "run/96dpi/1280x800/0019-form-initial-state/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0019-form-initial-state/reference-metrics.json"
+        },
+        {
+          "sha256": "B1D31D4CD1937C5E3C6CAED0940EDC4CCED9CE89E44F247426DA79F6969A5E21",
+          "entry": "run/96dpi/1280x800/0019-form-initial-state/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0020-complex-dashboard",
+      "files": [
+        {
+          "sha256": "CCE0EA3A95187D71374E383068B38D3B9A798DE5FED3B88B6C41FF0799C2F29A",
+          "entry": "run/96dpi/1280x800/0020-complex-dashboard/reference.png"
+        },
+        {
+          "sha256": "7951CE0D544F6D2905CE5AF847C02A2C4B5BA227F63FEE72C4ACFBC317C56C58",
+          "entry": "run/96dpi/1280x800/0020-complex-dashboard/reference.json"
+        },
+        {
+          "sha256": "9F47E9BF0BF33EF7BEFE57CB5EEDDE79664CC276030AF2AEEE2C89C2ABD8CA2C",
+          "entry": "run/96dpi/1280x800/0020-complex-dashboard/reference-metrics.json"
+        },
+        {
+          "sha256": "99EFEFB0E2A88294C4D806082C9CC1580CBD2CB059FD387BFDDC6D12DA6CDDF0",
+          "entry": "run/96dpi/1280x800/0020-complex-dashboard/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 96,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0001-solid-box",
+      "files": [
+        {
+          "sha256": "E3AB5579F85CC0FC83329FC39808CDD0463E9C1FB752CA2883A7C932F0B022C0",
+          "entry": "run/144dpi/384x768/0001-solid-box/reference.png"
+        },
+        {
+          "sha256": "D0C2246131D8DD296BCD322A5C30568F02C8E78E4FE77F39EBBB776EC7EA2587",
+          "entry": "run/144dpi/384x768/0001-solid-box/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0001-solid-box/reference-metrics.json"
+        },
+        {
+          "sha256": "136A68551FD205816520089C38F8210C09C6D1FB0A7CC770D63B63B0EC4C271B",
+          "entry": "run/144dpi/384x768/0001-solid-box/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0002-fractional-box",
+      "files": [
+        {
+          "sha256": "AA72F9922FE9D36A60439C7A4358F7AB8756DF84387A25D503632D4F21CA2F04",
+          "entry": "run/144dpi/384x768/0002-fractional-box/reference.png"
+        },
+        {
+          "sha256": "706CE1B18F1BBD9C712AEFB57E028C7783D0406222B54C98EEE1E970164A416F",
+          "entry": "run/144dpi/384x768/0002-fractional-box/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0002-fractional-box/reference-metrics.json"
+        },
+        {
+          "sha256": "0386760A379E1070838D01E7664B374BF8356FA50A3814F2C6302C34D8D2D090",
+          "entry": "run/144dpi/384x768/0002-fractional-box/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0003-margin-collapse",
+      "files": [
+        {
+          "sha256": "9FBB5BE569B54AC8697C5D1ABB40CFED0115883C253698350BC8426323C756A1",
+          "entry": "run/144dpi/384x768/0003-margin-collapse/reference.png"
+        },
+        {
+          "sha256": "56C6C0049769FD8E7C0AF2C4164653D2936C59AE7B28BE38325392D5D064DB60",
+          "entry": "run/144dpi/384x768/0003-margin-collapse/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0003-margin-collapse/reference-metrics.json"
+        },
+        {
+          "sha256": "A1BBDDD206201D84F861C10B60AA28810E90F222D10081D36168F93BD709835D",
+          "entry": "run/144dpi/384x768/0003-margin-collapse/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0004-flex-distribution",
+      "files": [
+        {
+          "sha256": "4470394F7976B3750B26BA57FDA0C3F15E92806ED2966FA3BFA49AC33E295C35",
+          "entry": "run/144dpi/384x768/0004-flex-distribution/reference.png"
+        },
+        {
+          "sha256": "F2CFF79D24107242CE58CE797D307BACFE6946F42CAEBB6667E53A1703354ED1",
+          "entry": "run/144dpi/384x768/0004-flex-distribution/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0004-flex-distribution/reference-metrics.json"
+        },
+        {
+          "sha256": "C49CCDD80F1846CE5CF0064CC8B3046DC236626B645E746028EBFED74B41AAF6",
+          "entry": "run/144dpi/384x768/0004-flex-distribution/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0005-flex-wrap",
+      "files": [
+        {
+          "sha256": "4CE5FE3845A1DDB24791E2175091A89F980C456E4B2F80B343BF804C3D8CB637",
+          "entry": "run/144dpi/384x768/0005-flex-wrap/reference.png"
+        },
+        {
+          "sha256": "37B13D2175B94F25764690789F14CD1F4F0D50539399EC9EC88EDF012D1B585F",
+          "entry": "run/144dpi/384x768/0005-flex-wrap/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0005-flex-wrap/reference-metrics.json"
+        },
+        {
+          "sha256": "035FBECC1CC0054C7685E2C9E2ED92873011A410D1F952602AB5F9EC0881F390",
+          "entry": "run/144dpi/384x768/0005-flex-wrap/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0006-nested-flex-grid",
+      "files": [
+        {
+          "sha256": "71073E68152412EE6AAC5BA80AD3D5DB3810999F732766CEED3381B326E7E0DB",
+          "entry": "run/144dpi/384x768/0006-nested-flex-grid/reference.png"
+        },
+        {
+          "sha256": "037FCEE259C7B9CBCD8E47231ED05524A3AB340B3CBC02B85F0B33A1E4FCA2A5",
+          "entry": "run/144dpi/384x768/0006-nested-flex-grid/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0006-nested-flex-grid/reference-metrics.json"
+        },
+        {
+          "sha256": "8E5E28D3C09F6CED2A99D2F3264C0288C79FA5F59C2530A127E2C957CCDD17E1",
+          "entry": "run/144dpi/384x768/0006-nested-flex-grid/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0007-grid-tracks",
+      "files": [
+        {
+          "sha256": "756F4D88718E6F044CDB257B04F36CB23E07167716F624893A02F1EB311CBC36",
+          "entry": "run/144dpi/384x768/0007-grid-tracks/reference.png"
+        },
+        {
+          "sha256": "35BDC5FD8FB774936EBB4766D61679918FB7471F46B1EFC4FCE837272A07E419",
+          "entry": "run/144dpi/384x768/0007-grid-tracks/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0007-grid-tracks/reference-metrics.json"
+        },
+        {
+          "sha256": "EF0CFC0849914D3E3B596CE38DBE893BB2A3487F508F663EF5BA4843487E51F8",
+          "entry": "run/144dpi/384x768/0007-grid-tracks/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0008-grid-spanning",
+      "files": [
+        {
+          "sha256": "13AB0BA2F7809728C4B81CF6B923458CD189F10C4AF7E2441952E7AC7610CEDB",
+          "entry": "run/144dpi/384x768/0008-grid-spanning/reference.png"
+        },
+        {
+          "sha256": "51268DB5A29272F836A14193E19C158C300C3D894791243C5191ED21C208AA28",
+          "entry": "run/144dpi/384x768/0008-grid-spanning/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0008-grid-spanning/reference-metrics.json"
+        },
+        {
+          "sha256": "8A0909A0E458CA4287C363B35C588440AB5FD00EA8C0FDFC7BDDECA33B20038A",
+          "entry": "run/144dpi/384x768/0008-grid-spanning/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0009-table-spans",
+      "files": [
+        {
+          "sha256": "970E96903778417517A87FBF82C198739FA9E1B517ABD8B659C409DBEA1A7B28",
+          "entry": "run/144dpi/384x768/0009-table-spans/reference.png"
+        },
+        {
+          "sha256": "CDE40B7DD90E5189196DF5F61D6A721C200C5ED1109997486632EC5D20750CDD",
+          "entry": "run/144dpi/384x768/0009-table-spans/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0009-table-spans/reference-metrics.json"
+        },
+        {
+          "sha256": "80B091A2A805EA52740337BE4AF2B8ED46200A4927AEFE9C65F7BDF08BB72EFE",
+          "entry": "run/144dpi/384x768/0009-table-spans/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0010-position-stacking",
+      "files": [
+        {
+          "sha256": "F1F77FD34AD120A54F3107F3CC9D2E0DA49822440EAA5C1937DAD07EAFB75C3D",
+          "entry": "run/144dpi/384x768/0010-position-stacking/reference.png"
+        },
+        {
+          "sha256": "168046724F34D895CE7E54AD0C3DD15A94555B6C1CC7FA6EEA3409309E690114",
+          "entry": "run/144dpi/384x768/0010-position-stacking/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0010-position-stacking/reference-metrics.json"
+        },
+        {
+          "sha256": "193792CB06ADE598D121830479F1BD01CEC7C17CCB5D74D87BD5CDB5C121FC77",
+          "entry": "run/144dpi/384x768/0010-position-stacking/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0011-nested-overflow",
+      "files": [
+        {
+          "sha256": "AE1362A1FAEAF6C17EC6B7333B441BF1807263B9DBBBC81525A84521A26731EF",
+          "entry": "run/144dpi/384x768/0011-nested-overflow/reference.png"
+        },
+        {
+          "sha256": "ABA4B5E55EC9F68456034526AED19EA3EBD1A664709883A39D9251F4EAB067AE",
+          "entry": "run/144dpi/384x768/0011-nested-overflow/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0011-nested-overflow/reference-metrics.json"
+        },
+        {
+          "sha256": "AEC581CBEDA0763EBB05B8BB4AE0C08DE98FF2DA069441633B27D5592880EC5E",
+          "entry": "run/144dpi/384x768/0011-nested-overflow/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0012-radius-gradient",
+      "files": [
+        {
+          "sha256": "ED60E5330CDF541635000E532F5F2B64759FB62A2CC7B15EE22BA68F745FBE6D",
+          "entry": "run/144dpi/384x768/0012-radius-gradient/reference.png"
+        },
+        {
+          "sha256": "EDBCDD8BF980B5E89F8C7845BFB98175F926A4E30007A4B3229DF2E3229726D1",
+          "entry": "run/144dpi/384x768/0012-radius-gradient/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0012-radius-gradient/reference-metrics.json"
+        },
+        {
+          "sha256": "7DD512CB12993E1D7465DADE625D021ABED296AE8B201A15AC08746C35A2F627",
+          "entry": "run/144dpi/384x768/0012-radius-gradient/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0013-svg-paint",
+      "files": [
+        {
+          "sha256": "5666655606CDB20E8E85237A2D433B2C8C008DD3686A7F94F251B8EFD9E417F5",
+          "entry": "run/144dpi/384x768/0013-svg-paint/reference.png"
+        },
+        {
+          "sha256": "F4777A51417C81F8AD90150085B82868620576C31524B2E282A1FB37FF334ABA",
+          "entry": "run/144dpi/384x768/0013-svg-paint/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0013-svg-paint/reference-metrics.json"
+        },
+        {
+          "sha256": "44E687172AB5F872BD0D76B2B3C8C77AB7944CF0BC511EA09C2A085AB3826947",
+          "entry": "run/144dpi/384x768/0013-svg-paint/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0014-generated-boxes",
+      "files": [
+        {
+          "sha256": "FBA18C0E6D5CBFAE61381F7166E19C30BF0BEFC478A3A5D6B905401BA8B4DE21",
+          "entry": "run/144dpi/384x768/0014-generated-boxes/reference.png"
+        },
+        {
+          "sha256": "CBCF3DA295AC39158F6ABC321D2A93E64F88CF75CEE0E27D584665F9FBF94953",
+          "entry": "run/144dpi/384x768/0014-generated-boxes/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0014-generated-boxes/reference-metrics.json"
+        },
+        {
+          "sha256": "33FA1385ADB8AE98B777BF302C43DDC66409A450E8158572CC3DD743A9EDA1A5",
+          "entry": "run/144dpi/384x768/0014-generated-boxes/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0015-variables-layers-nesting",
+      "files": [
+        {
+          "sha256": "ADF0163BA92DEE5CCA5F2A03DE7ED9E0741F9D38CF364D91F808F5CDE320A7BA",
+          "entry": "run/144dpi/384x768/0015-variables-layers-nesting/reference.png"
+        },
+        {
+          "sha256": "8429B8CF958EDD1242CE08981BC5282552466C76C4AEE5699F590B4E85A8754D",
+          "entry": "run/144dpi/384x768/0015-variables-layers-nesting/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0015-variables-layers-nesting/reference-metrics.json"
+        },
+        {
+          "sha256": "2F8AC1BC331A79B6C3ABE58392EA0668EF8159E24C4658A24E9BB8115B4D9D4D",
+          "entry": "run/144dpi/384x768/0015-variables-layers-nesting/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0016-responsive-grid",
+      "files": [
+        {
+          "sha256": "B37E2101BF1EF01B465CD1F4CB580C0000007159EF4B8DF2C421E3680D55B42D",
+          "entry": "run/144dpi/384x768/0016-responsive-grid/reference.png"
+        },
+        {
+          "sha256": "F7D0B574DEEBF08E220FC935B01E60E93900F048F9116A9A59AD0CF1221E3EF5",
+          "entry": "run/144dpi/384x768/0016-responsive-grid/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0016-responsive-grid/reference-metrics.json"
+        },
+        {
+          "sha256": "0E99EE13112CF1EFEBB1FE6256157FE5029A160868D5A87510509BBAA96ABAA1",
+          "entry": "run/144dpi/384x768/0016-responsive-grid/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0017-latin-inline",
+      "files": [
+        {
+          "sha256": "87271E94ED51A599E602E483D2E83B3537538239456EA941F3369E22B15D7052",
+          "entry": "run/144dpi/384x768/0017-latin-inline/reference.png"
+        },
+        {
+          "sha256": "8174AC2D5BDEFF449FC3126382FDF452422C74256525E1A8C746B1FC81BD5F6D",
+          "entry": "run/144dpi/384x768/0017-latin-inline/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0017-latin-inline/reference-metrics.json"
+        },
+        {
+          "sha256": "D11BD5342D33958282B863B15B3F5C9D643DC8F77D32483CF4C8B9166AACE4CD",
+          "entry": "run/144dpi/384x768/0017-latin-inline/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0018-mixed-writing",
+      "files": [
+        {
+          "sha256": "0C952DCCD6F6287ABB73A3E892FB472702C76FFF6416B0C2BB299E12B1DCC890",
+          "entry": "run/144dpi/384x768/0018-mixed-writing/reference.png"
+        },
+        {
+          "sha256": "336E9A5DBC8AB9BF7AA9D01B50A4BC6B20AC4A079CC740DA3624731DF919C296",
+          "entry": "run/144dpi/384x768/0018-mixed-writing/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0018-mixed-writing/reference-metrics.json"
+        },
+        {
+          "sha256": "2705538A94A6CF136F4F87B51295667466C8400112C8CEA2D6AF98883943C577",
+          "entry": "run/144dpi/384x768/0018-mixed-writing/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0019-form-initial-state",
+      "files": [
+        {
+          "sha256": "6FCDD522F5AFD5331D0287604984EDA9524C7E4616E566F392C62EE8CF5CC73B",
+          "entry": "run/144dpi/384x768/0019-form-initial-state/reference.png"
+        },
+        {
+          "sha256": "1283556E58752968EECEAB3DF7B102335FAEBE5C7A4B889B8567BA9AE501FD1D",
+          "entry": "run/144dpi/384x768/0019-form-initial-state/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0019-form-initial-state/reference-metrics.json"
+        },
+        {
+          "sha256": "B0BF488D7F2132911F21E2A0BC1F77D43998750E22A4B94891284D83505F753D",
+          "entry": "run/144dpi/384x768/0019-form-initial-state/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0020-complex-dashboard",
+      "files": [
+        {
+          "sha256": "63A7355F1978D874AE140A8D5018ACA3DFA1CD0C508722FB6A790666E52DDF26",
+          "entry": "run/144dpi/384x768/0020-complex-dashboard/reference.png"
+        },
+        {
+          "sha256": "A51F940232255F716B29AD2BBD734D1F95AFD494A358CF08F6225520B6C343C0",
+          "entry": "run/144dpi/384x768/0020-complex-dashboard/reference.json"
+        },
+        {
+          "sha256": "2FAF5C26F388923CDCC3CE5E868C082DE049C0D09680ED90C0C544D0215D1CE6",
+          "entry": "run/144dpi/384x768/0020-complex-dashboard/reference-metrics.json"
+        },
+        {
+          "sha256": "2D7A8E7BE599F638434073AD88035868FE12D942877521239161CB0FD870B19D",
+          "entry": "run/144dpi/384x768/0020-complex-dashboard/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "384x768"
+    },
+    {
+      "caseId": "0001-solid-box",
+      "files": [
+        {
+          "sha256": "3A56628FDB45B2BA36A54EB5B60BCF3719A4F3F4186A2ED6C1A4B0D6DE12D7B3",
+          "entry": "run/144dpi/800x600/0001-solid-box/reference.png"
+        },
+        {
+          "sha256": "E65AE67B76CF8B369CBB5A85514E428112205422DAC5F9F10EC1319C38D94953",
+          "entry": "run/144dpi/800x600/0001-solid-box/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0001-solid-box/reference-metrics.json"
+        },
+        {
+          "sha256": "47A847CD5E053DBE8F83F898E9B6374127A4C00C8769D401D2E687BCB46B6486",
+          "entry": "run/144dpi/800x600/0001-solid-box/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0002-fractional-box",
+      "files": [
+        {
+          "sha256": "336599A2174FE53369D59A7B0FCA4DA2F07027E98075EA0079C71400E68A0A4C",
+          "entry": "run/144dpi/800x600/0002-fractional-box/reference.png"
+        },
+        {
+          "sha256": "B010925B1E61326CD983B42C7090E0CC47D06AD35AD3F687726558984C96037B",
+          "entry": "run/144dpi/800x600/0002-fractional-box/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0002-fractional-box/reference-metrics.json"
+        },
+        {
+          "sha256": "BEDE889112AD8D0E25A8B00C498C887F88538D6928CC17B796884C826C57C7DA",
+          "entry": "run/144dpi/800x600/0002-fractional-box/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0003-margin-collapse",
+      "files": [
+        {
+          "sha256": "4EEA8B867DEDA7BD5436B2650B00D9320084CC4DF9B92BD61CEE222D482C9F1A",
+          "entry": "run/144dpi/800x600/0003-margin-collapse/reference.png"
+        },
+        {
+          "sha256": "5E9FB5C4EE6D50A1AF20DE6532EBFCEEFD13607A4F076B088FCC3E05F14CF81E",
+          "entry": "run/144dpi/800x600/0003-margin-collapse/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0003-margin-collapse/reference-metrics.json"
+        },
+        {
+          "sha256": "12FB6EB0D8AA0098BCACA629ED123BE744A9E9FE761444CED6D4D567A4095CF5",
+          "entry": "run/144dpi/800x600/0003-margin-collapse/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0004-flex-distribution",
+      "files": [
+        {
+          "sha256": "14BE92707873272221B859727C3814FC4A53B163FE6501E8D24513B40625222D",
+          "entry": "run/144dpi/800x600/0004-flex-distribution/reference.png"
+        },
+        {
+          "sha256": "9EDD39989DC2BC376BB968DE597BB29ACC73A47ABA416B6C9F5B6C3EC28B8AEB",
+          "entry": "run/144dpi/800x600/0004-flex-distribution/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0004-flex-distribution/reference-metrics.json"
+        },
+        {
+          "sha256": "1124CE0397ABA2F6A7DC0B102A63615FAB61E4D00114E70C2B8078ECC15179C3",
+          "entry": "run/144dpi/800x600/0004-flex-distribution/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0005-flex-wrap",
+      "files": [
+        {
+          "sha256": "128525D5B39B332942B9B290BFCDA4AFD1638DB93BA5FE5ED8A983AC567DA48F",
+          "entry": "run/144dpi/800x600/0005-flex-wrap/reference.png"
+        },
+        {
+          "sha256": "808553D1EEE2D17AE62C25CDD37985D7715324F225D60C01A6933B74A8431B96",
+          "entry": "run/144dpi/800x600/0005-flex-wrap/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0005-flex-wrap/reference-metrics.json"
+        },
+        {
+          "sha256": "E0AD6B8D90D189A0E5ADD0D1836DBA975B56BD3FD0A54F2DECC197FE516EBB96",
+          "entry": "run/144dpi/800x600/0005-flex-wrap/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0006-nested-flex-grid",
+      "files": [
+        {
+          "sha256": "53542CEFB76C4B91DA0CCF3B413FC2D6C1FD725D7DF236547C2DAC0722340198",
+          "entry": "run/144dpi/800x600/0006-nested-flex-grid/reference.png"
+        },
+        {
+          "sha256": "B044585FEB9ECAC20DFCB8FFEE02DBC2042D26ACA8D1183C13BBFB8BBDD0D7B1",
+          "entry": "run/144dpi/800x600/0006-nested-flex-grid/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0006-nested-flex-grid/reference-metrics.json"
+        },
+        {
+          "sha256": "47BED506D4DC947D8DB2D0EF0FE7D0B5DA3D3A09DD047737C424E83C175DF756",
+          "entry": "run/144dpi/800x600/0006-nested-flex-grid/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0007-grid-tracks",
+      "files": [
+        {
+          "sha256": "AC818EF314C6F7B30564357E96D2C41072F33A8999EB28CDC01EA84F0562EAD7",
+          "entry": "run/144dpi/800x600/0007-grid-tracks/reference.png"
+        },
+        {
+          "sha256": "1D1166899B6FB2FCA85E74B406DBCB67563AF545A8D1366E18C3904731A5B434",
+          "entry": "run/144dpi/800x600/0007-grid-tracks/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0007-grid-tracks/reference-metrics.json"
+        },
+        {
+          "sha256": "511F203768554E3B672FB11704BEDA46BFD4D8846620AD2519CEED99CCDE4959",
+          "entry": "run/144dpi/800x600/0007-grid-tracks/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0008-grid-spanning",
+      "files": [
+        {
+          "sha256": "58E647AE1646E54A14D5D7433757FE24AC8BCE8AD9BE0385F9B83BD97B9704C4",
+          "entry": "run/144dpi/800x600/0008-grid-spanning/reference.png"
+        },
+        {
+          "sha256": "697C181F4B5C36D7883F655879B8B84F6763EECBFE8B6211673588FF00284ACE",
+          "entry": "run/144dpi/800x600/0008-grid-spanning/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0008-grid-spanning/reference-metrics.json"
+        },
+        {
+          "sha256": "0EE80910B90B3A4BDE511F867A361E0DF9F59E9EFDABD951EAEAA3295BC8ED72",
+          "entry": "run/144dpi/800x600/0008-grid-spanning/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0009-table-spans",
+      "files": [
+        {
+          "sha256": "7C4593F8FB76E4C97F92579A428AFBE8F157636CA00E902940D8A0355BDB1E41",
+          "entry": "run/144dpi/800x600/0009-table-spans/reference.png"
+        },
+        {
+          "sha256": "CB1564A28A1930C155F13EA6CE6B630F55FE655DFCE3CB243CEB8A58D34C9BF2",
+          "entry": "run/144dpi/800x600/0009-table-spans/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0009-table-spans/reference-metrics.json"
+        },
+        {
+          "sha256": "2403DCD80FCD9364D87EBF28920751B1A87CF67F2CA275FBD1DFF4F9EC5CAF90",
+          "entry": "run/144dpi/800x600/0009-table-spans/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0010-position-stacking",
+      "files": [
+        {
+          "sha256": "C9D26A109658EA5845CB5811F540ED96C686AD48B876020158B8CCCB6EA86F20",
+          "entry": "run/144dpi/800x600/0010-position-stacking/reference.png"
+        },
+        {
+          "sha256": "9B721EE28A6679E000BFB7A95CE401AC0C3B60D23C8A2BF56D8758004F61CE70",
+          "entry": "run/144dpi/800x600/0010-position-stacking/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0010-position-stacking/reference-metrics.json"
+        },
+        {
+          "sha256": "E5980C452FB4C5D904C969859E679E1FDE1C18BF97FE98AB9F1D7FBE5D919BE8",
+          "entry": "run/144dpi/800x600/0010-position-stacking/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0011-nested-overflow",
+      "files": [
+        {
+          "sha256": "7C7FAE04A0A4419A23F5D6431C73AC8131998543CF6FE3D884E1DED835CFE72A",
+          "entry": "run/144dpi/800x600/0011-nested-overflow/reference.png"
+        },
+        {
+          "sha256": "D061ABD8F5B3E6BFD27F6F23674F7CE74EA9F2258C09D9A9EEF5F3697A1441BE",
+          "entry": "run/144dpi/800x600/0011-nested-overflow/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0011-nested-overflow/reference-metrics.json"
+        },
+        {
+          "sha256": "92F58AD987A405EF2E65A20CA4B17AD65BA80757B85C248FBBC4349A33777012",
+          "entry": "run/144dpi/800x600/0011-nested-overflow/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0012-radius-gradient",
+      "files": [
+        {
+          "sha256": "E81AD0ACA58425E304BDEF9E6A5FA5850011F16EBAB6EC45387C2E0617FBA127",
+          "entry": "run/144dpi/800x600/0012-radius-gradient/reference.png"
+        },
+        {
+          "sha256": "0754D8603DD550A7479688F9B17EC82BB2F0BF2312AF79BEA81F209DCD218C07",
+          "entry": "run/144dpi/800x600/0012-radius-gradient/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0012-radius-gradient/reference-metrics.json"
+        },
+        {
+          "sha256": "A1D05BB683351DFF19C218295020FD39D1D29C93C5797E4D3069B80CEA2B23DD",
+          "entry": "run/144dpi/800x600/0012-radius-gradient/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0013-svg-paint",
+      "files": [
+        {
+          "sha256": "A98AEEC51F359D4FE6B88F9E4C797FAACACE6BDD5A02B0470DD4CB366B69BB52",
+          "entry": "run/144dpi/800x600/0013-svg-paint/reference.png"
+        },
+        {
+          "sha256": "4E92B05A05C31A0A3779643D47E0F7CD1B9614C4E6A97E102B533ED5EB0C4248",
+          "entry": "run/144dpi/800x600/0013-svg-paint/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0013-svg-paint/reference-metrics.json"
+        },
+        {
+          "sha256": "9372C4CBD98493263C6FB1BF59355A61ECEAE431738C2EAE30DCFE43C17D3F6A",
+          "entry": "run/144dpi/800x600/0013-svg-paint/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0014-generated-boxes",
+      "files": [
+        {
+          "sha256": "EB7744BE43A53267EE0A1099E6DB9A3D5B14CFE28FD0663049B78C0E946B7BBD",
+          "entry": "run/144dpi/800x600/0014-generated-boxes/reference.png"
+        },
+        {
+          "sha256": "061C359615AD5D50BFBC115605233135D25D5C6C6AB17BC08AC5830FEC3E56FC",
+          "entry": "run/144dpi/800x600/0014-generated-boxes/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0014-generated-boxes/reference-metrics.json"
+        },
+        {
+          "sha256": "54FCA1875E4DBDBC9E5921A1525806A09BB6D42C8CEB20F51CFFA156DCA67EED",
+          "entry": "run/144dpi/800x600/0014-generated-boxes/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0015-variables-layers-nesting",
+      "files": [
+        {
+          "sha256": "0BB3C21DDDD607F5B110FF22E09DBCAC216E1464852C2966923C89CC6570CBC0",
+          "entry": "run/144dpi/800x600/0015-variables-layers-nesting/reference.png"
+        },
+        {
+          "sha256": "EF13937A625836FCFBD5767EC8D7097E8E2D40E550B6A147346173F532CE2734",
+          "entry": "run/144dpi/800x600/0015-variables-layers-nesting/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0015-variables-layers-nesting/reference-metrics.json"
+        },
+        {
+          "sha256": "5F833437B7AA061FF0753BDA1835D2EE0A5E52D52E013A2647B3B5ADB979C427",
+          "entry": "run/144dpi/800x600/0015-variables-layers-nesting/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0016-responsive-grid",
+      "files": [
+        {
+          "sha256": "3466B20DA91E61F37CF7FF909C534A43A8F26AC936E98544EA6529A3E580E79B",
+          "entry": "run/144dpi/800x600/0016-responsive-grid/reference.png"
+        },
+        {
+          "sha256": "6EBD3D6BC25C749F6C77097BF795F57B8B1433EAA8FC276780311CE4796CB173",
+          "entry": "run/144dpi/800x600/0016-responsive-grid/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0016-responsive-grid/reference-metrics.json"
+        },
+        {
+          "sha256": "1BEECF0578F0532D1E7E2C1A19F5E24A3C2784360950FDE1E5C6560F7F634370",
+          "entry": "run/144dpi/800x600/0016-responsive-grid/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0017-latin-inline",
+      "files": [
+        {
+          "sha256": "0714584E971735C897B019D03916FD14E42627991A757897F080820A234530D6",
+          "entry": "run/144dpi/800x600/0017-latin-inline/reference.png"
+        },
+        {
+          "sha256": "8E1AC1C5E643E491F52CD1171161FBB462FD4CAC6DF979CF8A83EB877E7EB353",
+          "entry": "run/144dpi/800x600/0017-latin-inline/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0017-latin-inline/reference-metrics.json"
+        },
+        {
+          "sha256": "388D7A869E559F40D97F40258884BF312F8FA9E638B074022A3452F3B60E43AB",
+          "entry": "run/144dpi/800x600/0017-latin-inline/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0018-mixed-writing",
+      "files": [
+        {
+          "sha256": "75DFFC4F7CD95E77C7F39AAC25EF97FB08EC623E4BA228C81068F1184844EB24",
+          "entry": "run/144dpi/800x600/0018-mixed-writing/reference.png"
+        },
+        {
+          "sha256": "A2765B090FCB0545E6D325F275C5737807A904D96A7274009AEB989ECC970538",
+          "entry": "run/144dpi/800x600/0018-mixed-writing/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0018-mixed-writing/reference-metrics.json"
+        },
+        {
+          "sha256": "2BB596228A3D37EE9BF469F1CAD2C7B5F094C1199AC626561F15E254F1CE6E12",
+          "entry": "run/144dpi/800x600/0018-mixed-writing/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0019-form-initial-state",
+      "files": [
+        {
+          "sha256": "BAE5A1E26E6203AE7621074967CCDA9D9AAA9D2865953C07D27CAAF4EB5D1B47",
+          "entry": "run/144dpi/800x600/0019-form-initial-state/reference.png"
+        },
+        {
+          "sha256": "61648CC5F19A03CD155FDC3AB8630847474D98B9036997D342CDE43875E227C5",
+          "entry": "run/144dpi/800x600/0019-form-initial-state/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0019-form-initial-state/reference-metrics.json"
+        },
+        {
+          "sha256": "F99A9DC6E309E1B24CA377C895A96D81AEBEDCD7F4F3650353B2800FB1591685",
+          "entry": "run/144dpi/800x600/0019-form-initial-state/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0020-complex-dashboard",
+      "files": [
+        {
+          "sha256": "957E195AEB2062BA43EC70DA7E70BEB58B78CCC0278FBEF96BB552EE24745AC7",
+          "entry": "run/144dpi/800x600/0020-complex-dashboard/reference.png"
+        },
+        {
+          "sha256": "B00D7F1621B7BA9620780F3AFF80E0F6FFE8364B681E51193A9DC38A48C434DA",
+          "entry": "run/144dpi/800x600/0020-complex-dashboard/reference.json"
+        },
+        {
+          "sha256": "2AFAA3D80052930F790218941C5EC950ED3ADFAC69C0AE48A8BB6DD2DF585DF0",
+          "entry": "run/144dpi/800x600/0020-complex-dashboard/reference-metrics.json"
+        },
+        {
+          "sha256": "77EF30BB79AA550D6E9DFFD8ECF15466EBC7EBAECD9BDDD648E03A5ADD88DB7C",
+          "entry": "run/144dpi/800x600/0020-complex-dashboard/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "800x600"
+    },
+    {
+      "caseId": "0001-solid-box",
+      "files": [
+        {
+          "sha256": "93CCE97DDBE4F81CAC43DCA1D5CCB205451903692B30154EF948523C3E95EE5F",
+          "entry": "run/144dpi/1280x800/0001-solid-box/reference.png"
+        },
+        {
+          "sha256": "05D9F756FFCC3EEE0B9827401F734832C73852F73D956AEE82C87616C25578CB",
+          "entry": "run/144dpi/1280x800/0001-solid-box/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0001-solid-box/reference-metrics.json"
+        },
+        {
+          "sha256": "89E34741D19BAAED25EF0F944F5B925C0AD14CECAC63D38E907722E0A579A95F",
+          "entry": "run/144dpi/1280x800/0001-solid-box/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0002-fractional-box",
+      "files": [
+        {
+          "sha256": "F08A9768B36192B1CDFEF054B43CFD89501DD54B5A470D3AA63267D182BACA71",
+          "entry": "run/144dpi/1280x800/0002-fractional-box/reference.png"
+        },
+        {
+          "sha256": "B8C6B101AB85F5581A7CD6FC16D93B94E44EE21DA75DC2C4BC903E5BE5071387",
+          "entry": "run/144dpi/1280x800/0002-fractional-box/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0002-fractional-box/reference-metrics.json"
+        },
+        {
+          "sha256": "1BAFE1413D10D18488E38F072D1E42B04D2E08D889AF5DE4F67DA0035AD3B816",
+          "entry": "run/144dpi/1280x800/0002-fractional-box/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0003-margin-collapse",
+      "files": [
+        {
+          "sha256": "64B9D50E9373F03B05745808CBD94276F93FB8C48216D66671953AADACBCD7D4",
+          "entry": "run/144dpi/1280x800/0003-margin-collapse/reference.png"
+        },
+        {
+          "sha256": "EDF0C13517EC5BCFD4823D15236D8283831183F7F6EF7BB7B6A6048841EE29D8",
+          "entry": "run/144dpi/1280x800/0003-margin-collapse/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0003-margin-collapse/reference-metrics.json"
+        },
+        {
+          "sha256": "50951C065B6311423097091F909EE9D7562E593BCF7A19859E2DF8ED387235EE",
+          "entry": "run/144dpi/1280x800/0003-margin-collapse/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0004-flex-distribution",
+      "files": [
+        {
+          "sha256": "F2BF2B74E76F536E5108DDA5C7963A761F4CE1656355A3069BAB3951B83F2EA8",
+          "entry": "run/144dpi/1280x800/0004-flex-distribution/reference.png"
+        },
+        {
+          "sha256": "3F13947128230686C0DD8AC8A5E3CE8AFCB01773C498EB0FF243416065359990",
+          "entry": "run/144dpi/1280x800/0004-flex-distribution/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0004-flex-distribution/reference-metrics.json"
+        },
+        {
+          "sha256": "213B52A36F3DB2E93DCF1F79FA30FF3BF78189DBA079EF916424BE4B0F868881",
+          "entry": "run/144dpi/1280x800/0004-flex-distribution/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0005-flex-wrap",
+      "files": [
+        {
+          "sha256": "872AA292ECC9A185023F47E7DB5B5970DE3E65EC4CDB654ABEAEC4A61872EEF3",
+          "entry": "run/144dpi/1280x800/0005-flex-wrap/reference.png"
+        },
+        {
+          "sha256": "17249DA2B6EA60CEF754FE52293B9E3EE243CECE1C488573B3C3957417277A18",
+          "entry": "run/144dpi/1280x800/0005-flex-wrap/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0005-flex-wrap/reference-metrics.json"
+        },
+        {
+          "sha256": "C7E18DD336B8FFFC3460FBEE38B1A7AEFDB4FB019C7EE8174295C325791DCE29",
+          "entry": "run/144dpi/1280x800/0005-flex-wrap/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0006-nested-flex-grid",
+      "files": [
+        {
+          "sha256": "6ECF978852512BDCB197F1259CE953B38D0CCACA0F1D3625BE56389541C13A13",
+          "entry": "run/144dpi/1280x800/0006-nested-flex-grid/reference.png"
+        },
+        {
+          "sha256": "B0F41B14B926611D5CAA15446FE324F27AD6DB805B34354579E77704573E4F4F",
+          "entry": "run/144dpi/1280x800/0006-nested-flex-grid/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0006-nested-flex-grid/reference-metrics.json"
+        },
+        {
+          "sha256": "5E619DC2F4EC7193F6E5A945C5016F751FC37A138CA99B8320837229E4E4C81E",
+          "entry": "run/144dpi/1280x800/0006-nested-flex-grid/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0007-grid-tracks",
+      "files": [
+        {
+          "sha256": "C491ADBB3354498FF05DCF6BE7BB1970F167D5DF4940BCE4E0329D5AA2F35081",
+          "entry": "run/144dpi/1280x800/0007-grid-tracks/reference.png"
+        },
+        {
+          "sha256": "EC39E17E1AEF1A75B0C76F43CB7CC6952442AB82769135573AF513009369731B",
+          "entry": "run/144dpi/1280x800/0007-grid-tracks/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0007-grid-tracks/reference-metrics.json"
+        },
+        {
+          "sha256": "541843127593D13281B29F16585288B76037A0EF06A82FF5E16F1B96C5557D78",
+          "entry": "run/144dpi/1280x800/0007-grid-tracks/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0008-grid-spanning",
+      "files": [
+        {
+          "sha256": "F2FEBC3B1D6D287F019092E99CBB0A7878B9E37E7F58DA38A3F50465D254E311",
+          "entry": "run/144dpi/1280x800/0008-grid-spanning/reference.png"
+        },
+        {
+          "sha256": "51AF0F598DAD40AB2E2F61F2C8FCE649E5FFFDE714A9459E8E86216D1085588D",
+          "entry": "run/144dpi/1280x800/0008-grid-spanning/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0008-grid-spanning/reference-metrics.json"
+        },
+        {
+          "sha256": "79A84C1ABB19DA12F4AFCA12A91B583572A257848F09C0D12334717D6339A868",
+          "entry": "run/144dpi/1280x800/0008-grid-spanning/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0009-table-spans",
+      "files": [
+        {
+          "sha256": "6B6E2214B90E22EA59AF7D236189F292DBE47C1C1A43B495CC3C153A9C60F422",
+          "entry": "run/144dpi/1280x800/0009-table-spans/reference.png"
+        },
+        {
+          "sha256": "8AEFD3A9CF81D3EBA686505992D851FB87636B4BE40301C14AB737F24C661F2D",
+          "entry": "run/144dpi/1280x800/0009-table-spans/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0009-table-spans/reference-metrics.json"
+        },
+        {
+          "sha256": "C9306E365550C69426B9A35BF192771E5DA9C8340ABD0B31FD958B8D9B7D0F75",
+          "entry": "run/144dpi/1280x800/0009-table-spans/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0010-position-stacking",
+      "files": [
+        {
+          "sha256": "60E047577E5A6378EF4F29F29507CF9479F5024E95376E0BAECFE6A5F138778F",
+          "entry": "run/144dpi/1280x800/0010-position-stacking/reference.png"
+        },
+        {
+          "sha256": "01D026E9D1C3710E41B6ECD2163D64E64E1E47A1BFAF11BD58ED4852CF7AC55B",
+          "entry": "run/144dpi/1280x800/0010-position-stacking/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0010-position-stacking/reference-metrics.json"
+        },
+        {
+          "sha256": "6376110F98FC472C19DC873E604CA9F7AAAEFE4AAFC7D0B11F929472CDD86C9B",
+          "entry": "run/144dpi/1280x800/0010-position-stacking/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0011-nested-overflow",
+      "files": [
+        {
+          "sha256": "B2B6701A088033677B15CABBDD34F7E60DB37BAD84AC5E220EEA2168FE8105EC",
+          "entry": "run/144dpi/1280x800/0011-nested-overflow/reference.png"
+        },
+        {
+          "sha256": "1B75583FFD246800AECFBDB7FAD5EA25E3E6F33700F4E67E4BB79C9465631502",
+          "entry": "run/144dpi/1280x800/0011-nested-overflow/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0011-nested-overflow/reference-metrics.json"
+        },
+        {
+          "sha256": "8FD0C18ACEF9C08006C76BE79C72C3B6947B67CEEE6473C8A943B4CB2273BAAE",
+          "entry": "run/144dpi/1280x800/0011-nested-overflow/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0012-radius-gradient",
+      "files": [
+        {
+          "sha256": "005A4BB9575B979814A1BEFACAA5AF94B47D4EDAE7E8FBB24AF041BEBCDF2DB2",
+          "entry": "run/144dpi/1280x800/0012-radius-gradient/reference.png"
+        },
+        {
+          "sha256": "58E0FF6155303CA9F40E8E682538D124B09A9B4598E6B4C4984AC6F4F70A008E",
+          "entry": "run/144dpi/1280x800/0012-radius-gradient/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0012-radius-gradient/reference-metrics.json"
+        },
+        {
+          "sha256": "868FF4E8B1CDC8DA86545D3CEE11A5C32EC7D5276108A58D8CB4C8B0BB0F2B1F",
+          "entry": "run/144dpi/1280x800/0012-radius-gradient/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0013-svg-paint",
+      "files": [
+        {
+          "sha256": "6980AAB6379AC7EF3E82D817F34DE7FF4B4107749E68637D812D167D0887455F",
+          "entry": "run/144dpi/1280x800/0013-svg-paint/reference.png"
+        },
+        {
+          "sha256": "DFDEFE5F21681A190840DEC404F21172FD4CD6FD1C8AE0631E0B839E36A1BB16",
+          "entry": "run/144dpi/1280x800/0013-svg-paint/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0013-svg-paint/reference-metrics.json"
+        },
+        {
+          "sha256": "E0011307E6A33D98C236A0B68E84356AC6391E55B5619E1ECF02DDA57071AAB4",
+          "entry": "run/144dpi/1280x800/0013-svg-paint/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0014-generated-boxes",
+      "files": [
+        {
+          "sha256": "FCAD780462B9C2E731B3E56674064EF160A618C0EFCEC04FBBAE85F1BBC8AAAA",
+          "entry": "run/144dpi/1280x800/0014-generated-boxes/reference.png"
+        },
+        {
+          "sha256": "5ED65AD80877DA7768A83DC3636BFDE09C6782BFEDD06A2CDAAB9CC6DCFDBD2C",
+          "entry": "run/144dpi/1280x800/0014-generated-boxes/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0014-generated-boxes/reference-metrics.json"
+        },
+        {
+          "sha256": "B2D7859973CEA60DCAC7CA23DE80BF63BF64A1CC6BE7FD801080F803F792436C",
+          "entry": "run/144dpi/1280x800/0014-generated-boxes/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0015-variables-layers-nesting",
+      "files": [
+        {
+          "sha256": "850F8C6E0406396757648B1FAFA0EC25186C3961F51F394EB5E3378D95C003D8",
+          "entry": "run/144dpi/1280x800/0015-variables-layers-nesting/reference.png"
+        },
+        {
+          "sha256": "DDF4094CC8CFD84E638E26CFC7F9E5BEA617AFC312E4FB77208B6DA150543D8E",
+          "entry": "run/144dpi/1280x800/0015-variables-layers-nesting/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0015-variables-layers-nesting/reference-metrics.json"
+        },
+        {
+          "sha256": "90BEC4B756E7DED5B79626256FB0A7E5084DF4DECD01F4C94AD7993F78FFE734",
+          "entry": "run/144dpi/1280x800/0015-variables-layers-nesting/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0016-responsive-grid",
+      "files": [
+        {
+          "sha256": "43C562C3447753EE130AE6953DCE832D15DDF9197FA06FE1F2624C29A5E01E14",
+          "entry": "run/144dpi/1280x800/0016-responsive-grid/reference.png"
+        },
+        {
+          "sha256": "90DD30C75E55E85D24AE0E8357376864475B921616DB8AD79C20A46CCC130187",
+          "entry": "run/144dpi/1280x800/0016-responsive-grid/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0016-responsive-grid/reference-metrics.json"
+        },
+        {
+          "sha256": "F51FA7D17AA73691FE1C30AB49662E880443197ABECC084ABD41F75DC37523F4",
+          "entry": "run/144dpi/1280x800/0016-responsive-grid/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0017-latin-inline",
+      "files": [
+        {
+          "sha256": "F230F41306B593365D17AD5F9B9A142B3EC85678350A14970F7AB04D5D8A1596",
+          "entry": "run/144dpi/1280x800/0017-latin-inline/reference.png"
+        },
+        {
+          "sha256": "D0125C8D2E3AF5DD8D363879D5E04666973163C1B4EEE13DE91382FB9A39619D",
+          "entry": "run/144dpi/1280x800/0017-latin-inline/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0017-latin-inline/reference-metrics.json"
+        },
+        {
+          "sha256": "0AD2A64991649642DC9DCC00D5AF584FF2188230830E2839F243A439D2453164",
+          "entry": "run/144dpi/1280x800/0017-latin-inline/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0018-mixed-writing",
+      "files": [
+        {
+          "sha256": "E0E2961CFABE3DEEDD0B676CBAE447A21F711EBD51F452E6FB62FF579854D982",
+          "entry": "run/144dpi/1280x800/0018-mixed-writing/reference.png"
+        },
+        {
+          "sha256": "24A9AF940C055474988885B60871317651584ED835CDF3BBBFE16C7D0EADCBA1",
+          "entry": "run/144dpi/1280x800/0018-mixed-writing/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0018-mixed-writing/reference-metrics.json"
+        },
+        {
+          "sha256": "566EAD0FB542F0DCC18077D5BF743CBC10D903303F1C701119DCA63CB72DD5CA",
+          "entry": "run/144dpi/1280x800/0018-mixed-writing/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0019-form-initial-state",
+      "files": [
+        {
+          "sha256": "7DDC15653CD1A09CC34B5B280B59F5DCDA778C610A6B46414541BD6C26FC812B",
+          "entry": "run/144dpi/1280x800/0019-form-initial-state/reference.png"
+        },
+        {
+          "sha256": "EE5587BA49F60682C03795803CE9D1BA6A8F1B20376F6D2169BCAC516BA3F7EC",
+          "entry": "run/144dpi/1280x800/0019-form-initial-state/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0019-form-initial-state/reference-metrics.json"
+        },
+        {
+          "sha256": "AF015ADBC69FB7663B51CC8E8AFB5F68766074D4DEC29924484415D69FE77C13",
+          "entry": "run/144dpi/1280x800/0019-form-initial-state/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    },
+    {
+      "caseId": "0020-complex-dashboard",
+      "files": [
+        {
+          "sha256": "1706219D483B70ED4A185EDEB32212BE92DA001865ACDA0A000D7316697108E1",
+          "entry": "run/144dpi/1280x800/0020-complex-dashboard/reference.png"
+        },
+        {
+          "sha256": "92B7A827D2C0EF5FAB65A93BF878E30DA55A50668B84103BF9594BF802351C66",
+          "entry": "run/144dpi/1280x800/0020-complex-dashboard/reference.json"
+        },
+        {
+          "sha256": "B6E134F16855D3188A893054543F575DED5CFA665EA56D5764511520BCC9ABEF",
+          "entry": "run/144dpi/1280x800/0020-complex-dashboard/reference-metrics.json"
+        },
+        {
+          "sha256": "9C90BACEB9E81B7D17CEC856573ABB1D435782A1987255A901FF29B7F4CB00D4",
+          "entry": "run/144dpi/1280x800/0020-complex-dashboard/reference-dom-snapshot.json"
+        }
+      ],
+      "dpi": 144,
+      "viewport": "1280x800"
+    }
+  ],
+  "note": "Native failures are retained in the run archive; a baseline does not assert native conformance"
+}

@@ -8,6 +8,10 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TWebFrameTests", "TWebFrame
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "BrowserContextRegression", "TWebFrame2\tests\BrowserContextRegression.vcxproj", "{3C3A8B50-1432-4C9D-BCEA-A92A0DCF6858}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CSSCompatibilityRegression", "TWebFrame2\tests\CSSCompatibilityRegression.vcxproj", "{CEB5CDB9-E27C-4C63-80D8-5488D24DC315}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "RenderingComparisonRegression", "TWebFrame2\tests\RenderingComparisonRegression.vcxproj", "{E18CFD17-8B66-4D11-9A24-7B83F027F539}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -16,6 +20,18 @@ Global
 		Release|x64 = Release|x64
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{E18CFD17-8B66-4D11-9A24-7B83F027F539}.Debug|Win32.ActiveCfg = Debug|x64
+		{E18CFD17-8B66-4D11-9A24-7B83F027F539}.Release|Win32.ActiveCfg = Release|x64
+		{E18CFD17-8B66-4D11-9A24-7B83F027F539}.Debug|x64.ActiveCfg = Debug|x64
+		{E18CFD17-8B66-4D11-9A24-7B83F027F539}.Debug|x64.Build.0 = Debug|x64
+		{E18CFD17-8B66-4D11-9A24-7B83F027F539}.Release|x64.ActiveCfg = Release|x64
+		{E18CFD17-8B66-4D11-9A24-7B83F027F539}.Release|x64.Build.0 = Release|x64
+		{CEB5CDB9-E27C-4C63-80D8-5488D24DC315}.Debug|Win32.ActiveCfg = Debug|x64
+		{CEB5CDB9-E27C-4C63-80D8-5488D24DC315}.Release|Win32.ActiveCfg = Release|x64
+		{CEB5CDB9-E27C-4C63-80D8-5488D24DC315}.Debug|x64.ActiveCfg = Debug|x64
+		{CEB5CDB9-E27C-4C63-80D8-5488D24DC315}.Debug|x64.Build.0 = Debug|x64
+		{CEB5CDB9-E27C-4C63-80D8-5488D24DC315}.Release|x64.ActiveCfg = Release|x64
+		{CEB5CDB9-E27C-4C63-80D8-5488D24DC315}.Release|x64.Build.0 = Release|x64
 		{3C3A8B50-1432-4C9D-BCEA-A92A0DCF6858}.Debug|Win32.ActiveCfg = Debug|x64
 		{3C3A8B50-1432-4C9D-BCEA-A92A0DCF6858}.Release|Win32.ActiveCfg = Release|x64
 		{3C3A8B50-1432-4C9D-BCEA-A92A0DCF6858}.Debug|x64.ActiveCfg = Debug|x64
