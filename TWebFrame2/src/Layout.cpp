@@ -1213,6 +1213,7 @@ float FontSize(const ComputedStyle& style){
 struct BasicClipShape {
     enum Kind { None, RoundedRect, Ellipse, Polygon } kind=None;
     LayoutRect rect;
+    D2D1_RECT_F ellipseHitRect{};
     CornerRadii radii;
     std::vector<D2D1_POINT_2F> points;
     D2D1_FILL_MODE fill=D2D1_FILL_MODE_WINDING;
@@ -1220,18 +1221,18 @@ struct BasicClipShape {
 };
 
 bool ClipPosition(const std::vector<std::wstring>& words,float width,float height,
-                  float viewport,float font,float& x,float& y){
-    x=width/2;y=height/2;
+                  float viewport,float font,float& x,float& y,float scale=1){
+    x=width*scale/2;y=height*scale/2;
     const auto length=[&](const std::wstring& token,float reference){
         return StyleSheet::Length(token,reference,viewport,
-            std::numeric_limits<float>::quiet_NaN(),font);
+            std::numeric_limits<float>::quiet_NaN(),font,scale);
     };
     const auto horizontal=[](const std::wstring& token){return token==L"left"||token==L"right";};
     const auto vertical=[](const std::wstring& token){return token==L"top"||token==L"bottom";};
     const auto axis=[&](const std::wstring& token,float extent,bool second){
-        if(token==L"center")return extent/2;
+        if(token==L"center")return extent*scale/2;
         if(token==(second?L"top":L"left"))return 0.0f;
-        if(token==(second?L"bottom":L"right"))return extent;
+        if(token==(second?L"bottom":L"right"))return extent*scale;
         if(horizontal(token)||vertical(token))return std::numeric_limits<float>::quiet_NaN();
         return length(token,extent);
     };
@@ -1252,19 +1253,19 @@ bool ClipPosition(const std::vector<std::wstring>& words,float width,float heigh
             if((isX||isY)&&i+1<words.size()&&!horizontal(words[i+1])&&!vertical(words[i+1])&&words[i+1]!=L"center"){
                 offset=length(words[++i],isX?width:height);if(!std::isfinite(offset))return false;
             }
-            if(isX){if(hasX)return false;hasX=true;x=edge==L"right"?width-offset:offset;}
-            else if(isY){if(hasY)return false;hasY=true;y=edge==L"bottom"?height-offset:offset;}
+            if(isX){if(hasX)return false;hasX=true;x=edge==L"right"?width*scale-offset:offset;}
+            else if(isY){if(hasY)return false;hasY=true;y=edge==L"bottom"?height*scale-offset:offset;}
             else ++centers;
         }
-        if(centers&&!hasX){hasX=true;x=width/2;--centers;}
-        if(centers&&!hasY){hasY=true;y=height/2;--centers;}
+        if(centers&&!hasX){hasX=true;x=width*scale/2;--centers;}
+        if(centers&&!hasY){hasY=true;y=height*scale/2;--centers;}
         if(centers)return false;
         if(!hasX||!hasY)return false;
     }else return false;
     return std::isfinite(x)&&std::isfinite(y);
 }
 
-BasicClipShape ResolveBasicClip(const LayoutBox& box,float viewport){
+BasicClipShape ResolveBasicClip(const LayoutBox& box,float viewport,bool hitTest=false){
     BasicClipShape result;
     const auto raw=ToLower(Trim(box.style.Get(L"clip-path",L"none")));
     if(raw.empty()||raw==L"none")return result;
@@ -1337,26 +1338,39 @@ BasicClipShape ResolveBasicClip(const LayoutBox& box,float viewport){
         const auto words=Words(arguments);const auto at=std::find(words.begin(),words.end(),L"at");
         const size_t count=static_cast<size_t>(at-words.begin());const bool circle=name==L"circle";
         if(count>(circle?1u:2u)||(!circle&&count==1))return {};
-        float x=0,y=0;
         if(at!=words.end()&&at+1==words.end())return {};
-        if(!ClipPosition(at==words.end()?std::vector<std::wstring>{}:std::vector<std::wstring>(at+1,words.end()),area.width,area.height,viewport,font,x,y))return {};
-        const auto radial=[&](const std::wstring& token,float extent,float center){
-            const float first=std::abs(center),second=std::abs(extent-center);
-            if(token==L"closest-side")return std::min(first,second);
-            if(token==L"farthest-side")return std::max(first,second);
-            return length(token,extent);
-        };
-        float rx=0,ry=0;
+        const auto position=at==words.end()?std::vector<std::wstring>{}:std::vector<std::wstring>(at+1,words.end());
         const auto first=count?words[0]:L"closest-side";
-        if(circle){
-            if(first==L"closest-side"||first==L"farthest-side"){
-                const float horizontal=radial(first,area.width,x),vertical=radial(first,area.height,y);
-                rx=first==L"closest-side"?std::min(horizontal,vertical):std::max(horizontal,vertical);
-            }else rx=length(first,std::hypot(area.width,area.height)/std::sqrt(2.0f));
-            ry=rx;
-        }else{rx=radial(first,area.width,x);ry=radial(count?words[1]:L"closest-side",area.height,y);}
-        if(!std::isfinite(rx)||!std::isfinite(ry)||rx<0||ry<0)return {};
-        result.kind=BasicClipShape::Ellipse;result.rect={area.x+x-rx,area.y+y-ry,2*rx,2*ry};
+        const auto ellipseRect=[&](float scale,float originX,float originY,LayoutRect& rect){
+            float x=0,y=0;
+            if(!ClipPosition(position,area.width,area.height,viewport,font,x,y,scale))return false;
+            const auto radial=[&](const std::wstring& token,float extent,float center){
+                const float firstDistance=std::abs(center),secondDistance=std::abs(extent*scale-center);
+                if(token==L"closest-side")return std::min(firstDistance,secondDistance);
+                if(token==L"farthest-side")return std::max(firstDistance,secondDistance);
+                return StyleSheet::Length(token,extent,viewport,std::numeric_limits<float>::quiet_NaN(),font,scale);
+            };
+            float rx=0,ry=0;
+            if(circle){
+                if(first==L"closest-side"||first==L"farthest-side"){
+                    const float horizontal=radial(first,area.width,x),vertical=radial(first,area.height,y);
+                    rx=first==L"closest-side"?std::min(horizontal,vertical):std::max(horizontal,vertical);
+                }else rx=radial(first,std::hypot(area.width,area.height)/std::sqrt(2.0f),0);
+                ry=rx;
+            }else{rx=radial(first,area.width,x);ry=radial(count?words[1]:L"closest-side",area.height,y);}
+            if(!std::isfinite(rx)||!std::isfinite(ry)||rx<0||ry<0)return false;
+            rect={originX+x-rx,originY+y-ry,2*rx,2*ry};return true;
+        };
+        if(!ellipseRect(1,area.x,area.y,result.rect))return {};
+        result.kind=BasicClipShape::Ellipse;
+        // Browser paths are constructed in local device coordinates. Resolve
+        // lengths at that scale before rounding to float, rather than scale
+        // a global CSS rectangle whose translated edges have already rounded.
+        if(hitTest){
+            const float scale=std::max(.01f,box.style.deviceScale);LayoutRect hitRect;
+            if(ellipseRect(scale,(area.x-box.rect.x)*scale,(area.y-box.rect.y)*scale,hitRect))
+                result.ellipseHitRect=D2D1::RectF(hitRect.x,hitRect.y,hitRect.x+hitRect.width,hitRect.y+hitRect.height);
+        }
     }else if(name==L"polygon"){
         auto vertices=CommaSeparated(arguments);size_t first=0;
         if(!vertices.empty()&&(vertices[0]==L"evenodd"||vertices[0]==L"nonzero")){
@@ -1397,10 +1411,13 @@ Microsoft::WRL::ComPtr<ID2D1Geometry> BasicClipGeometry(ID2D1Factory* factory,co
 }
 
 bool BasicClipAllowsPoint(const LayoutBox& box,float x,float y,float viewport){
-    const auto shape=ResolveBasicClip(box,viewport);if(shape.kind==BasicClipShape::None)return true;
+    const auto shape=ResolveBasicClip(box,viewport,true);if(shape.kind==BasicClipShape::None)return true;
     if(shape.kind!=BasicClipShape::Polygon&&(shape.rect.width<=0||shape.rect.height<=0))return false;
     if(!shape.referenceOnly&&shape.kind!=BasicClipShape::Polygon&&!shape.rect.Contains(x,y))return false;
     if(!shape.referenceOnly&&shape.kind==BasicClipShape::Ellipse){
+        const float scale=std::max(.01f,box.style.deviceScale);bool contains=false;
+        if(rasterSkia.EllipseContains(shape.ellipseHitRect,
+            D2D1::Point2F((x-box.rect.x)*scale,(y-box.rect.y)*scale),contains))return contains;
         const auto& r=shape.rect;const float dx=(x-r.x-r.width/2)/(r.width/2),dy=(y-r.y-r.height/2)/(r.height/2);
         return dx*dx+dy*dy<=1;
     }
@@ -1441,6 +1458,30 @@ bool HitRectContains(const LayoutRect& rect,float x,float y,float scale){
     const float size=1/std::max(.01f,scale);
     return rect.width>0&&rect.height>0&&left+size>rect.x&&left<rect.x+rect.width&&
         top+size>rect.y&&top<rect.y+rect.height;
+}
+
+bool RoundedBorderAllowsPoint(const LayoutBox& box,float x,float y,float viewport,float scale){
+    const auto radii=ResolveCornerRadii(box.style,box.rect.width,box.rect.height,viewport);
+    if(!radii.Any())return true;
+    // Border radius limits this box's own hit region. Visible overflow from
+    // descendants must still be tested before rejecting the parent's corner.
+    const auto& r=box.rect;const float size=1/std::max(.01f,scale);
+    const float left=std::max(r.x,std::floor(x*64)/64),top=std::max(r.y,std::floor(y*64)/64);
+    const float right=std::min(r.x+r.width,std::floor(x*64)/64+size);
+    const float bottom=std::min(r.y+r.height,std::floor(y*64)/64+size);
+    if(left>=right||top>=bottom)return false;
+    for(size_t i=0;i<4;++i){
+        const auto radius=radii.corners[i];if(radius.x<=0||radius.y<=0)continue;
+        const bool startX=i==0||i==3,startY=i<2;
+        const float cx=startX?r.x+radius.x:r.x+r.width-radius.x;
+        const float cy=startY?r.y+radius.y:r.y+r.height-radius.y;
+        if((startX?right<cx:left>cx)&&(startY?bottom<cy:top>cy)){
+            const float dx=((startX?right:left)-cx)/radius.x;
+            const float dy=((startY?bottom:top)-cy)/radius.y;
+            if(dx*dx+dy*dy>1)return false;
+        }
+    }
+    return true;
 }
 
 IDWriteFactory* SharedWriteFactory();
@@ -10862,6 +10903,7 @@ std::shared_ptr<Node> LayoutEngine::HitTestBox(const LayoutBox& box,float x,floa
             if(auto node=HitTestBox(**it,x,y))return node;
     }
     if(!inside||box.style.Is(L"pointer-events",L"none")||box.style.Is(L"visibility",L"hidden"))return {};
+    if(!RoundedBorderAllowsPoint(box,x,y,viewportWidth_,deviceScale_))return {};
     if(box.generatedFrom)return box.generatedFrom;
     return box.node&&box.node->type==NodeType::Element?box.node:box.node->parent.lock();
 }

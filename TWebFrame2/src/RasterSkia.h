@@ -40,6 +40,11 @@ class RasterSkia {
     int (*save_)(void*)=nullptr;void (*restore_)(void*)=nullptr;
     void (*clip_)(void*,const D2D1_RECT_F*,int,bool)=nullptr;
     void (*clipRRect_)(void*,void*,int,bool)=nullptr;
+    bool hitPathsAttempted_=false,hitPathsLoaded_=false;
+    void* (*newPathBuilder_)()=nullptr;void (*deletePathBuilder_)(void*)=nullptr;
+    void (*addOval_)(void*,const D2D1_RECT_F*,int)=nullptr;
+    void* (*detachPath_)(void*)=nullptr;void (*deletePath_)(void*)=nullptr;
+    bool (*pathContains_)(const void*,float,float)=nullptr;
     bool InitializeRuntime(){
         if(attempted_)return loaded_;attempted_=true;
         wchar_t executable[32768]{};const DWORD length=GetModuleFileNameW(nullptr,executable,32768);
@@ -72,6 +77,27 @@ class RasterSkia {
 public:
     RasterSkia()=default;RasterSkia(const RasterSkia&)=delete;RasterSkia& operator=(const RasterSkia&)=delete;
     ~RasterSkia(){if(library_)FreeLibrary(library_);}
+    bool EllipseContains(const D2D1_RECT_F& rect,const D2D1_POINT_2F& point,bool& contains){
+        if(!std::isfinite(rect.left)||!std::isfinite(rect.top)||
+           !std::isfinite(rect.right)||!std::isfinite(rect.bottom)||
+           !std::isfinite(point.x)||!std::isfinite(point.y)||
+           rect.right<=rect.left||rect.bottom<=rect.top||!InitializeRuntime())return false;
+        // Keep optional hit-test exports independent of CPU painting support.
+        if(!hitPathsAttempted_){
+            hitPathsAttempted_=true;
+            hitPathsLoaded_=Load(newPathBuilder_,"sk_pathbuilder_new")&&
+                Load(deletePathBuilder_,"sk_pathbuilder_delete")&&
+                Load(addOval_,"sk_pathbuilder_add_oval")&&
+                Load(detachPath_,"sk_pathbuilder_detach_path")&&
+                Load(deletePath_,"sk_path_delete")&&Load(pathContains_,"sk_path_contains");
+        }
+        if(!hitPathsLoaded_)return false;
+        void* builder=newPathBuilder_();if(!builder)return false;
+        addOval_(builder,&rect,0);
+        void* path=detachPath_(builder);deletePathBuilder_(builder);
+        if(!path)return false;
+        contains=pathContains_(path,point.x,point.y);deletePath_(path);return true;
+    }
     bool RoundedRect(BYTE* pixels,UINT stride,UINT width,UINT height,const D2D1_RECT_F& cssRect,
         const std::array<D2D1_POINT_2F,4>& cssRadii,unsigned int color,float sx,float sy,
         const D2D1_POINT_2F& translation,const D2D1_RECT_F& clip,float sigma=0,

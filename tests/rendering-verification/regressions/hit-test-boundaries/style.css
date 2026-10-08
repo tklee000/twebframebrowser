@@ -1,0 +1,4 @@
+html,body{margin:0;background:white}body{position:relative;width:800px;height:600px}
+.cell{position:absolute;width:150px;height:94px}
+.shape{position:absolute;left:12px;top:10px;box-sizing:border-box;width:112px;height:70px;border:4px solid #26374d;padding:6px;background:#df4936}
+.child{position:absolute;left:-4px;top:-4px;width:24px;height:24px;background:#21965e}

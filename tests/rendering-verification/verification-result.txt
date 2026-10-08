@@ -1,3 +1,9 @@
+2026-10-08 HIT-TEST 회귀 수정 및 검증 완료.
+기존 clip 클릭 영역 28실패를 수정: border-radius가 제한하는 자체 클릭 영역은 visible 자손 검사 후 적용하고, circle/ellipse는 DPI 길이 계산 시 float 변환 전 배율을 적용한 로컬 장치 좌표의 Skia 경로로 판정.
+기존 clip-path/clip-path-rects 입력과 기대 데이터 SHA-256 유지. 현재 WebView2 Runtime 154.0.4258.62에서 두 DPI 기대값을 재확인했고, hit-test-boundaries의 8개 추가 사례/336개 클릭 probe도 독립 측정.
+루트 솔루션 x64 Release 빌드 성공. 최신 루트 엔진 라이브러리로 연결한 C++ 19프로젝트 39,804검사 모두 통과; 그중 ClipPathRegression 20,552검사 모두 통과. Python 픽셀 비교기 9검사 통과.
+현재 검사 로그: .work/clip-hit-fix-20261008-111127. 이번 HIT-TEST 검증에는 전체 PNG 재비교가 포함되지 않으며, 아래는 이전 전체 PNG 검증 기록이다.
+
 2026-10-07 WebView2 / TWebFrame2: 우선 수정 검증 완료, 전체 100% 목표는 미완료.
 원본 1,000문서·보관 ZIP 해시 유지. 800x600 CSS viewport 첫 화면, 96/144 DPI. PNG 리사이즈·특정 ID/문서 보정 없음. RGBA 허용 오차 0.
 이번 공통 엔진 변경: CSS.cpp, Layout.cpp, Layout.h. 혼합 inline 첫 줄/후속 줄 배치, 공백·연결 단어·원본 DOM 문자 위치, 명시 폭 grid 항목의 auto 행 높이 측정, 분할 회피 블록의 다단 배치 및 columns shorthand.

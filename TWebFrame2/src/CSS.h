@@ -96,8 +96,11 @@ public:
     bool MutationRequiresBroadInvalidation() const noexcept { return mutationRequiresBroadInvalidation_; }
     std::uint64_t Version() const noexcept { return version_; }
 
+    // Apply outputScale before conversion to float so device-space paths do
+    // not accumulate a second rounding of percentage or calc() lengths.
     static float Length(const std::wstring& value, float reference, float viewport,
-                        float fallback = 0.0f, float fontSize = 16.0f);
+                        float fallback = 0.0f, float fontSize = 16.0f,
+                        float outputScale = 1.0f);
     static unsigned int Color(const std::wstring& value, unsigned int fallback = 0xff000000u);
 
 private:

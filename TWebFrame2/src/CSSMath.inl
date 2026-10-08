@@ -124,13 +124,14 @@ class CssMath {
     }
 public:
     CssMath(std::wstring text,float reference,float viewport,float font):text_(std::move(text)),reference_(reference),viewport_(viewport),font_(font){}
-    float Evaluate(float fallback){
+    float Evaluate(float fallback,float outputScale){
         auto result=Primary();Space();
+        result.value*=outputScale;
         return result.valid&&position_==text_.size()&&std::isfinite(result.value)&&std::abs(result.value)<=std::numeric_limits<float>::max()?static_cast<float>(result.value):fallback;
     }
 };
 }
 
-float StyleSheet::Length(const std::wstring& raw,float reference,float viewport,float fallback,float fontSize){
-    return CssMath(ToLower(Trim(raw)),reference,viewport,fontSize).Evaluate(fallback);
+float StyleSheet::Length(const std::wstring& raw,float reference,float viewport,float fallback,float fontSize,float outputScale){
+    return CssMath(ToLower(Trim(raw)),reference,viewport,fontSize).Evaluate(fallback,outputScale);
 }
