@@ -1,0 +1,29 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head><body>
+<div class="table" id="direct" data-probe>
+  <div class="cell red" id="direct-a" data-probe></div>
+  <div class="cell blue" id="direct-b" data-probe></div>
+</div>
+<div class="table" id="blocks" data-probe>
+  <div class="block red" id="block-a" data-probe></div>
+  <div class="block blue" id="block-b" data-probe></div>
+</div>
+<div class="table" id="mixed" data-probe>
+  <div class="row"><div class="block red" id="mixed-a" data-probe></div><div class="block blue" id="mixed-b" data-probe></div><div class="cell green" id="mixed-c" data-probe></div></div>
+</div>
+<div class="table" id="groups" data-probe>
+  <div class="footer"><div class="row"><div class="cell red" id="footer-first" data-probe></div></div></div>
+  <div class="group"><div class="row"><div class="cell blue" id="body-row" data-probe></div></div></div>
+  <div class="header"><div class="row"><div class="cell green" id="header-first" data-probe></div></div></div>
+  <div class="header"><div class="row"><div class="cell blue" id="header-second" data-probe></div></div></div>
+  <div class="footer"><div class="row"><div class="cell green" id="footer-second" data-probe></div></div></div>
+  <div class="caption" id="caption-top" data-probe></div><div class="caption bottom" id="caption-bottom" data-probe></div>
+</div>
+<div class="table rtl" id="rtl" data-probe><div class="row"><div class="cell red" id="rtl-a" data-probe></div><div class="cell blue" id="rtl-b" data-probe></div></div></div>
+<div class="table" id="missing-row" data-probe><div class="group"><div class="cell red" id="group-a" data-probe></div><div class="cell blue" id="group-b" data-probe></div></div></div>
+<div id="orphans" data-probe><div class="cell red" id="orphan-a" data-probe></div><div class="cell blue" id="orphan-b" data-probe></div></div>
+<div class="inline-holder" id="inline-holder" data-probe><span class="inline-table" id="inline-table" data-probe><span class="row"><span class="cell red" id="inline-a" data-probe></span><span class="cell blue" id="inline-b" data-probe></span></span></span></div>
+<table class="table rtl span-table" id="rtl-span" data-probe><colgroup id="span-columns" data-probe><col span="2" class="wide-column" id="span-column" data-probe><col class="narrow-column" id="last-column" data-probe></colgroup><tbody><tr><td colspan="2" class="cell red" id="span-cell" data-probe></td><td class="cell blue" id="span-last" data-probe></td></tr><tr><td class="cell red" id="span-a" data-probe></td><td class="cell green" id="span-b" data-probe></td><td class="cell blue" id="span-c" data-probe></td></tr></tbody></table>
+<div class="table rtl collapsed-table" id="collapsed" data-probe><div class="row"><div class="cell red" id="collapsed-a" data-probe></div><div class="cell blue" id="collapsed-b" data-probe></div></div></div>
+<div class="inheritance-holder"><table class="inheritance-html" id="inherit-html" data-probe><tr><td class="cell red" id="inherit-html-cell" data-probe></td></tr></table><div class="table inheritance-css" id="inherit-css" data-probe><div class="cell blue" id="inherit-css-cell" data-probe></div></div></div>
+</body></html>

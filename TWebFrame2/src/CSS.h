@@ -50,6 +50,8 @@ struct ComputedStyle {
     // Used-value layout metadata. CSS declarations remain device independent,
     // while borders snap to the physical-pixel grid like browser engines do.
     float deviceScale = 1.0f;
+    // Computed root font size in CSS pixels, independent of device scale.
+    float rootFontSize = 16.0f;
     std::wstring Get(const std::wstring& name, const std::wstring& fallback = L"") const;
     bool Is(const std::wstring& name, const std::wstring& value) const;
 };
@@ -78,6 +80,10 @@ public:
     ComputedStyle Compute(const std::shared_ptr<Node>& node,
                           const ComputedStyle* parent = nullptr,
                           const std::wstring& pseudo = L"") const;
+    // Anonymous formatting boxes inherit computed values without matching
+    // author selectors or acquiring the originating element's decorations.
+    static ComputedStyle AnonymousStyle(const ComputedStyle& parent,
+                                        const std::wstring& display);
     const std::vector<CssRule>& Rules() const { return rules_; }
     const CssKeyframes* FindKeyframes(const std::shared_ptr<Node>& node,const std::wstring& name) const;
     bool UsesNthChild() const noexcept { return usesNthChild_; }

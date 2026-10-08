@@ -16,6 +16,7 @@ namespace TWebFrame::Internal {
 
 struct RasterImageFrame;
 struct RasterImage;
+struct TableGridModel;
 
 struct LayoutRect {
     float x = 0, y = 0, width = 0, height = 0;
@@ -44,11 +45,38 @@ struct LayoutBox {
     ComputedStyle style;
     LayoutRect rect;
     LayoutRect content;
+    // DOM bounds for an inline split around block children. Relative offsets
+    // survive ancestor scroll/position translation without walking children.
+    bool splitInlineRectValid = false;
+    LayoutRect splitInlineRectOffsets;
+    std::vector<LayoutRect> splitInlinePaintOffsets;
+    mutable bool inFlowBlockChildrenValid = false, inFlowBlockChildren = false;
+    bool inlineContinuationValid = false;
+    float inlineContinuationX = 0, inlineContinuationY = 0, inlineContinuationHeight = 0;
+    // Relative offsets are applied after normal flow. Keep only the affected
+    // direct children so ordinary containers do not scan again on relayout.
+    std::vector<LayoutBox*> relativeChildren;
+    bool definiteContentHeight = false;
+    float relativeOffsetX = 0, relativeOffsetY = 0;
+    // Stable gutters and forced vertical bars are resolved with the containing
+    // block. Reuse their physical insets for child layout and CSSOM sizes.
+    bool verticalGutterReserved = false;
+    float scrollbarGutterLeft = 0, scrollbarGutterRight = 0;
+    bool horizontalGutterReserved = false;
+    float scrollbarGutterBottom = 0;
+    float autoScrollbarHeightExpansion = 0;
+    // Store the rectangular child clip relative to rect. Scroll/sticky moves
+    // then reuse it without recomputing scrollbar pseudo styles per paint.
+    bool overflowClipValid = false, overflowFlagsValid = false, clipsOverflow = false;
+    LayoutRect overflowClipOffsets;
     // Half of the winning collapsed edge belongs to each adjacent cell.
     // Keep used widths separate from the authored computed border styles.
     mutable bool collapsedBordersResolved = false;
     mutable float collapsedTop = 0, collapsedRight = 0;
     mutable float collapsedBottom = 0, collapsedLeft = 0;
+    // Share the table grid and resolved tracks across intrinsic measurement,
+    // layout and border painting. Relayout invalidates this with other sizes.
+    mutable std::shared_ptr<TableGridModel> tableGrid;
     // Conservative subtree geometry for rejecting off-screen stacking contexts
     // before walking their ancestor clips or testing individual descendants.
     LayoutRect subtreeBounds;
@@ -61,6 +89,7 @@ struct LayoutBox {
     std::vector<LayoutBox*> verticallyOrderedChildren;
     std::vector<LayoutBox*> overlayChildren;
     const LayoutBox* deferredStackingScope = nullptr;
+    bool establishesStackingContext = false;
     // Scroll changes positions, not styles or tree membership. Cache the boxes
     // to translate while constructing traversal metadata, including text runs.
     std::vector<LayoutBox*> scrollTranslationBoxes;
@@ -70,11 +99,20 @@ struct LayoutBox {
     bool preserveLeadingWhitespace = false;
     bool preserveTrailingWhitespace = false;
     bool trimLeadingLineWhitespace = false;
+    bool inlineTextPositioned = false;
+    bool textFlowFragment = false;
+    bool inlineFlowFragments = false;
     bool containsSticky = false;
     bool stickyFlowYValid = false;
     float stickyFlowY = 0.0f;
     float scrollWidth = 0.0f;
     float scrollHeight = 0.0f;
+    bool textareaVerticalScrollbar = false, textareaHorizontalScrollbar = false;
+    // CSSOM sizes include padding and integer CSS-pixel rounding. Cache the
+    // descendant overflow once per layout; geometry reads must not walk a
+    // large subtree for each queried element.
+    float cssOverflowLeft = 0.0f, cssOverflowRight = 0.0f, cssOverflowBottom = 0.0f;
+    float cssScrollWidth = 0.0f, cssScrollHeight = 0.0f;
     float appliedScrollLeft = 0.0f;
     float appliedScrollTop = 0.0f;
     // The document root remains the authored body box for normal-flow
@@ -82,6 +120,7 @@ struct LayoutBox {
     // viewport. Keep that scrollport separate so body margins do not pull the
     // page scrollbar away from the client edge.
     bool viewportScrollContainer = false;
+    float viewportGutterLeft = 0, viewportGutterRight = 0, viewportGutterBottom = 0;
     LayoutRect viewportScrollport;
     std::wstring viewportOverflowX;
     std::wstring viewportOverflowY;
@@ -94,6 +133,14 @@ struct LayoutBox {
     mutable float naturalWidth = 0.0f;
     mutable bool minimumWidthValid = false;
     mutable float minimumWidth = 0.0f;
+    mutable bool intrinsicMinimumWidthValid = false;
+    mutable float intrinsicMinimumWidth = 0.0f;
+    // Content measurements exclude the element's own preferred/min/max size.
+    // Descendant contributions still include their authored size constraints.
+    mutable bool maxContentWidthValid = false;
+    mutable float maxContentWidth = 0.0f;
+    mutable bool minContentWidthValid = false;
+    mutable float minContentWidth = 0.0f;
     mutable bool naturalHeightValid = false;
     mutable float naturalHeightReference = 0.0f;
     mutable float naturalHeight = 0.0f;
@@ -173,6 +220,9 @@ public:
     std::wstring DumpRenderingTextJson() const;
     ComputedStyle StyleForRendering(const std::shared_ptr<Node>& node) const;
     std::wstring DumpRenderingStyleJson(const ComputedStyle& style) const;
+    struct ElementSizes { float clientWidth=0,clientHeight=0,scrollWidth=0,scrollHeight=0; };
+    ElementSizes ReadElementSizes(const std::shared_ptr<Node>& node) const;
+    bool ReadElementRect(const std::shared_ptr<Node>& node,LayoutRect& rect) const;
     const LayoutBox* Root() const { return root_.get(); }
     const LayoutBox* BoxFor(const std::shared_ptr<Node>& node) const;
     bool VisualBounds(const std::shared_ptr<Node>& node, LayoutRect& bounds) const;
@@ -198,6 +248,7 @@ private:
     void LayoutRoot();
     void FinalizeScroll(LayoutBox& box);
     void LayoutBlock(LayoutBox& box, bool definiteHeight = true);
+    void LayoutColumns(LayoutBox& box);
     void LayoutFlex(LayoutBox& box);
     void LayoutGrid(LayoutBox& box, bool definiteWidth, bool definiteHeight);
     void LayoutTable(LayoutBox& box);
@@ -210,10 +261,10 @@ private:
                              const LayoutRect& clipBounds);
     void PaintBox(ID2D1RenderTarget* target, IDWriteFactory* factory, LayoutBox& box,
                   const LayoutRect& clipBounds,
-                  const LayoutBox* deferredScope = nullptr);
+                  const LayoutBox* deferredScope = nullptr, bool paintDeferredRoot = false);
     void PaintScrollbars(ID2D1RenderTarget* target, const LayoutBox& box);
     std::shared_ptr<Node> HitTestStackingContext(const LayoutBox& box, float x, float y) const;
-    std::shared_ptr<Node> HitTestBox(const LayoutBox& box, float x, float y) const;
+    std::shared_ptr<Node> HitTestBox(const LayoutBox& box, float x, float y, bool transformApplied = false) const;
     bool ScrollBox(LayoutBox& box, float x, float y, float wheelDelta,
                    std::shared_ptr<Node>* scrolledNode, bool horizontal);
     bool BeginScrollbarBox(LayoutBox& box, float x, float y,

@@ -1,0 +1,22 @@
+{
+  "oracle": "Independent unmodified WebView2 DOM rectangles",
+  "runtime": "154.0.4258.62",
+  "cssViewport": [
+    800,
+    600
+  ],
+  "dpi": [
+    96,
+    144
+  ],
+  "probes": 64,
+  "groups": 19,
+  "measurementScriptSha256": "987bdb76d3b578613b6a02b1caf5cb23c77397de60acb3d43295fc9eba210d5f",
+  "inputAndExpectedSha256": {
+    "index.html": "1ffa7668d1b81062b3574524bdbb3ec1a61039a0246e55dacc0d537f5e50b089",
+    "style.css": "a0cfbe882999e39aa2f6d18ae67a9d5ccc63564709cad01944f1f7ad89b56098",
+    "expected-96.tsv": "72abe653ab16553139de651d1eb51d0228cfbf027cadfb5cbea3bcd6025e9f42",
+    "expected-144.tsv": "ff2713a1a29e2b995212d9949bd0cf5b366062f25a928f6a60261646901611ba"
+  },
+  "engineReadsExpectedData": false
+}

@@ -96,11 +96,11 @@ public:
             if(brushOrigin){deviceBrushOrigin={brushOrigin->x*sx,brushOrigin->y*sy};brushOrigin=&deviceBrushOrigin;}
             sx=sy=1;
         }
-        // Every operation stays in CPU memory. Commit after successful drawing.
-        std::vector<BYTE> output(static_cast<size_t>(width)*height*4);
-        for(UINT y=0;y<height;++y)std::memcpy(output.data()+static_cast<size_t>(y)*width*4,pixels+static_cast<size_t>(y)*stride,width*4);
+        // The caller holds the CPU bitmap lock until this surface is released.
+        // Prepare all resources before drawing, then paint into those pixels;
+        // copying the entire viewport twice for each small rounded box is costly.
         const Info info{nullptr,static_cast<int>(width),static_cast<int>(height),6,1};
-        void* surface=newRasterSurface_(&info,output.data(),width*4,nullptr,nullptr,nullptr);
+        void* surface=newRasterSurface_(&info,pixels,stride,nullptr,nullptr,nullptr);
         void* paint=newPaint_();void* outer=newRRect_();
         void* inside=inner?newRRect_():nullptr;void* mask=sigma>0?newBlur_(0,sigma,true):nullptr;
         void* excluded=exclusion?newRRect_():nullptr;
@@ -146,7 +146,6 @@ public:
                 if(shadowOffset)translate_(canvas,shadowOffset->x,shadowOffset->y);
                 if(inside&&!stroke)drawDRRect_(canvas,outer,inside,paint);else drawRRect_(canvas,outer,paint);
                 restore_(canvas);
-                if(ok)for(UINT y=0;y<height;++y)std::memcpy(pixels+static_cast<size_t>(y)*stride,output.data()+static_cast<size_t>(y)*width*4,width*4);
             }
         }
         if(shader)unrefShader_(shader);if(image)unrefImage_(image);if(mask)unrefMask_(mask);

@@ -2,5 +2,8 @@
 # Preserve them across Windows and Unix checkouts.
 /TWebFrame2/tests/rendering/** -text
 
+# Preserve the original bytes of the new rendering corpus and regression inputs.
+/tests/** -text
+
 # Keep the pinned runtime and upstream license/notice bytes unchanged.
 /TWebFrame2/vendor/skia/** -text

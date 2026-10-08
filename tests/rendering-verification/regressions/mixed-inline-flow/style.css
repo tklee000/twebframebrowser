@@ -1,0 +1,6 @@
+html,body{margin:0;background:white}
+body{font:12px/18px Arial;color:#172e40;display:grid;grid-template-columns:repeat(3,320px);gap:12px;align-items:start;padding:8px}
+.sample{padding:4px;border:1px solid #acbbc8;box-sizing:border-box}
+.badge{display:inline-block;background:#236747;color:white;font:10px/12px Consolas;padding:1px 4px;vertical-align:2px}
+.tail{font-style:normal;color:#7a231c}
+.after{height:4px;background:#accbdc;margin-top:3px}

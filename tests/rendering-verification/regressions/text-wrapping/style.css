@@ -1,0 +1,17 @@
+html{background:white}body{margin:0;font:20px/24px Consolas;color:#162e40}.sample{position:absolute;width:174px;padding:0}.content{width:55px;background:#e5eef1}.after{width:55px;height:8px;background:#c4d8df}
+#normal{left:10px;top:10px;}
+#anywhere{left:204px;top:10px;overflow-wrap:anywhere}
+#breakword{left:398px;top:10px;overflow-wrap:break-word}
+#breakall{left:592px;top:10px;word-break:break-all}
+#emergency{left:10px;top:154px;overflow-wrap:anywhere}
+#wordnormal{left:204px;top:154px;}
+#nowrap{left:398px;top:154px;white-space:nowrap;word-break:break-all;overflow-wrap:anywhere}
+#pre{left:592px;top:154px;white-space:pre;overflow-wrap:anywhere}
+#prewrap{left:10px;top:298px;white-space:pre-wrap;overflow-wrap:anywhere}
+#nested{left:204px;top:298px;overflow-wrap:anywhere}
+#inherited{left:398px;top:298px;word-break:break-all}
+#legacy{left:592px;top:298px;word-break:break-word}
+#cachingnormal{left:10px;top:442px;}
+#cachingbreakall{left:204px;top:442px;word-break:break-all}
+#clusters{left:398px;top:442px;word-break:break-all}
+#spaced{left:592px;top:442px;word-break:break-all;letter-spacing:1px}

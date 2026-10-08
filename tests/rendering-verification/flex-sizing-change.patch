@@ -1,0 +1,244 @@
+--- before/TWebFrame2/src/Layout.cpp
++++ after/TWebFrame2/src/Layout.cpp
+@@ -8507,9 +8507,116 @@
+             decoration+std::max(0.0f,value);
+     };
+     const auto wrapMode=ToLower(Trim(box.style.Get(L"flex-wrap",L"nowrap")));
++    struct MainMetrics {
++        float base=0,minimum=0,maximum=0,hypothetical=0;
++        float decoration=0,margin=0,grow=0,shrink=0;
++    };
++    std::vector<MainMetrics> mainMetrics;mainMetrics.reserve(children.size());
++    for(const auto* child:children){
++        MainMetrics item;
++        const auto margin=EdgeValues(child->style,L"margin",box.content.width,viewportWidth_);
++        item.margin=column?margin.top+margin.bottom:margin.left+margin.right;
++        item.decoration=decorationExtent(*child,!column);
++        item.grow=std::max(0.0f,StyleSheet::Length(child->style.Get(L"flex-grow",L"0"),0,0,0));
++        item.shrink=std::max(0.0f,StyleSheet::Length(child->style.Get(L"flex-shrink",L"1"),0,0,1));
++        const auto outerLength=[&](const std::wstring& raw){
++            if(!column&&IsIntrinsicWidth(raw)){
++                float content=IntrinsicContentWidth(*child,raw==L"min-content");
++                if(raw==L"fit-content")content=std::max(IntrinsicContentWidth(*child,true),
++                    std::min(content,std::max(0.0f,mainSize-item.margin-item.decoration)));
++                return content+item.decoration+item.margin;
++            }
++            const float value=StyleSheet::Length(raw,mainSize,column?viewportHeight_:viewportWidth_,
++                0,FontSize(child->style));
++            return std::max(0.0f,value)+item.margin+
++                (child->style.Is(L"box-sizing",L"border-box")?0:item.decoration);
++        };
++        const auto preferred=ToLower(Trim(child->style.Get(column?L"height":L"width")));
++        auto basis=ToLower(Trim(child->style.Get(L"flex-basis",L"auto")));
++        if(basis.empty()||basis==L"auto")basis=preferred;
++        const bool percentageIndefinite=column&&!box.definiteContentHeight&&basis.find(L'%')!=std::wstring::npos;
++        if(basis.empty()||basis==L"auto"||basis==L"content"||percentageIndefinite){
++            // The flex base is measured before applying this item's min/max
++            // constraints. A definite preferred size remains an auto basis.
++            item.base=column?NaturalHeight(*child,HasIntrinsicWidth(*child)?
++                BlockOuterWidth(*child,crossSize,viewportWidth_):crossSize):
++                IntrinsicContentWidth(*child,false)+item.decoration+item.margin;
++        }else item.base=outerLength(basis);
++        const auto minimum=ToLower(Trim(child->style.Get(column?L"min-height":L"min-width")));
++        const auto maximum=ToLower(Trim(child->style.Get(column?L"max-height":L"max-width")));
++        item.minimum=item.decoration+item.margin;
++        if(!minimum.empty()&&minimum!=L"auto")item.minimum=std::max(item.minimum,outerLength(minimum));
++        else if(!column){
++            const auto overflow=child->style.Get(L"overflow-x",child->style.Get(L"overflow",L"visible"));
++            if(overflow==L"visible"||overflow==L"clip"){
++                float contentMinimum=IntrinsicContentWidth(*child,true)+item.decoration+item.margin;
++                if(!preferred.empty()&&preferred!=L"auto")contentMinimum=std::min(contentMinimum,outerLength(preferred));
++                item.minimum=std::max(item.minimum,contentMinimum);
++            }
++        }
++        item.maximum=maximum.empty()||maximum==L"none"||maximum==L"auto"?
++            (std::numeric_limits<float>::max)():std::max(item.decoration+item.margin,outerLength(maximum));
++        if(minimum.empty()||minimum==L"auto")item.minimum=std::min(item.minimum,item.maximum);
++        item.maximum=std::max(item.maximum,item.minimum);
++        item.hypothetical=std::max(item.minimum,std::min(item.maximum,item.base));
++        mainMetrics.push_back(item);
++    }
++    const auto resolveMain=[&](const std::vector<size_t>& items,std::vector<float>& sizes){
++        // CSS Flexbox 9.7: use hypothetical sizes to choose the flex factor,
++        // but distribute from the unconstrained bases. Freeze only violations
++        // of the selected sign, then recompute free space for the other items.
++        const double gaps=gap*std::max(0,static_cast<int>(items.size())-1);
++        double hypothetical=gaps;
++        for(const auto index:items)hypothetical+=mainMetrics[index].hypothetical;
++        const bool growing=hypothetical<mainSize;
++        std::vector<unsigned char> frozen(items.size(),0);
++        std::vector<double> targets(items.size()),violations(items.size());
++        for(size_t i=0;i<items.size();++i){
++            const auto& item=mainMetrics[items[i]];
++            targets[i]=item.base;
++            if((growing?item.grow:item.shrink)==0||
++               (growing?item.base>item.hypothetical:item.base<item.hypothetical)){
++                frozen[i]=1;targets[i]=item.hypothetical;
++            }
++        }
++        const auto freeSpace=[&]{
++            double occupied=gaps;
++            for(size_t i=0;i<items.size();++i)occupied+=frozen[i]?targets[i]:mainMetrics[items[i]].base;
++            return mainSize-occupied;
++        };
++        const double initialFree=freeSpace();
++        for(size_t iteration=0;iteration<=items.size();++iteration){
++            double factorTotal=0,weightTotal=0;size_t active=0;
++            for(size_t i=0;i<items.size();++i)if(!frozen[i]){
++                ++active;const auto& item=mainMetrics[items[i]];
++                factorTotal+=growing?item.grow:item.shrink;
++                weightTotal+=growing?item.grow:item.shrink*std::max(0.0f,item.base-item.margin-item.decoration);
++            }
++            if(!active)break;
++            double remaining=freeSpace();
++            if(factorTotal<1&&std::abs(initialFree*factorTotal)<std::abs(remaining))remaining=initialFree*factorTotal;
++            double totalViolation=0;
++            for(size_t i=0;i<items.size();++i)if(!frozen[i]){
++                const auto& item=mainMetrics[items[i]];
++                const double weight=growing?item.grow:item.shrink*std::max(0.0f,item.base-item.margin-item.decoration);
++                const double target=item.base+(weightTotal>0?(growing?remaining:-std::abs(remaining))*weight/weightTotal:0);
++                targets[i]=std::max<double>(item.minimum,std::min<double>(item.maximum,target));
++                violations[i]=targets[i]-target;totalViolation+=violations[i];
++            }
++            for(size_t i=0;i<items.size();++i)if(!frozen[i]&&
++                (std::abs(totalViolation)<0.000001||(totalViolation>0?violations[i]>0:violations[i]<0)))frozen[i]=1;
++        }
++        const double units=64.0*deviceScale_;
++        double accumulated=0;float assigned=0;
++        for(size_t i=0;i<items.size();++i){
++            accumulated+=targets[i];
++            const float edge=static_cast<float>(std::round(accumulated*units)/units);
++            sizes[items[i]]=edge-assigned;assigned=edge;
++        }
++    };
+     if((wrapMode==L"wrap"||wrapMode==L"wrap-reverse")&&!children.empty()){
+         const size_t count=children.size();
+-        std::vector<float> sizes(count),minimums(count),grows(count),shrinkWeights(count),crossExtents(count);
++        std::vector<float> sizes(count),crossExtents(count);
+         std::vector<bool> mainAutoBefore(count),mainAutoAfter(count),
+             crossAutoBefore(count),crossAutoAfter(count),crossDefinite(count);
+         std::vector<std::wstring> alignments(count);
+@@ -8517,8 +8624,6 @@
+         for(size_t index=0;index<count;++index){
+             auto* child=children[index];
+             const auto margin=EdgeValues(child->style,L"margin",box.content.width,viewportWidth_);
+-            const float mainMargin=column?margin.top+margin.bottom:margin.left+margin.right;
+-            const float mainDecoration=decorationExtent(*child,!column);
+             const auto isAutoMargin=[&](const wchar_t* property){
+                 return ToLower(Trim(child->style.Get(property)))==L"auto";
+             };
+@@ -8526,17 +8631,7 @@
+             mainAutoAfter[index]=isAutoMargin(column?L"margin-bottom":L"margin-right");
+             crossAutoBefore[index]=isAutoMargin(column?L"margin-left":L"margin-top");
+             crossAutoAfter[index]=isAutoMargin(column?L"margin-right":L"margin-bottom");
+-            grows[index]=StyleSheet::Length(child->style.Get(L"flex-grow",L"0"),0,0,0);
+-            const float shrink=StyleSheet::Length(child->style.Get(L"flex-shrink",L"1"),0,0,1);
+-            auto raw=child->style.Get(L"flex-basis");
+-            if(raw.empty()||raw==L"auto")raw=child->style.Get(column?L"height":L"width");
+-            const bool natural=raw.empty()||raw==L"auto"||ToLower(Trim(raw))==L"max-content";
+-            float base=natural?(column?NaturalHeight(*child,HasIntrinsicWidth(*child)?
+-                BlockOuterWidth(*child,crossSize,viewportWidth_):crossSize):NaturalWidth(*child)):
+-                definiteExtent(*child,raw,!column,mainSize)+mainMargin;
+-            sizes[index]=base;minimums[index]=std::max(mainDecoration+mainMargin,
+-                column?mainMargin:MinContentWidth(*child));
+-            shrinkWeights[index]=shrink*std::max(0.0f,base-mainMargin-mainDecoration);
++            sizes[index]=mainMetrics[index].hypothetical;
+ 
+             auto align=child->style.Get(L"align-self",L"auto");
+             if(align.empty()||align==L"auto")align=parentAlign;
+@@ -8565,40 +8660,7 @@
+         }
+ 
+         for(auto& line:lines){
+-            float occupied=gap*std::max(0,static_cast<int>(line.items.size())-1);
+-            float growTotal=0,shrinkTotal=0;
+-            for(const auto index:line.items){
+-                occupied+=sizes[index];growTotal+=grows[index];shrinkTotal+=shrinkWeights[index];
+-            }
+-            const float freeSpace=mainSize-occupied;
+-            if(freeSpace>0&&growTotal>0){
+-                for(const auto index:line.items)if(grows[index]>0)
+-                    sizes[index]+=freeSpace*grows[index]/growTotal;
+-            }else if(freeSpace<0&&shrinkTotal>0){
+-                float deficit=-freeSpace;std::vector<size_t> active;
+-                for(const auto index:line.items)
+-                    if(shrinkWeights[index]>0&&sizes[index]>minimums[index]+0.01f)
+-                        active.push_back(index);
+-                while(deficit>0.01f&&!active.empty()){
+-                    float weightTotal=0;for(const auto index:active)weightTotal+=shrinkWeights[index];
+-                    if(weightTotal<=0)break;
+-                    std::vector<size_t> clamped;
+-                    for(const auto index:active){
+-                        const float reduction=deficit*shrinkWeights[index]/weightTotal;
+-                        if(sizes[index]-reduction<minimums[index])clamped.push_back(index);
+-                    }
+-                    if(clamped.empty()){
+-                        for(const auto index:active)
+-                            sizes[index]-=deficit*shrinkWeights[index]/weightTotal;
+-                        break;
+-                    }
+-                    for(const auto index:clamped){
+-                        const float reduction=std::max(0.0f,sizes[index]-minimums[index]);
+-                        sizes[index]=minimums[index];deficit-=reduction;
+-                        active.erase(std::remove(active.begin(),active.end(),index),active.end());
+-                    }
+-                }
+-            }
++            resolveMain(line.items,sizes);
+             for(const auto index:line.items){
+                 if(!column&&!crossDefinite[index])
+                     crossExtents[index]=NaturalHeight(*children[index],std::max(1.0f,sizes[index]));
+@@ -8699,48 +8761,21 @@
+         }
+         return;
+     }
+-    std::vector<float> sizes(children.size()),minimums(children.size()),grows(children.size()),shrinks(children.size()),shrinkWeights(children.size());float fixed=gap*std::max(0,static_cast<int>(children.size())-1),growTotal=0,shrinkTotal=0;
++    std::vector<float> sizes(children.size());
++    std::vector<size_t> allItems(children.size());
++    std::iota(allItems.begin(),allItems.end(),0);
++    resolveMain(allItems,sizes);
+     std::vector<bool> mainAutoBefore(children.size()),mainAutoAfter(children.size()),
+         crossAutoBefore(children.size()),crossAutoAfter(children.size());
+     size_t mainAutoMarginCount=0;
+     for(size_t i=0;i<children.size();++i){
+-        auto* c=children[i];const auto margin=EdgeValues(c->style,L"margin",box.content.width,viewportWidth_);const float mainMargin=column?margin.top+margin.bottom:margin.left+margin.right;
+-        const float mainDecoration=decorationExtent(*c,!column);
++        auto* c=children[i];
+         const auto isAutoMargin=[&](const wchar_t* property){return ToLower(Trim(c->style.Get(property)))==L"auto";};
+         mainAutoBefore[i]=isAutoMargin(column?L"margin-top":L"margin-left");
+         mainAutoAfter[i]=isAutoMargin(column?L"margin-bottom":L"margin-right");
+         crossAutoBefore[i]=isAutoMargin(column?L"margin-left":L"margin-top");
+         crossAutoAfter[i]=isAutoMargin(column?L"margin-right":L"margin-bottom");
+         mainAutoMarginCount+=static_cast<size_t>(mainAutoBefore[i])+static_cast<size_t>(mainAutoAfter[i]);
+-        grows[i]=StyleSheet::Length(c->style.Get(L"flex-grow",L"0"),0,0,0);shrinks[i]=StyleSheet::Length(c->style.Get(L"flex-shrink",L"1"),0,0,1);
+-        auto raw=c->style.Get(L"flex-basis");if(raw.empty()||raw==L"auto")raw=c->style.Get(column?L"height":L"width");
+-        bool natural=raw.empty()||raw==L"auto"||ToLower(Trim(raw))==L"max-content";const auto minRaw=c->style.Get(column?L"min-height":L"min-width");const auto overflow=c->style.Get(column?L"overflow-y":L"overflow-x",c->style.Get(L"overflow",L"visible"));const bool automaticMinimumIsZero=(!minRaw.empty()&&StyleSheet::Length(minRaw,mainSize,column?viewportHeight_:viewportWidth_,1)==0)||(overflow!=L"visible"&&overflow!=L"clip");
+-        float base=natural&&grows[i]>0&&automaticMinimumIsZero?mainDecoration+mainMargin:
+-            natural?(column?NaturalHeight(*c,HasIntrinsicWidth(*c)?
+-                BlockOuterWidth(*c,crossSize,viewportWidth_):crossSize):NaturalWidth(*c)):
+-            definiteExtent(*c,raw,!column,mainSize)+mainMargin;
+-        sizes[i]=base;minimums[i]=std::max(mainDecoration+mainMargin,column?mainMargin:MinContentWidth(*c));fixed+=base;growTotal+=grows[i];shrinkWeights[i]=shrinks[i]*std::max(0.0f,base-mainMargin-mainDecoration);shrinkTotal+=shrinkWeights[i];
+-    }
+-    float freeSpace=mainSize-fixed;
+-    if(freeSpace>0&&growTotal>0){for(size_t index=0;index<children.size();++index)if(grows[index]>0)sizes[index]+=freeSpace*grows[index]/growTotal;}
+-    else if(freeSpace<0&&shrinkTotal>0){
+-        float deficit=-freeSpace;std::vector<size_t> active;for(size_t i=0;i<children.size();++i)if(shrinkWeights[i]>0&&sizes[i]>minimums[i]+0.01f)active.push_back(i);
+-        while(deficit>0.01f&&!active.empty()){
+-            float weightTotal=0;for(const auto i:active)weightTotal+=shrinkWeights[i];if(weightTotal<=0)break;
+-            std::vector<size_t> clamped;
+-            for(const auto i:active){const float reduction=deficit*shrinkWeights[i]/weightTotal;if(sizes[i]-reduction<minimums[i])clamped.push_back(i);}
+-            if(clamped.empty()){for(const auto i:active)sizes[i]-=deficit*shrinkWeights[i]/weightTotal;deficit=0;break;}
+-            for(const auto i:clamped){const float reduction=std::max(0.0f,sizes[i]-minimums[i]);sizes[i]=minimums[i];deficit-=reduction;active.erase(std::remove(active.begin(),active.end(),i),active.end());}
+-        }
+-    }
+-    if((freeSpace>0.001f&&growTotal>0)||(freeSpace<-0.001f&&shrinkTotal>0)){
+-        const double units=64.0*deviceScale_;
+-        double accumulated=0;float assigned=0;
+-        for(auto& size:sizes){
+-            accumulated+=size;
+-            const float edge=static_cast<float>(std::round(accumulated*units)/units);
+-            size=edge-assigned;assigned=edge;
+-        }
+     }
+     float occupied=gap*std::max(0,static_cast<int>(children.size())-1);for(float size:sizes)occupied+=size;float remain=std::max(0.0f,mainSize-occupied);
+     const float autoMainMargin=mainAutoMarginCount&&remain>0?

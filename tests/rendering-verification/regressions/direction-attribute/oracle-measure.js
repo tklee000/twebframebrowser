@@ -1,0 +1,1 @@
+(function(){return JSON.stringify({viewport:[innerWidth,innerHeight],dpr:devicePixelRatio,boxes:Array.from(document.querySelectorAll("[data-probe]")).map(n=>{const r=n.getBoundingClientRect(),s=getComputedStyle(n);return {id:n.id,rect:[r.x,r.y,r.width,r.height],direction:s.direction,unicodeBidi:s.unicodeBidi,paddingLeft:s.paddingLeft,paddingRight:s.paddingRight}})})})()

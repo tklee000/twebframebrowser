@@ -1,0 +1,29 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head><body>
+<section style="top:0px"><table id="padding" data-probe><tr><td id="padding-a" data-probe>A</td><td id="padding-b" data-probe>BBBBBBBBBB</td></tr></table></section>
+<section style="top:54px"><table class="empty" id="specified" data-probe><tr><td id="specified-a" data-probe></td><td id="specified-b" data-probe></td></tr></table></section>
+<section style="top:88px"><table class="weighted" id="weighted" data-probe><tr><td id="weighted-a" data-probe>AA AA AA</td><td id="weighted-b" data-probe>BBBBBBBBBBBB</td></tr></table></section>
+<section style="top:122px"><table class="content" id="content" data-probe><tr><td id="content-a" data-probe>ABCDEFGHIJ</td><td id="content-b" data-probe>ABCDEFGHIJ</td></tr></table></section>
+<section style="top:156px"><table class="percent" id="percent" data-probe><tr><td style="width:25%" id="percent-a" data-probe></td><td id="percent-b" data-probe></td></tr></table></section>
+<section style="top:190px"><table class="span" id="span" data-probe><tr><td id="span-a" data-probe>A</td><td id="span-b" data-probe>BB</td></tr><tr><td colspan="2" id="span-wide" data-probe>ABCDEFGH</td></tr></table></section>
+<section style="top:248px"><table class="empty" id="columns" data-probe><colgroup><col style="width:80px"><col style="width:80px"></colgroup><tr><td style="width:auto" id="columns-a" data-probe></td><td style="width:auto" id="columns-b" data-probe></td></tr></table></section>
+<section style="top:282px"><table class="limited" id="limited" data-probe><tr><td id="limited-a" data-probe>ABCDEFGHIJ</td><td id="limited-b" data-probe>ABCDEFGHIJ</td></tr></table></section>
+<section style="top:316px"><table class="spaced empty" id="spaced" data-probe><tr><td id="spaced-a" data-probe></td><td id="spaced-b" data-probe></td></tr></table></section>
+<section style="top:350px"><table class="empty" style="direction:rtl" id="rtl" data-probe><tr><td id="rtl-a" data-probe></td><td id="rtl-b" data-probe></td></tr></table></section>
+<section style="top:384px"><table class="empty" id="unequal" data-probe><tr><td id="unequal-a" data-probe></td><td style="width:160px" id="unequal-b" data-probe></td></tr></table></section>
+<section style="top:418px"><table class="automatic" id="automatic" data-probe><tr><td id="automatic-a" data-probe>ABCDEFGHIJ</td><td id="automatic-b" data-probe>ABCDEFGHIJ</td></tr></table></section>
+<section style="top:472px"><div class="css-table" id="css" data-probe><div class="css-row"><div class="css-cell" id="css-a" data-probe></div><div class="css-cell" id="css-b" data-probe></div></div></div></section>
+<section style="left:300px;top:0px"><table class="wrapping" style="overflow-wrap:anywhere" id="anywhere" data-probe><tr><td id="anywhere-cell" data-probe>ABCD</td></tr></table></section>
+<section style="left:300px;top:110px"><table class="wrapping" style="overflow-wrap:anywhere" id="nowrap" data-probe><tr><td style="white-space:nowrap" id="nowrap-cell" data-probe>ABCD</td></tr></table></section>
+<section style="left:300px;top:145px"><table class="wrapping" style="overflow-wrap:break-word" id="break-word" data-probe><tr><td id="break-word-cell" data-probe>ABCD</td></tr></table></section>
+<section style="left:300px;top:180px"><table class="wrapping" style="word-break:break-all" id="break-all" data-probe><tr><td id="break-all-cell" data-probe>ABCD</td></tr></table></section>
+<section style="left:300px;top:290px"><table class="wrapping" style="word-wrap:anywhere" id="alias" data-probe><tr><td id="alias-cell" data-probe>ABCD</td></tr></table></section>
+<section style="left:300px;top:400px"><table class="wrapping" style="overflow-wrap:anywhere" id="inherited" data-probe><tr><td id="inherited-cell" data-probe><span id="inherited-span" data-probe>ABCD</span></td></tr></table></section>
+<section style="left:300px;top:510px"><table class="wrapping" id="hidden" data-probe><tr><td style="overflow:hidden;min-width:0" id="hidden-cell" data-probe>ABCD</td></tr></table></section>
+<section style="left:500px;top:0px"><table class="wrapping" id="fixed-child" data-probe><tr><td id="fixed-child-cell" data-probe><div style="width:80px;height:24px" id="fixed-child-box" data-probe></div></td></tr></table></section>
+<section style="left:500px;top:40px"><table class="wrapping" id="capped-child" data-probe><tr><td id="capped-child-cell" data-probe><div style="width:80px;max-width:20px;height:24px" id="capped-child-box" data-probe></div></td></tr></table></section>
+<section style="left:500px;top:80px"><table class="wrapping" id="boxed-child" data-probe><tr><td id="boxed-child-cell" data-probe><div style="box-sizing:border-box;width:80px;padding:10px;height:24px" id="boxed-child-box" data-probe></div></td></tr></table></section>
+<section style="left:500px;top:120px"><table class="wrapping" id="grid-child" data-probe><tr><td id="grid-child-cell" data-probe><div class="fixed-grid" id="grid-child-box" data-probe><div></div><div></div></div></td></tr></table></section>
+<section style="left:500px;top:160px"><table class="wrapping" id="nested-child" data-probe><tr><td id="nested-child-cell" data-probe><table style="width:80px" id="nested-child-box" data-probe><tr><td id="nested-child-content" data-probe>ABCDEFGHIJ</td></tr></table></td></tr></table></section>
+<section style="left:500px;top:200px"><table class="percentage-auto" id="percentage-auto" data-probe><tr><td style="width:20%" id="percentage-auto-a" data-probe>AAAA</td><td id="percentage-auto-b" data-probe>B</td></tr></table></section>
+</body></html>

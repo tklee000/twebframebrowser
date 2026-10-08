@@ -1,0 +1,7 @@
+html,body{margin:0;padding:0;font:16px/20px Arial}
+.edge{position:absolute;left:670px;top:0;width:100px;height:40px;padding:10px;background:#ddd}
+.wide{width:120px;height:10px;background:#e04040}
+.scroller{position:absolute;left:0;top:100px;width:100px;height:40px;padding:10px;overflow:auto;background:#eee}
+.wrapper{width:80px;height:20px;padding:5px;background:#40b060}
+.clipped{top:200px}.clipped .wrapper{overflow:hidden}
+.auto-wrapper{position:absolute;left:320px;top:100px;width:140px}.auto-scroller{width:100px;padding:10px;overflow:auto;background:#ddd}.after-auto{height:10px;background:#4060e0}

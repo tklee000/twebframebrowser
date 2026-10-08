@@ -48,7 +48,13 @@ bool StyleSheet::Parse(const std::wstring& source,std::wstring* error) {
                 start=colon+1;
             }
             if(pseudo!=std::wstring::npos)rule.pseudo=ToLower(Trim(selector.substr(pseudo+separator)));
-            rule.selectorParts=Document::CompileSelector(pseudo==std::wstring::npos?selector:selector.substr(0,pseudo));
+            auto subjectSelector=pseudo==std::wstring::npos?selector:selector.substr(0,pseudo);
+            // A bare pseudo-element has an implicit universal subject. A
+            // trailing descendant/child combinator also requires that subject.
+            if(pseudo!=std::wstring::npos&&(subjectSelector.empty()||
+               CssSyntax::Space(subjectSelector.back())||subjectSelector.back()==L'>'||
+               subjectSelector.back()==L'+'||subjectSelector.back()==L'~'))subjectSelector+=L'*';
+            rule.selectorParts=Document::CompileSelector(subjectSelector);
             CollectSelectorAttributes(selector,selectorAttributes_);
             if(selector.find(L":lang(")!=std::wstring::npos)selectorAttributes_[L"lang"]=true;
             for(const auto& part:rule.selectorParts){

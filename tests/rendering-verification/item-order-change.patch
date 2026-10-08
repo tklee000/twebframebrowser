@@ -1,0 +1,49 @@
+--- before/TWebFrame2/src/Layout.cpp
++++ after/TWebFrame2/src/Layout.cpp
+@@ -7484,6 +7484,19 @@
+         ApplyTransitions(*child);
+         if(HasRelativeOffsets(*child))box.relativeChildren.push_back(child.get());
+     }
++    const auto display=box.style.Get(L"display");
++    if(display==L"flex"||display==L"inline-flex"||display==L"grid"||display==L"inline-grid"){
++        // Layout boxes are rebuilt in DOM order before styles/animations are
++        // resolved. Stable CSS order therefore preserves source order for ties
++        // while sharing the visual order across sizing, placement and painting.
++        // The document's children and selector indices remain untouched.
++        std::stable_sort(box.children.begin(),box.children.end(),[](const auto& left,const auto& right){
++            const auto order=[](const ComputedStyle& style){
++                return std::floor(StyleSheet::Length(style.Get(L"order",L"0"),0,0,0)+0.5);
++            };
++            return order(left->style)<order(right->style);
++        });
++    }
+ }
+ 
+ void LayoutEngine::ApplyAnimations(LayoutBox& box,bool updateDefinitions){
+@@ -8897,12 +8910,22 @@
+         const bool autoBottom=ToLower(Trim(item.box->style.Get(L"margin-bottom")))==L"auto";
+         if(autoLeft&&autoRight)left+=(cellWidth-width)/2;
+         else if(autoLeft)left+=cellWidth-width;
+-        else if(justify==L"center")left+=(cellWidth-width)/2;
+-        else if(justify==L"end"||justify==L"flex-end")left+=cellWidth-width;
++        else if(!autoRight){
++            if(justify==L"center")left+=(cellWidth-width)/2;
++            else{
++                const bool itemRtl=item.box->style.Is(L"direction",L"rtl");
++                const bool alignRight=justify==L"right"?true:justify==L"left"?false:
++                    justify==L"self-start"?itemRtl:justify==L"self-end"?!itemRtl:
++                    (justify==L"end"||justify==L"flex-end")?!rtl:rtl;
++                if(alignRight)left+=cellWidth-width;
++            }
++        }
+         if(autoTop&&autoBottom)top+=(cellHeight-height)/2;
+         else if(autoTop)top+=cellHeight-height;
+-        else if(align==L"center")top+=(cellHeight-height)/2;
+-        else if(align==L"end"||align==L"flex-end")top+=cellHeight-height;
++        else if(!autoBottom){
++            if(align==L"center")top+=(cellHeight-height)/2;
++            else if(align==L"end"||align==L"flex-end")top+=cellHeight-height;
++        }
+         LayoutBoxTree(*item.box,{left,top,width,height},true);
+     }
+     for(auto& child:box.children)if(child->visible&&(child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed"))){

@@ -16,7 +16,7 @@ inline std::wstring RenderingDiagnostics(Document& document,LayoutEngine& layout
     unsigned width,unsigned height,float dpi,unsigned windowDpi){
     std::wostringstream out;out.imbue(std::locale::classic());out<<std::setprecision(9);
     out<<L"{\"captureRoute\":\"explicit-dpi-view-paint\",\"width\":"<<width
-       <<L",\"height\":"<<height<<L",\"dpi\":"<<dpi<<L",\"windowDpi\":"<<windowDpi<<L",\"styleContractVersion\":1,\"dom\":[";
+       <<L",\"height\":"<<height<<L",\"dpi\":"<<dpi<<L",\"windowDpi\":"<<windowDpi<<L",\"styleContractVersion\":1,\"geometryContractVersion\":1,\"dom\":[";
     auto root=document.QuerySelector(L"html");if(!root)root=document.Body();
     bool first=true;
     const std::function<void(const std::shared_ptr<Node>&,const std::wstring&)> dom=
@@ -36,16 +36,19 @@ inline std::wstring RenderingDiagnostics(Document& document,LayoutEngine& layout
         if(!node)return;const auto id=node->Attribute(L"data-case-node");
         if(!id.empty()){
             const auto* box=layout.BoxFor(node);const auto style=layout.StyleForRendering(node);
-            bool present=box&&box->visible;
+            LayoutRect elementRect{};bool present=layout.ReadElementRect(node,elementRect);
             for(auto ancestor=node->parent.lock();present&&ancestor;ancestor=ancestor->parent.lock())
                 if(const auto* parentBox=layout.BoxFor(ancestor))present=parentBox->visible;
             if(!first)out<<L',';first=false;
             out<<L"{\"id\":"<<RenderingQuote(id)<<L",\"present\":"<<(present?L"true":L"false");
-            if(box){const LayoutRect rect=box->rect;
-                out<<L",\"rect\":["<<rect.x<<L','<<rect.y<<L','<<rect.width<<L','<<rect.height
-                   <<L"],\"content\":["<<box->content.x<<L','<<box->content.y<<L','<<box->content.width<<L','<<box->content.height
-                   <<L"],\"scroll\":["<<box->scrollWidth<<L','<<box->scrollHeight<<L']';
+            if(present)out<<L",\"rect\":["<<elementRect.x<<L','<<elementRect.y<<L','<<elementRect.width<<L','<<elementRect.height<<L']';
+            if(box){
+                out<<L",\"content\":["<<box->content.x<<L','<<box->content.y<<L','<<box->content.width<<L','<<box->content.height
+                   <<L"],\"internalScroll\":["<<box->scrollWidth<<L','<<box->scrollHeight<<L']';
             }
+            const auto sizes=layout.ReadElementSizes(node);
+            out<<L",\"client\":["<<sizes.clientWidth<<L','<<sizes.clientHeight
+               <<L"],\"scroll\":["<<sizes.scrollWidth<<L','<<sizes.scrollHeight<<L']';
             out<<L",\"styles\":{";bool firstStyle=true;std::map<std::wstring,std::wstring> values;
             if(style.values)for(const auto& pair:*style.values)values.emplace(pair.first,pair.second);
             for(const auto& pair:values){if(!firstStyle)out<<L',';firstStyle=false;

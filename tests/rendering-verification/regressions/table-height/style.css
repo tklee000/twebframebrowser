@@ -1,0 +1,17 @@
+html{background:white}body{margin:0;font:20px/24px Consolas;color:#162e40}table,.table{width:130px;border-spacing:0}.row{display:table-row}.cell{display:table-cell}.tall{height:60px;background:#e5eef1}.after{height:8px;width:130px;background:#a7bcc4}
+#max{display:table;max-height:20px}
+#min{display:table;min-height:100px}
+#fixedmax{display:table;height:30px;max-height:20px}
+#fixedmin{display:table;height:30px;min-height:100px}
+#rowmax{display:table;}
+#rowmax-row{max-height:20px}
+#rowmin{display:table;}
+#rowmin-row{min-height:100px}
+#cellmax{display:table;}
+#cellmax-cell{max-height:20px}
+#cellmin{display:table;}
+#cellmin-cell{min-height:100px}
+#captionheight{display:table;height:100px;max-height:20px}
+#captionmin{display:table;min-height:100px}
+#middle,#bottom{display:table;min-height:100px}
+#middle-cell{vertical-align:middle}#bottom-cell{vertical-align:bottom}

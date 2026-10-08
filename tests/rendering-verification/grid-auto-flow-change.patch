@@ -1,0 +1,116 @@
+--- before/TWebFrame2/src/Layout.cpp
++++ after/TWebFrame2/src/Layout.cpp
+@@ -5074,6 +5074,13 @@
+     size_t& usedRows) {
+     struct Request { LayoutBox* box=nullptr;GridAxisPlacement row,column; };
+     const size_t explicitColumns=columnCount;
++    const auto flow=Words(ToLower(Trim(box.style.Get(L"grid-auto-flow",L"row"))));
++    const bool columnFlow=std::find(flow.begin(),flow.end(),L"column")!=flow.end();
++    const bool dense=std::find(flow.begin(),flow.end(),L"dense")!=flow.end();
++    // Normalize column flow by transposing axes. In these coordinates rows
++    // grow implicitly, while columns are the bounded scanning dimension.
++    size_t minorCount=std::max<size_t>(1,columnFlow?explicitRows:explicitColumns);
++    const size_t explicitMajor=columnFlow?explicitColumns:explicitRows;
+     std::vector<Request> requests;requests.reserve(box.children.size());
+     for(const auto& child:box.children){
+         if(!child->visible||child->style.Is(L"position",L"absolute")||
+@@ -5090,26 +5097,32 @@
+             request.row=ItemGridAxis(*child,true,explicitRows,areaParts);
+             request.column=ItemGridAxis(*child,false,explicitColumns,areaParts);
+         }
++        if(columnFlow)std::swap(request.row,request.column);
+         if(request.column.definite)
+-            columnCount=std::max(columnCount,request.column.start+request.column.span);
+-        else columnCount=std::max(columnCount,request.column.span);
++            minorCount=std::max(minorCount,request.column.start+request.column.span);
++        else minorCount=std::max(minorCount,request.column.span);
+         requests.push_back(request);
+     }
+-    columnCount=std::max<size_t>(1,columnCount);
+     std::vector<GridItemPlacement> items;items.reserve(requests.size());
+-    std::vector<std::vector<bool>> occupied(explicitRows,std::vector<bool>(columnCount,false));
++    std::vector<std::vector<bool>> occupied(explicitMajor,std::vector<bool>(minorCount,false));
+     auto ensureRows=[&](size_t count){
+-        while(occupied.size()<count)occupied.push_back(std::vector<bool>(columnCount,false));
++        while(occupied.size()<count)occupied.push_back(std::vector<bool>(minorCount,false));
+     };
+     auto canPlace=[&](size_t row,size_t column,size_t rowSpan,size_t columnSpan){
+-        if(column+columnSpan>columnCount)return false;
++        // Locked-row placement can create columns before the implicit grid's
++        // width is finalized; cells beyond existing tracks are unoccupied.
+         for(size_t y=row;y<row+rowSpan;++y)for(size_t x=column;x<column+columnSpan;++x)
+-            if(y<occupied.size()&&occupied[y][x])return false;
++            if(y<occupied.size()&&x<occupied[y].size()&&occupied[y][x])return false;
+         return true;
+     };
+     auto place=[&](const Request& request,size_t row,size_t column){
++        if(column+request.column.span>minorCount){
++            minorCount=column+request.column.span;
++            for(auto& cells:occupied)cells.resize(minorCount,false);
++        }
+         ensureRows(row+request.row.span);
+-        items.push_back({request.box,row,column,request.row.span,request.column.span});
++        if(columnFlow)items.push_back({request.box,column,row,request.column.span,request.row.span});
++        else items.push_back({request.box,row,column,request.row.span,request.column.span});
+         for(size_t y=row;y<row+request.row.span;++y)
+             for(size_t x=column;x<column+request.column.span;++x)occupied[y][x]=true;
+     };
+@@ -5118,31 +5131,35 @@
+     // cells still steer the later auto-placement phases.
+     for(const auto& request:requests)if(request.row.definite&&request.column.definite)
+         place(request,request.row.start,request.column.start);
++    std::vector<size_t> lockedRowEnd;
+     for(const auto& request:requests)if(request.row.definite&&!request.column.definite){
+-        size_t column=0;
+-        while(column+request.column.span<=columnCount&&
+-              !canPlace(request.row.start,column,request.row.span,request.column.span))++column;
+-        if(column+request.column.span>columnCount){
+-            const size_t oldCount=columnCount;columnCount+=request.column.span;
+-            for(auto& row:occupied)row.resize(columnCount,false);column=oldCount;
+-        }
++        if(lockedRowEnd.size()<=request.row.start)lockedRowEnd.resize(request.row.start+1,0);
++        size_t column=dense?0:lockedRowEnd[request.row.start];
++        while(!canPlace(request.row.start,column,request.row.span,request.column.span))++column;
+         place(request,request.row.start,column);
+-    }
+-    for(const auto& request:requests)if(!request.row.definite&&request.column.definite){
+-        size_t row=0;while(!canPlace(row,request.column.start,request.row.span,request.column.span))++row;
+-        place(request,row,request.column.start);
+-    }
+-    size_t cursor=0;
+-    for(const auto& request:requests)if(!request.row.definite&&!request.column.definite){
+-        while(true){
+-            const size_t row=cursor/columnCount,column=cursor%columnCount;++cursor;
+-            if(column+request.column.span>columnCount)continue;
+-            if(canPlace(row,column,request.row.span,request.column.span)){
+-                place(request,row,column);break;
+-            }
+-        }
+-    }
+-    usedRows=occupied.size();
++        lockedRowEnd[request.row.start]=column+request.column.span;
++    }
++    // Remaining definite-column and fully automatic items share one cursor
++    // in order-modified document order (CSS Grid 8.5). Dense packing restarts
++    // the scan for every item; sparse packing never fills an earlier hole.
++    size_t cursorRow=0,cursorColumn=0;
++    for(const auto& request:requests)if(!request.row.definite){
++        if(dense){cursorRow=0;cursorColumn=0;}
++        if(request.column.definite){
++            if(!dense&&request.column.start<cursorColumn)++cursorRow;
++            cursorColumn=request.column.start;
++            while(!canPlace(cursorRow,cursorColumn,request.row.span,request.column.span))++cursorRow;
++        }else{
++            while(true){
++                if(cursorColumn+request.column.span>minorCount){++cursorRow;cursorColumn=0;}
++                if(canPlace(cursorRow,cursorColumn,request.row.span,request.column.span))break;
++                ++cursorColumn;
++            }
++        }
++        place(request,cursorRow,cursorColumn);
++    }
++    columnCount=columnFlow?std::max<size_t>(1,occupied.size()):minorCount;
++    usedRows=columnFlow?minorCount:occupied.size();
+     return items;
+ }
+ 

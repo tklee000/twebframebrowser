@@ -31,6 +31,7 @@ struct Node : std::enable_shared_from_this<Node> {
     FastMap<std::wstring, std::wstring> attributes;
     FastMap<std::wstring, std::wstring> inlineStyle;
     FastMap<std::wstring, std::wstring> inlineStylePriority;
+    FastMap<std::wstring, size_t> inlineStyleOrder;
     std::vector<std::shared_ptr<Node>> children;
     // Shadow trees are owned by their host, but remain outside light-DOM
     // children and document selector indexes. Rendering uses their children.
@@ -112,7 +113,8 @@ public:
     // Document, rebinding every node to this stable UI-thread owner.
     void AdoptParsed(Document& source);
     std::vector<std::shared_ptr<Node>> ParseFragment(const std::wstring& html,
-                                                     std::wstring* error = nullptr);
+                                                    std::wstring* error = nullptr,
+                                                    const std::shared_ptr<Node>& context = {});
 
     std::shared_ptr<Node> Root() const { return root_; }
     bool QuirksMode() const noexcept { return quirksMode_; }
@@ -172,6 +174,6 @@ private:
 
 std::wstring ToLower(std::wstring value);
 std::wstring Trim(const std::wstring& value);
-std::wstring DecodeEntities(const std::wstring& value);
+std::wstring DecodeEntities(const std::wstring& value, bool inAttribute = false);
 
 } // namespace TWebFrame::Internal

@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "scriptEnabled": false,
+  "zoomFactor": 1.0,
+  "colorScheme": "light",
+  "initialState": "no mouse, keyboard or DOM mutation",
+  "primary": {
+    "viewports": [
+      [
+        384,
+        768
+      ],
+      [
+        800,
+        600
+      ],
+      [
+        1280,
+        800
+      ]
+    ],
+    "dpi": [
+      96,
+      144
+    ],
+    "pairsPerCase": 6,
+    "pairs": 6000
+  },
+  "optional": {
+    "viewports": [
+      [
+        479,
+        768
+      ],
+      [
+        480,
+        768
+      ],
+      [
+        799,
+        600
+      ],
+      [
+        801,
+        600
+      ],
+      [
+        1099,
+        800
+      ],
+      [
+        1100,
+        800
+      ],
+      [
+        1920,
+        1080
+      ]
+    ],
+    "dpi": [
+      120,
+      192
+    ],
+    "mediaTypes": [
+      "screen",
+      "print"
+    ]
+  },
+  "capture": {
+    "initialViewport": true,
+    "fullDocument": true,
+    "nativeScrollLandmarks": [
+      "top",
+      "middle",
+      "bottom"
+    ],
+    "nestedScrollers": ".overflow-auto,.overflow-scroll,.table-scroll,.query-container",
+    "scrollNote": "Optional follow-up capture via host input/scrolling; no fixture JS and no DOM mutation. These states have not been executed."
+  },
+  "environmentFields": [
+    "WebView2 runtime version",
+    "OS build",
+    "actual window DPI",
+    "requested rasterization scale",
+    "viewport in CSS pixels",
+    "PNG size in physical pixels",
+    "zoom",
+    "GPU/renderer",
+    "font file hashes",
+    "locale",
+    "system colors"
+  ],
+  "comparison": {
+    "dom": "tree, text, attributes",
+    "layout": "all [data-probe] border rectangles, line fragments and scroll extents",
+    "paint": "decoded pixels; retain reference, native and diff images",
+    "unsupported": "Record unsupported/gated features; do not convert missing support into a pass"
+  }
+}

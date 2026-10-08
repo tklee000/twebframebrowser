@@ -578,6 +578,9 @@ struct View::Impl {
     ComPtr<ID2D1BitmapRenderTarget> backBuffer;
     D2D1_SIZE_U backBufferPixelSize{};
     float backBufferDpi=0;
+    ComPtr<IWICImagingFactory> rasterImaging;
+    ComPtr<IWICBitmap> rasterPixels;
+    ComPtr<ID2D1RenderTarget> rasterTarget;
     std::shared_ptr<AccessibilityHost> accessibility;
     std::vector<std::weak_ptr<Node>> liveRegions;
     std::unordered_map<const Node*,std::wstring> liveRegionText;
@@ -1507,28 +1510,14 @@ struct View::Impl {
                 if(const auto child=FindDocumentView(node->ownerDocument))return child->impl_->ReadNodeGeometry(node);
             JavaScriptRuntime::NodeGeometry geometry;
             if(layoutDirty)Rebuild();
-            if(const auto* box=layout.BoxFor(node)){
-                geometry.x=box->rect.x;geometry.y=box->rect.y;
-                geometry.width=box->rect.width;geometry.height=box->rect.height;
-                geometry.clientWidth=box->content.width;geometry.clientHeight=box->content.height;
-                geometry.scrollWidth=std::max(box->content.width,box->scrollWidth);
-                geometry.scrollHeight=std::max(box->content.height,box->scrollHeight);
+            LayoutRect rect{};
+            if(layout.ReadElementRect(node,rect)){
+                geometry.x=rect.x;geometry.y=rect.y;
+                geometry.width=rect.width;geometry.height=rect.height;
             }
-            // In standards mode the root element's client box represents the
-            // viewport, even though the layout root itself is an internal
-            // wrapper rather than an ordinary CSS content box.
-            if(node&&node==document.QuerySelector(L"html")){
-                RECT client{};GetClientRect(hwnd,&client);const float scale=DpiScale();
-                geometry.clientWidth=static_cast<float>(std::max(1L,client.right))/scale;
-                geometry.clientHeight=static_cast<float>(std::max(1L,client.bottom))/scale;
-                const auto* scrollingBox=layout.Root();
-                geometry.scrollWidth=std::max(
-                    static_cast<double>(scrollingBox?scrollingBox->scrollWidth:0.0f),
-                    geometry.clientWidth);
-                geometry.scrollHeight=std::max(
-                    static_cast<double>(scrollingBox?scrollingBox->scrollHeight:0.0f),
-                    geometry.clientHeight);
-            }
+            const auto sizes=layout.ReadElementSizes(node);
+            geometry.clientWidth=sizes.clientWidth;geometry.clientHeight=sizes.clientHeight;
+            geometry.scrollWidth=sizes.scrollWidth;geometry.scrollHeight=sizes.scrollHeight;
             return geometry;
     }
     void DiscardCompositedResources(){
@@ -1537,7 +1526,7 @@ struct View::Impl {
         for(const auto& frame:childFrames)if(frame.view)
             frame.view->impl_->DiscardCompositedResources();
     }
-    void ResetRenderTargets(){DiscardCompositedResources();backBuffer.Reset();backBufferPixelSize={};backBufferDpi=0;renderTarget.Reset();}
+    void ResetRenderTargets(){DiscardCompositedResources();rasterTarget.Reset();rasterPixels.Reset();backBuffer.Reset();backBufferPixelSize={};backBufferDpi=0;renderTarget.Reset();}
     void EnsureTarget(){
         if(renderTarget||!d2dFactory)return;
         DiscardCompositedResources();backBuffer.Reset();backBufferPixelSize={};backBufferDpi=0;
@@ -2285,24 +2274,23 @@ struct View::Impl {
     }
     HRESULT RenderSurface(ID2D1RenderTarget* target,const LayoutRect& dirty){
         if(!target)return E_INVALIDARG;
-        // Every WIC target owns its brushes and bitmaps. Release resources
-        // before and after painting so an allocator's reused address cannot
-        // make a later frame keep resources from the previous target.
-        DiscardCompositedResources();
-        struct ScopedResources {
-            Impl* owner;
-            ~ScopedResources(){owner->DiscardCompositedResources();}
-        } resources{this};
+        // Reuse the CPU surface and its device resources until size/DPI changes.
+        // Discard brushes/bitmaps before replacing their owning target, avoiding
+        // both per-frame allocations and accidental reuse of COM addresses.
         const auto pixelSize=target->GetPixelSize();FLOAT dpiX=96,dpiY=96;target->GetDpi(&dpiX,&dpiY);
-        ComPtr<IWICImagingFactory> imaging;
-        ComPtr<IWICBitmap> pixels;ComPtr<ID2D1RenderTarget> raster;
-        HRESULT result=CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&imaging));
-        if(SUCCEEDED(result))result=imaging->CreateBitmap(pixelSize.width,pixelSize.height,GUID_WICPixelFormat32bppBGR,WICBitmapCacheOnLoad,&pixels);
-        const auto properties=D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
-            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE),dpiX,dpiY);
-        if(SUCCEEDED(result))result=d2dFactory->CreateWicBitmapRenderTarget(pixels.Get(),properties,&raster);
+        FLOAT cachedX=0,cachedY=0;if(rasterTarget)rasterTarget->GetDpi(&cachedX,&cachedY);
+        const auto cachedSize=rasterTarget?rasterTarget->GetPixelSize():D2D1_SIZE_U{};
+        HRESULT result=S_OK;
+        if(!rasterTarget||cachedSize.width!=pixelSize.width||cachedSize.height!=pixelSize.height||cachedX!=dpiX||cachedY!=dpiY){
+            DiscardCompositedResources();rasterTarget.Reset();rasterPixels.Reset();
+            if(!rasterImaging)result=CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&rasterImaging));
+            if(SUCCEEDED(result))result=rasterImaging->CreateBitmap(pixelSize.width,pixelSize.height,GUID_WICPixelFormat32bppBGR,WICBitmapCacheOnLoad,&rasterPixels);
+            const auto properties=D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+                D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE),dpiX,dpiY);
+            if(SUCCEEDED(result))result=d2dFactory->CreateWicBitmapRenderTarget(rasterPixels.Get(),properties,&rasterTarget);
+        }
         if(FAILED(result))return result;
-        auto* destination=target;target=raster.Get();RasterSurface surface(target,pixels.Get(),pixelSize.width,pixelSize.height);
+        auto* destination=target;target=rasterTarget.Get();RasterSurface surface(target,rasterPixels.Get(),pixelSize.width,pixelSize.height);
         target->BeginDraw();target->SetTransform(D2D1::IdentityMatrix());
         const auto dirtyRect=D2D1::RectF(dirty.x,dirty.y,dirty.x+dirty.width,dirty.y+dirty.height);
         PushPaintClip(target,dirtyRect,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
@@ -2316,11 +2304,11 @@ struct View::Impl {
             scriptDialog->layout.Paint(target,writeFactory.Get(),&dirty);
         PopPaintClip(target);
         result=target->EndDraw();if(SUCCEEDED(result))result=surface.error;
-        if(FAILED(result))return result;
+        if(FAILED(result)){DiscardCompositedResources();rasterTarget.Reset();rasterPixels.Reset();return result;}
         ComPtr<ID2D1Bitmap> bitmap;
         const auto bitmapProperties=D2D1::BitmapProperties(
             D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE),dpiX,dpiY);
-        result=destination->CreateBitmapFromWicBitmap(pixels.Get(),bitmapProperties,&bitmap);
+        result=destination->CreateBitmapFromWicBitmap(rasterPixels.Get(),bitmapProperties,&bitmap);
         if(FAILED(result))return result;
         destination->BeginDraw();destination->SetTransform(D2D1::IdentityMatrix());
         destination->DrawBitmap(bitmap.Get(),dirtyRect,1,D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,dirtyRect);
@@ -2337,9 +2325,9 @@ struct View::Impl {
         if(FAILED(d2dFactory->CreateDCRenderTarget(&properties,&target))||
            FAILED(target->BindDC(dc,&client)))return;
         target->SetDpi(USER_DEFAULT_SCREEN_DPI*scale,USER_DEFAULT_SCREEN_DPI*scale);
-        DiscardCompositedResources();painting=true;
+        painting=true;
         RenderSurface(target.Get(),{0,0,(client.right-client.left)/scale,(client.bottom-client.top)/scale});
-        painting=false;DiscardCompositedResources();
+        painting=false;
     }
     void Paint(){
         if(compositionParent){
@@ -4201,7 +4189,12 @@ struct View::Impl {
                 }
                 CloseSelectPopup();
             }
-            if(layout.BeginScrollbarInteraction(x,y,scrollbarDragNode,scrollbarDragOffset,scrollbarDragHorizontal)){if(scrollbarDragNode)SetCapture(hwnd);else javascript.DispatchNodeEvent(layout.HitTest(x,y),L"scroll");if(accessibility)accessibility->Invalidate();UpdateFrameBounds();InvalidateView();return 0;}
+            if(layout.BeginScrollbarInteraction(x,y,scrollbarDragNode,scrollbarDragOffset,scrollbarDragHorizontal)){
+                if(scrollbarDragNode)SetCapture(hwnd);else javascript.DispatchNodeEvent(layout.HitTest(x,y),L"scroll");
+                if(accessibility)accessibility->Invalidate();UpdateFrameBounds();InvalidateView();
+                auto* surface=this;while(surface->compositionParent)surface=surface->compositionParent;
+                UpdateWindow(surface->hwnd);return 0;
+            }
             SetFocus(hwnd);auto target=layout.HitTest(x,y);auto pointer=PointerEventAt(wParam,x,y,0,1);
             primaryPointerDownTarget=target;primaryClickDetail=1;
             if(javascript.DispatchNodeEvent(target,L"pointerdown",pointer))return 0;
@@ -4246,7 +4239,14 @@ struct View::Impl {
                 const float previous=selectPopupScrollOffset;selectPopupScrollOffset=travel>0?thumbTop/travel*maximum:0;
                 if(std::abs(previous-selectPopupScrollOffset)>0.01f)InvalidateView();
             }return 0;}
-            if(scrollbarDragNode){HideTooltip();if(layout.DragScrollbar(scrollbarDragNode,x,y,scrollbarDragOffset,scrollbarDragHorizontal)){javascript.DispatchNodeEvent(scrollbarDragNode,L"scroll");if(accessibility)accessibility->Invalidate();textInput.UpdateCandidateWindow(hwnd);InvalidateScrollViewport(scrollbarDragNode);}return 0;}
+            if(scrollbarDragNode){
+                HideTooltip();if(layout.DragScrollbar(scrollbarDragNode,x,y,scrollbarDragOffset,scrollbarDragHorizontal)){
+                    const auto scrolled=scrollbarDragNode;
+                    if(accessibility)accessibility->Invalidate();textInput.UpdateCandidateWindow(hwnd);InvalidateScrollViewport(scrolled);
+                    auto* surface=this;while(surface->compositionParent)surface=surface->compositionParent;
+                    UpdateWindow(surface->hwnd);javascript.DispatchNodeEvent(scrolled,L"scroll");
+                }return 0;
+            }
             if(textSelectionDragging){HideTooltip();UpdateTextSelectionAt(x,y);return 0;}
             if(layoutDirty)Rebuild();if(openSelectPopup){int hot=SelectPopupIndexAt(x,y);const auto options=PopupOptions(openSelectPopup);if(hot>=0&&(static_cast<size_t>(hot)>=options.size()||options[hot]->disabled))hot=-1;if(hot!=selectPopupHotIndex){selectPopupHotIndex=hot;InvalidateView();}SelectPopupGeometry popup;if(GetSelectPopupGeometry(openSelectPopup,popup)&&popup.bounds.Contains(x,y)){HideTooltip();return 0;}}
             auto n=layout.HitTest(x,y);UpdateTooltipTarget(n);

@@ -1,0 +1,470 @@
+--- before/TWebFrame2/src/CSS.cpp
++++ after/TWebFrame2/src/CSS.cpp
+@@ -323,6 +323,7 @@
+     };
+     set(L"box-sizing", L"content-box");
+     set(L"position", L"static");
++    set(L"clip-path", L"none");
+     set(L"color", L"#000000");
+     set(L"font-family", L"Segoe UI");
+     set(L"font-size", L"16px");
+--- before/TWebFrame2/src/Layout.cpp
++++ after/TWebFrame2/src/Layout.cpp
+@@ -508,6 +508,7 @@
+         parentDisplay==L"grid"||parentDisplay==L"inline-grid";
+     if(HasExplicitZIndex(box)&&(positioned||flexOrGridItem))return true;
+     if(box.style.Get(L"transform",L"none")!=L"none")return true;
++    if(box.style.Get(L"clip-path",L"none")!=L"none")return true;
+     float opacity=1;return TryParseFloat(box.style.Get(L"opacity",L"1"),opacity)&&opacity<0.999f;
+ }
+ 
+@@ -744,8 +745,7 @@
+ }
+ 
+ Microsoft::WRL::ComPtr<ID2D1Geometry> RoundedBoxGeometry(
+-        ID2D1RenderTarget* target,const D2D1_RECT_F& rect,const CornerRadii& radii) {
+-    Microsoft::WRL::ComPtr<ID2D1Factory> factory;target->GetFactory(&factory);
++        ID2D1Factory* factory,const D2D1_RECT_F& rect,const CornerRadii& radii) {
+     Microsoft::WRL::ComPtr<ID2D1Geometry> result;
+     if(!factory)return result;
+     if(radii.Uniform()){
+@@ -776,6 +776,12 @@
+     return result;
+ }
+ 
++Microsoft::WRL::ComPtr<ID2D1Geometry> RoundedBoxGeometry(
++        ID2D1RenderTarget* target,const D2D1_RECT_F& rect,const CornerRadii& radii) {
++    Microsoft::WRL::ComPtr<ID2D1Factory> factory;target->GetFactory(&factory);
++    return RoundedBoxGeometry(factory.Get(),rect,radii);
++}
++
+ void FillRoundedBox(ID2D1RenderTarget* target,const D2D1_RECT_F& rect,
+                     const CornerRadii& radius,ID2D1Brush* brush) {
+     if(!radius.Any()){target->FillRectangle(rect,brush);return;}
+@@ -1192,6 +1198,243 @@
+         cached.fontSize=StyleSheet::Length(style.Get(L"font-size",L"16px"),16,16,16);
+         cached.fontSizeValid=true;
+     }return cached.fontSize;
++}
++
++// CSS clipping changes paint and pointer regions, never the layout boxes.
++// Use the same resolved geometry for masks and hit testing. Percentages are
++// relative to the selected reference box, including the normalized diagonal
++// for circle radii; they are independent of the output device scale.
++struct BasicClipShape {
++    enum Kind { None, RoundedRect, Ellipse, Polygon } kind=None;
++    LayoutRect rect;
++    CornerRadii radii;
++    std::vector<D2D1_POINT_2F> points;
++    D2D1_FILL_MODE fill=D2D1_FILL_MODE_WINDING;
++    bool referenceOnly=false;
++};
++
++bool ClipPosition(const std::vector<std::wstring>& words,float width,float height,
++                  float viewport,float font,float& x,float& y){
++    x=width/2;y=height/2;
++    const auto length=[&](const std::wstring& token,float reference){
++        return StyleSheet::Length(token,reference,viewport,
++            std::numeric_limits<float>::quiet_NaN(),font);
++    };
++    const auto horizontal=[](const std::wstring& token){return token==L"left"||token==L"right";};
++    const auto vertical=[](const std::wstring& token){return token==L"top"||token==L"bottom";};
++    const auto axis=[&](const std::wstring& token,float extent,bool second){
++        if(token==L"center")return extent/2;
++        if(token==(second?L"top":L"left"))return 0.0f;
++        if(token==(second?L"bottom":L"right"))return extent;
++        if(horizontal(token)||vertical(token))return std::numeric_limits<float>::quiet_NaN();
++        return length(token,extent);
++    };
++    if(words.empty())return true;
++    if(words.size()==1){
++        if(vertical(words[0]))y=axis(words[0],height,true);
++        else x=axis(words[0],width,false);
++    }else if(words.size()==2){
++        if(vertical(words[0])||horizontal(words[1])){
++            x=axis(words[1],width,false);y=axis(words[0],height,true);
++        }else{x=axis(words[0],width,false);y=axis(words[1],height,true);}
++    }else if(words.size()<=4){
++        bool hasX=false,hasY=false;unsigned centers=0;
++        for(size_t i=0;i<words.size();++i){
++            const auto& edge=words[i];const bool isX=horizontal(edge),isY=vertical(edge);
++            if(!isX&&!isY&&edge!=L"center")return false;
++            float offset=0;
++            if((isX||isY)&&i+1<words.size()&&!horizontal(words[i+1])&&!vertical(words[i+1])&&words[i+1]!=L"center"){
++                offset=length(words[++i],isX?width:height);if(!std::isfinite(offset))return false;
++            }
++            if(isX){if(hasX)return false;hasX=true;x=edge==L"right"?width-offset:offset;}
++            else if(isY){if(hasY)return false;hasY=true;y=edge==L"bottom"?height-offset:offset;}
++            else ++centers;
++        }
++        if(centers&&!hasX){hasX=true;x=width/2;--centers;}
++        if(centers&&!hasY){hasY=true;y=height/2;--centers;}
++        if(centers)return false;
++        if(!hasX||!hasY)return false;
++    }else return false;
++    return std::isfinite(x)&&std::isfinite(y);
++}
++
++BasicClipShape ResolveBasicClip(const LayoutBox& box,float viewport){
++    BasicClipShape result;
++    const auto raw=ToLower(Trim(box.style.Get(L"clip-path",L"none")));
++    if(raw.empty()||raw==L"none")return result;
++    std::wstring function,reference=L"border-box";bool hasReference=false;
++    for(const auto& word:Words(raw)){
++        if(word.find(L'(')!=std::wstring::npos){if(!function.empty())return {};function=word;}
++        else{
++            if(hasReference)return {};
++            if(word!=L"border-box"&&word!=L"padding-box"&&word!=L"content-box"&&word!=L"margin-box"&&
++               word!=L"fill-box"&&word!=L"stroke-box"&&word!=L"view-box")return {};
++            reference=word;hasReference=true;
++        }
++    }
++    LayoutRect area=box.rect;
++    auto radius=ResolveCornerRadii(box.style,area.width,area.height,viewport);
++    if(reference==L"padding-box"||reference==L"content-box"||reference==L"fill-box"){
++        const auto border=UsedBorderValues(box);
++        area={area.x+border.left,area.y+border.top,
++            std::max(0.0f,area.width-border.left-border.right),std::max(0.0f,area.height-border.top-border.bottom)};
++        radius=InsetCornerRadii(radius,border);
++        if(reference!=L"padding-box"){
++            const auto padding=EdgeValues(box.style,L"padding",box.parent?box.parent->content.width:viewport,viewport);
++            area={area.x+padding.left,area.y+padding.top,
++                std::max(0.0f,area.width-padding.left-padding.right),std::max(0.0f,area.height-padding.top-padding.bottom)};
++            radius=InsetCornerRadii(radius,padding);
++        }
++    }else if(reference==L"margin-box"){
++        const auto margin=EdgeValues(box.style,L"margin",box.parent?box.parent->content.width:viewport,viewport);
++        area={area.x-margin.left,area.y-margin.top,
++            std::max(0.0f,area.width+margin.left+margin.right),std::max(0.0f,area.height+margin.top+margin.bottom)};
++        // CSS Shapes extends each corner with the cubic margin-box adjustment.
++        const float xs[]={margin.left,margin.right,margin.right,margin.left};
++        const float ys[]={margin.top,margin.top,margin.bottom,margin.bottom};
++        const auto expand=[](float r,float m){
++            if(m>0&&r<m){const float delta=r/m-1;return std::max(0.0f,r+m*(1+delta*delta*delta));}
++            return std::max(0.0f,r+m);
++        };
++        for(size_t i=0;i<4;++i)radius.corners[i]={expand(radius.corners[i].x,xs[i]),expand(radius.corners[i].y,ys[i])};
++        radius.x=radius.corners[0].x;radius.y=radius.corners[0].y;
++    }
++    result.rect=area;
++    if(function.empty()){result.kind=BasicClipShape::RoundedRect;result.radii=radius;result.referenceOnly=true;return result;}
++    const auto open=function.find(L'(');
++    if(function.back()!=L')')return {};
++    const auto name=function.substr(0,open),arguments=function.substr(open+1,function.size()-open-2);
++    const float font=FontSize(box.style);
++    const auto length=[&](const std::wstring& token,float extent){
++        return StyleSheet::Length(token,extent,viewport,std::numeric_limits<float>::quiet_NaN(),font);
++    };
++    if(name==L"inset"){
++        auto words=Words(arguments);const auto round=std::find(words.begin(),words.end(),L"round");
++        const size_t count=static_cast<size_t>(round-words.begin());if(count<1||count>4)return {};
++        const std::array<std::wstring,4> values={words[0],count>1?words[1]:words[0],
++            count>2?words[2]:words[0],count>3?words[3]:(count>1?words[1]:words[0])};
++        float top=length(values[0],area.height),right=length(values[1],area.width),
++            bottom=length(values[2],area.height),left=length(values[3],area.width);
++        if(!std::isfinite(top)||!std::isfinite(right)||!std::isfinite(bottom)||!std::isfinite(left))return {};
++        const bool collapsedY=top+bottom>=area.height,collapsedX=left+right>=area.width;
++        if(top+bottom>area.height){const float factor=area.height/(top+bottom);top*=factor;bottom*=factor;}
++        if(left+right>area.width){const float factor=area.width/(left+right);left*=factor;right*=factor;}
++        result.kind=BasicClipShape::RoundedRect;
++        result.rect={area.x+left,area.y+top,collapsedX?0:area.width-left-right,collapsedY?0:area.height-top-bottom};
++        if(round!=words.end()){
++            if(round+1==words.end())return {};
++            std::wstring corners;for(auto it=round+1;it!=words.end();++it){if(!corners.empty())corners+=L' ';corners+=*it;}
++            ComputedStyle cornerStyle;(*cornerStyle.values)[L"border-radius"]=corners;
++            result.radii=ResolveCornerRadii(cornerStyle,result.rect.width,result.rect.height,viewport);
++        }
++    }else if(name==L"circle"||name==L"ellipse"){
++        const auto words=Words(arguments);const auto at=std::find(words.begin(),words.end(),L"at");
++        const size_t count=static_cast<size_t>(at-words.begin());const bool circle=name==L"circle";
++        if(count>(circle?1u:2u)||(!circle&&count==1))return {};
++        float x=0,y=0;
++        if(at!=words.end()&&at+1==words.end())return {};
++        if(!ClipPosition(at==words.end()?std::vector<std::wstring>{}:std::vector<std::wstring>(at+1,words.end()),area.width,area.height,viewport,font,x,y))return {};
++        const auto radial=[&](const std::wstring& token,float extent,float center){
++            const float first=std::abs(center),second=std::abs(extent-center);
++            if(token==L"closest-side")return std::min(first,second);
++            if(token==L"farthest-side")return std::max(first,second);
++            return length(token,extent);
++        };
++        float rx=0,ry=0;
++        const auto first=count?words[0]:L"closest-side";
++        if(circle){
++            if(first==L"closest-side"||first==L"farthest-side"){
++                const float horizontal=radial(first,area.width,x),vertical=radial(first,area.height,y);
++                rx=first==L"closest-side"?std::min(horizontal,vertical):std::max(horizontal,vertical);
++            }else rx=length(first,std::hypot(area.width,area.height)/std::sqrt(2.0f));
++            ry=rx;
++        }else{rx=radial(first,area.width,x);ry=radial(count?words[1]:L"closest-side",area.height,y);}
++        if(!std::isfinite(rx)||!std::isfinite(ry)||rx<0||ry<0)return {};
++        result.kind=BasicClipShape::Ellipse;result.rect={area.x+x-rx,area.y+y-ry,2*rx,2*ry};
++    }else if(name==L"polygon"){
++        auto vertices=CommaSeparated(arguments);size_t first=0;
++        if(!vertices.empty()&&(vertices[0]==L"evenodd"||vertices[0]==L"nonzero")){
++            result.fill=vertices[0]==L"evenodd"?D2D1_FILL_MODE_ALTERNATE:D2D1_FILL_MODE_WINDING;first=1;
++        }
++        if(vertices.size()-first<3)return {};
++        for(size_t i=first;i<vertices.size();++i){
++            const auto pair=Words(vertices[i]);if(pair.size()!=2)return {};
++            const float x=length(pair[0],area.width),y=length(pair[1],area.height);
++            if(!std::isfinite(x)||!std::isfinite(y))return {};
++            result.points.push_back({area.x+x,area.y+y});
++        }
++        result.kind=BasicClipShape::Polygon;
++    }
++    return result;
++}
++
++Microsoft::WRL::ComPtr<ID2D1Geometry> BasicClipGeometry(ID2D1Factory* factory,const BasicClipShape& shape){
++    if(!factory)return {};
++    if(shape.kind==BasicClipShape::RoundedRect){
++        const auto& r=shape.rect;
++        return RoundedBoxGeometry(factory,D2D1::RectF(r.x,r.y,r.x+r.width,r.y+r.height),shape.radii);
++    }
++    if(shape.kind==BasicClipShape::Ellipse){
++        Microsoft::WRL::ComPtr<ID2D1EllipseGeometry> geometry;const auto& r=shape.rect;
++        factory->CreateEllipseGeometry(D2D1::Ellipse(D2D1::Point2F(r.x+r.width/2,r.y+r.height/2),r.width/2,r.height/2),&geometry);
++        return geometry;
++    }
++    if(shape.kind==BasicClipShape::Polygon){
++        Microsoft::WRL::ComPtr<ID2D1PathGeometry> geometry;Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
++        if(FAILED(factory->CreatePathGeometry(&geometry))||FAILED(geometry->Open(&sink)))return {};
++        sink->SetFillMode(shape.fill);sink->BeginFigure(shape.points[0],D2D1_FIGURE_BEGIN_FILLED);
++        for(size_t i=1;i<shape.points.size();++i)sink->AddLine(shape.points[i]);
++        sink->EndFigure(D2D1_FIGURE_END_CLOSED);if(FAILED(sink->Close()))return {};
++        return geometry;
++    }
++    return {};
++}
++
++bool BasicClipAllowsPoint(const LayoutBox& box,float x,float y,float viewport){
++    const auto shape=ResolveBasicClip(box,viewport);if(shape.kind==BasicClipShape::None)return true;
++    if(shape.kind!=BasicClipShape::Polygon&&(shape.rect.width<=0||shape.rect.height<=0))return false;
++    if(!shape.referenceOnly&&shape.kind!=BasicClipShape::Polygon&&!shape.rect.Contains(x,y))return false;
++    if(!shape.referenceOnly&&shape.kind==BasicClipShape::Ellipse){
++        const auto& r=shape.rect;const float dx=(x-r.x-r.width/2)/(r.width/2),dy=(y-r.y-r.height/2)/(r.height/2);
++        return dx*dx+dy*dy<=1;
++    }
++    if(!shape.referenceOnly&&shape.kind==BasicClipShape::RoundedRect){
++        const auto& r=shape.rect;
++        const float xs[]={r.x,r.x+r.width,r.x+r.width,r.x};
++        const float ys[]={r.y,r.y,r.y+r.height,r.y+r.height};
++        for(size_t i=0;i<4;++i){
++            const auto radius=shape.radii.corners[i];if(radius.x<=0||radius.y<=0)continue;
++            const float dx=(i==0||i==3)?x-xs[i]:xs[i]-x,dy=i<2?y-ys[i]:ys[i]-y;
++            if(dx<radius.x&&dy<radius.y){
++                const float nx=(dx-radius.x)/radius.x,ny=(dy-radius.y)/radius.y;
++                if(nx*nx+ny*ny>1)return false;
++            }
++        }
++        return true;
++    }
++    static thread_local Microsoft::WRL::ComPtr<ID2D1Factory> factory;
++    if(!factory)D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,factory.GetAddressOf());
++    if(const auto geometry=BasicClipGeometry(factory.Get(),shape)){
++        if(shape.referenceOnly){
++            Microsoft::WRL::ComPtr<ID2D1RectangleGeometry> pixel;
++            const float size=1/std::max(.01f,box.style.deviceScale);
++            factory->CreateRectangleGeometry(D2D1::RectF(x,y,x+size,y+size),&pixel);
++            D2D1_GEOMETRY_RELATION relation=D2D1_GEOMETRY_RELATION_UNKNOWN;
++            if(pixel&&SUCCEEDED(geometry->CompareWithGeometry(pixel.Get(),nullptr,.01f,&relation)))
++                return relation!=D2D1_GEOMETRY_RELATION_DISJOINT;
++        }
++        BOOL contains=FALSE;geometry->FillContainsPoint(D2D1::Point2F(x,y),nullptr,.01f,&contains);return contains!=FALSE;
++    }
++    return true;
++}
++
++bool HitRectContains(const LayoutRect& rect,float x,float y,float scale){
++    // Browser point hit tests intersect a one-device-pixel rectangle with box
++    // bounds. The path itself still tests the original continuous point.
++    const float left=std::floor(x*64)/64,top=std::floor(y*64)/64;
++    const float size=1/std::max(.01f,scale);
++    return rect.width>0&&rect.height>0&&left+size>rect.x&&left<rect.x+rect.width&&
++        top+size>rect.y&&top<rect.y+rect.height;
+ }
+ 
+ IDWriteFactory* SharedWriteFactory();
+@@ -4539,17 +4782,18 @@
+     const bool borderBox=box.style.Is(L"box-sizing",L"border-box");
+     const float decorationWidth=padding.left+padding.right+border.left+border.right;
+     const float decorationHeight=padding.top+padding.bottom+border.top+border.bottom;
++    const auto margin=UsedLayoutMargins(box,area.width,viewportWidth);
+     float width=NaturalWidth(box);
+     if(HasIntrinsicWidth(box))width=UsedIntrinsicWidth(box,widthRaw,area.width,viewportWidth);
+     else if(!widthRaw.empty()&&widthRaw!=L"auto"){
+         width=StyleSheet::Length(widthRaw,area.width,viewportWidth,width);
+-        width=borderBox?std::max(width,decorationWidth):width+decorationWidth;
++        width=(borderBox?std::max(width,decorationWidth):width+decorationWidth)+margin.left+margin.right;
+     }
+     else if(!autoLeft&&!autoRight)width=std::max(0.0f,area.width-left-right);
+     float height=NaturalHeight(box,width);
+     if(!heightRaw.empty()&&heightRaw!=L"auto"){
+         height=StyleSheet::Length(heightRaw,area.height,viewportHeight,height);
+-        height=borderBox?std::max(height,decorationHeight):height+decorationHeight;
++        height=(borderBox?std::max(height,decorationHeight):height+decorationHeight)+margin.top+margin.bottom;
+     }
+     else if(!autoTop&&!autoBottom)height=std::max(0.0f,area.height-top-bottom);
+     const float x=!autoLeft?area.x+left:(!autoRight?area.x+area.width-right-width:area.x);
+@@ -5876,9 +6120,9 @@
+     if(std::abs(dx)>0.001f||std::abs(dy)>0.001f)TranslateBox(box,dx,dy);
+ }
+ 
+-bool ApplyPaintTransform(ID2D1RenderTarget* target,const LayoutBox& box,D2D1_MATRIX_3X2_F& previous){
++D2D1::Matrix3x2F PaintTransform(const LayoutBox& box){
+     const auto transform=ToLower(Trim(box.style.Get(L"transform")));
+-    if(transform.empty()||transform==L"none")return false;
++    if(transform.empty()||transform==L"none")return D2D1::Matrix3x2F::Identity();
+     auto argument=[&](const std::wstring& function){const auto start=transform.find(function+L"(");if(start==std::wstring::npos)return std::wstring{};const auto first=start+function.size()+1,close=transform.find(L')',first);return close==std::wstring::npos?std::wstring{}:Trim(transform.substr(first,close-first));};
+     float angle=0,scaleX=1,scaleY=1;
+     if(const auto raw=argument(L"rotate");!raw.empty())TryParseFloat(raw,angle);
+@@ -5891,9 +6135,12 @@
+     }
+     if(const auto raw=argument(L"scalex");!raw.empty())TryParseFloat(raw,scaleX);
+     if(const auto raw=argument(L"scaley");!raw.empty())TryParseFloat(raw,scaleY);
+-    if(std::abs(angle)<0.001f&&std::abs(scaleX-1)<0.001f&&std::abs(scaleY-1)<0.001f)return false;
+-    target->GetTransform(&previous);const auto center=D2D1::Point2F(box.rect.x+box.rect.width/2,box.rect.y+box.rect.height/2);
+-    target->SetTransform(D2D1::Matrix3x2F::Scale(scaleX,scaleY,center)*D2D1::Matrix3x2F::Rotation(angle,center)*previous);
++    const auto center=D2D1::Point2F(box.rect.x+box.rect.width/2,box.rect.y+box.rect.height/2);
++    return D2D1::Matrix3x2F::Scale(scaleX,scaleY,center)*D2D1::Matrix3x2F::Rotation(angle,center);
++}
++bool ApplyPaintTransform(ID2D1RenderTarget* target,const LayoutBox& box,D2D1_MATRIX_3X2_F& previous){
++    const auto matrix=PaintTransform(box);if(matrix.IsIdentity())return false;
++    target->GetTransform(&previous);target->SetTransform(matrix*previous);
+     return true;
+ }
+ void ShiftStickyFlow(LayoutBox& box,float dy){if(!box.containsSticky)return;if(box.stickyFlowYValid)box.stickyFlowY+=dy;for(auto& child:box.children)if(child->containsSticky)ShiftStickyFlow(*child,dy);}
+@@ -9154,13 +9401,49 @@
+     if(clipBounds.width<=0||clipBounds.height<=0)return;
+     if(!Intersects(box.subtreeBounds,clipBounds))return;
+     if(box.node&&box.node->modal&& &box!=paintingTopLayer_)return;
++    float opacity=1;TryParseFloat(box.style.Get(L"opacity",L"1"),opacity);
++    opacity=std::clamp(opacity,0.0f,1.0f);if(opacity<=0.001f)return;
+     PushPaintClip(target,PixelAlignedRect(clipBounds,deviceScale_),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
++    // Keep the mask and transform active through deferred z-index descendants.
++    // Clipping only PaintBox would let those descendants escape the shape.
++    D2D1_MATRIX_3X2_F previousTransform{};
++    const bool transformed=ApplyPaintTransform(target,box,previousTransform);
++    const auto shape=ResolveBasicClip(box,viewportWidth_);
++    if(shape.kind!=BasicClipShape::None&&shape.kind!=BasicClipShape::Polygon&&
++       (shape.rect.width<=0||shape.rect.height<=0)){
++        if(transformed)target->SetTransform(previousTransform);
++        PopPaintClip(target);return;
++    }
++    Microsoft::WRL::ComPtr<ID2D1Layer> shapeLayer;
++    Microsoft::WRL::ComPtr<ID2D1Geometry> shapeGeometry;
++    std::unique_ptr<ScopedWebTextRendering> shapeTextRendering;
++    if(shape.kind!=BasicClipShape::None){
++        Microsoft::WRL::ComPtr<ID2D1Factory> geometryFactory;target->GetFactory(&geometryFactory);
++        shapeGeometry=BasicClipGeometry(geometryFactory.Get(),shape);
++        if(shapeGeometry&&SUCCEEDED(target->CreateLayer(nullptr,&shapeLayer))){
++            PushPaintLayer(target,D2D1::LayerParameters(D2D1::InfiniteRect(),shapeGeometry.Get(),
++                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE),shapeLayer.Get());
++            shapeTextRendering=std::make_unique<ScopedWebTextRendering>(target,factory,true);
++        }
++    }
++    Microsoft::WRL::ComPtr<ID2D1Layer> opacityLayer;
++    std::unique_ptr<ScopedWebTextRendering> opacityTextRendering;
++    if(opacity<0.999f&&SUCCEEDED(target->CreateLayer(nullptr,&opacityLayer))){
++        PushPaintLayer(target,D2D1::LayerParameters(D2D1::InfiniteRect(),nullptr,
++            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,D2D1::IdentityMatrix(),opacity),opacityLayer.Get());
++        opacityTextRendering=std::make_unique<ScopedWebTextRendering>(target,factory,true);
++    }
+     const auto* paintScope=box.establishesStackingContext?&box:box.deferredStackingScope;
+     PaintBox(target,factory,box,clipBounds,paintScope,true);
+     const auto contextClip=ClipsOverflow(box)?IntersectRects(clipBounds,OverflowClipRect(box)):clipBounds;
+     for(auto* context:box.nonNegativeStackingContexts)
+         if(Intersects(context->subtreeBounds,contextClip))
+             PaintStackingContext(target,factory,*context,StackingContextClip(*context,box,contextClip));
++    if(opacityLayer)PopPaintLayer(target);
++    opacityTextRendering.reset();
++    if(shapeLayer)PopPaintLayer(target);
++    shapeTextRendering.reset();
++    if(transformed)target->SetTransform(previousTransform);
+     PopPaintClip(target);
+ }
+ 
+@@ -9174,9 +9457,9 @@
+     if(!box.visible||!Intersects(box.subtreeBounds,clipBounds))return;
+     float opacity=1.0f;TryParseFloat(box.style.Get(L"opacity",L"1"),opacity);
+     opacity=std::max(0.0f,std::min(1.0f,opacity));
+-    if(box.style.Is(L"visibility",L"hidden")||opacity<=0.001f)return;D2D1_MATRIX_3X2_F previousTransform{};const bool transformed=ApplyPaintTransform(target,box,previousTransform);Microsoft::WRL::ComPtr<ID2D1Layer> opacityLayer;
++    if(box.style.Is(L"visibility",L"hidden")||opacity<=0.001f)return;D2D1_MATRIX_3X2_F previousTransform{};const bool transformed=!paintDeferredRoot&&ApplyPaintTransform(target,box,previousTransform);Microsoft::WRL::ComPtr<ID2D1Layer> opacityLayer;
+     std::unique_ptr<ScopedWebTextRendering> opacityTextRendering;
+-    if(opacity<0.999f&&SUCCEEDED(target->CreateLayer(nullptr,&opacityLayer))){
++    if(!paintDeferredRoot&&opacity<0.999f&&SUCCEEDED(target->CreateLayer(nullptr,&opacityLayer))){
+         PushPaintLayer(target,D2D1::LayerParameters(D2D1::InfiniteRect(),nullptr,D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,D2D1::IdentityMatrix(),opacity),opacityLayer.Get());
+         opacityTextRendering=std::make_unique<ScopedWebTextRendering>(target,factory,true);
+     }
+@@ -10109,18 +10392,24 @@
+ }
+ 
+ std::shared_ptr<Node> LayoutEngine::HitTestStackingContext(const LayoutBox& box,float x,float y)const{
+-    if(!box.subtreeBounds.Contains(x,y))return {};
++    auto matrix=PaintTransform(box);if(!matrix.Invert())return {};
++    const auto point=matrix.TransformPoint({x,y});x=point.x;y=point.y;
++    if(!HitRectContains(box.subtreeBounds,x,y,deviceScale_)||!BasicClipAllowsPoint(box,x,y,viewportWidth_))return {};
+     for(auto it=box.nonNegativeStackingContexts.rbegin();it!=box.nonNegativeStackingContexts.rend();++it){
+         const auto* context=*it;
+         if((!ClipsOverflow(box)||OverflowClipRect(box).Contains(x,y))&&
+-           context->subtreeBounds.Contains(x,y)&&StackingContextAllowsPoint(*context,box,x,y))
++           HitRectContains(context->subtreeBounds,x,y,deviceScale_)&&StackingContextAllowsPoint(*context,box,x,y))
+             if(auto node=HitTestStackingContext(*context,x,y))return node;
+     }
+-    return HitTestBox(box,x,y);
+-}
+-std::shared_ptr<Node> LayoutEngine::HitTestBox(const LayoutBox& box,float x,float y)const{
+-    if(!box.visible||!box.subtreeBounds.Contains(x,y))return {};
+-    const bool inside=(box.viewportScrollContainer?box.viewportScrollport:box.rect).Contains(x,y);
++    return HitTestBox(box,x,y,true);
++}
++std::shared_ptr<Node> LayoutEngine::HitTestBox(const LayoutBox& box,float x,float y,bool transformApplied)const{
++    if(!transformApplied){
++        auto matrix=PaintTransform(box);if(!matrix.Invert())return {};
++        const auto point=matrix.TransformPoint({x,y});x=point.x;y=point.y;
++    }
++    if(!box.visible||!HitRectContains(box.subtreeBounds,x,y,deviceScale_)||!BasicClipAllowsPoint(box,x,y,viewportWidth_))return {};
++    const bool inside=HitRectContains(box.viewportScrollContainer?box.viewportScrollport:box.rect,x,y,deviceScale_);
+     const bool clips=ClipsOverflow(box);
+     if(!inside&&clips)return {};
+     const bool childPointAllowed=!clips||OverflowClipRect(box).Contains(x,y);
+@@ -10131,7 +10420,7 @@
+             [](const LayoutBox* child,float value){return child->subtreeBounds.y+
+                 child->subtreeBounds.height<=value;});
+         auto last=first;
+-        while(last!=box.verticallyOrderedChildren.end()&&(*last)->subtreeBounds.y<=y)++last;
++        while(last!=box.verticallyOrderedChildren.end()&&(*last)->subtreeBounds.y<y+1)++last;
+         while(last!=first){--last;if(auto node=HitTestBox(**last,x,y))return node;}
+     }else if(childPointAllowed){
+         for(auto it=box.paintChildren.rbegin();it!=box.paintChildren.rend();++it)
+@@ -10508,7 +10797,18 @@
+             }
+         }
+     }
+-    return true;
++    // DOM bounds include each ancestor's paint transform, while layout and
++    // clip reference boxes remain in their original coordinate space.
++    std::array<D2D1_POINT_2F,4> corners={D2D1::Point2F(rect.x,rect.y),
++        D2D1::Point2F(rect.x+rect.width,rect.y),D2D1::Point2F(rect.x+rect.width,rect.y+rect.height),
++        D2D1::Point2F(rect.x,rect.y+rect.height)};
++    for(auto* ancestor=box;ancestor;ancestor=ancestor->parent){
++        const auto matrix=PaintTransform(*ancestor);
++        if(!matrix.IsIdentity())for(auto& corner:corners)corner=matrix.TransformPoint(corner);
++    }
++    float left=corners[0].x,right=left,top=corners[0].y,bottom=top;
++    for(const auto& corner:corners){left=std::min(left,corner.x);right=std::max(right,corner.x);top=std::min(top,corner.y);bottom=std::max(bottom,corner.y);}
++    rect={left,top,right-left,bottom-top};return true;
+ }
+ 
+ std::wstring LayoutEngine::DumpRenderingTextJson()const{
+--- before/TWebFrame2/src/Layout.h
++++ after/TWebFrame2/src/Layout.h
+@@ -261,7 +261,7 @@
+                   const LayoutBox* deferredScope = nullptr, bool paintDeferredRoot = false);
+     void PaintScrollbars(ID2D1RenderTarget* target, const LayoutBox& box);
+     std::shared_ptr<Node> HitTestStackingContext(const LayoutBox& box, float x, float y) const;
+-    std::shared_ptr<Node> HitTestBox(const LayoutBox& box, float x, float y) const;
++    std::shared_ptr<Node> HitTestBox(const LayoutBox& box, float x, float y, bool transformApplied = false) const;
+     bool ScrollBox(LayoutBox& box, float x, float y, float wheelDelta,
+                    std::shared_ptr<Node>* scrolledNode, bool horizontal);
+     bool BeginScrollbarBox(LayoutBox& box, float x, float y,

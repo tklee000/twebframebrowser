@@ -1,0 +1,761 @@
+--- before/TWebFrame2/src/CSS.cpp
++++ after/TWebFrame2/src/CSS.cpp
+@@ -1167,6 +1167,7 @@
+             else if(name==L"font")for(const auto* property:{L"font-family",L"font-size",L"font-style",L"font-weight",L"line-height"})setProperty(property,keyword,candidate);
+             else if(name==L"flex")for(const auto* property:{L"flex-grow",L"flex-shrink",L"flex-basis"})setProperty(property,keyword,candidate);
+             else if(name==L"gap"){setProperty(L"row-gap",keyword,candidate);setProperty(L"column-gap",keyword,candidate);}
++            else if(name==L"columns"){setProperty(L"column-width",keyword,candidate);setProperty(L"column-count",keyword,candidate);}
+             else if(name==L"overflow"){setProperty(L"overflow-x",keyword,candidate);setProperty(L"overflow-y",keyword,candidate);}
+             else if(name==L"margin"||name==L"padding"||name==L"inset"||name==L"border"||name==L"border-color"||name==L"border-style"||name==L"border-width"){
+                 for(const auto* side:{L"top",L"right",L"bottom",L"left"}){
+@@ -1261,6 +1262,21 @@
+             setProperty(L"outline-width",width,candidate);
+             setProperty(L"outline-style",style,candidate);
+             setProperty(L"outline-color",color,candidate);
++        } else if (name == L"columns") {
++            std::wstring count=L"auto",width=L"auto";bool hasCount=false,hasWidth=false,valid=true;
++            const auto parts=SplitWhitespace(ResolveVariables(value,variables));
++            if(parts.empty()||parts.size()>2)valid=false;
++            for(const auto& part:parts){
++                if(ToLower(part)==L"auto")continue;
++                unsigned long long integer=0;size_t used=0;
++                if(TryParseUnsignedInteger(part,integer,&used)&&used==part.size()&&integer>0){
++                    if(hasCount)valid=false;count=part;hasCount=true;
++                }else{
++                    if(hasWidth||StyleSheet::Length(part,100,100,-1)<=0)valid=false;
++                    width=part;hasWidth=true;
++                }
++            }
++            if(valid){setProperty(L"column-count",count,candidate);setProperty(L"column-width",width,candidate);}
+         } else if (name == L"gap") {
+             const auto parts = SplitWhitespace(value);
+             if (!parts.empty()) {
+--- before/TWebFrame2/src/Layout.cpp
++++ after/TWebFrame2/src/Layout.cpp
+@@ -559,12 +559,18 @@
+     return FloatSide::None;
+ }
+ 
++bool HasColumnSizing(const ComputedStyle& style){
++    const auto count=style.Get(L"column-count",L"auto"),width=style.Get(L"column-width",L"auto");
++    return (!count.empty()&&count!=L"auto")||(!width.empty()&&width!=L"auto");
++}
++
+ bool EstablishesBlockFormattingContext(const LayoutBox& box) {
+     // body is stored at the tree root, but remains an ordinary block in html.
+     if((!box.parent&&(!box.node||box.node->tag!=L"body"))||UsedFloatSide(box.style)!=FloatSide::None)return true;
+     const auto position=ToLower(Trim(box.style.Get(L"position",L"static")));
+     if(position==L"absolute"||position==L"fixed")return true;
+     const auto display=ToLower(Trim(box.style.Get(L"display",L"block")));
++    if((display==L"block"||display==L"flow-root")&&HasColumnSizing(box.style))return true;
+     if(display==L"flow-root"||display==L"inline-block"||display==L"table-cell"||
+        display==L"table-caption"||display==L"table"||display==L"inline-table"||display==L"flex"||display==L"inline-flex"||
+        display==L"grid"||display==L"inline-grid")return true;
+@@ -2726,6 +2732,51 @@
+ 
+ float WrappableTextMinimum(const std::wstring& text,const ComputedStyle& style);
+ 
++float TextFlowFragmentAdvance(const LayoutBox& box){
++    struct Advances {std::vector<float> positions;};
++    static thread_local FastMap<std::wstring,Advances> cache;
++    static thread_local size_t cachedCharacters=0;
++    const auto& source=box.generatedFrom->text;
++    std::wstring key=source+L'\x1f'+FontFamily(box.style)+L'\x1f'+box.style.Get(L"font-family")+
++        L'\x1f'+NumberText(FontSize(box.style))+L'\x1f'+std::to_wstring(FontWeight(box.style));
++    for(const auto* property:{L"font-style",L"font-kerning",L"letter-spacing",L"word-spacing",L"tab-size"})
++        key+=L'\x1f'+box.style.Get(property);
++    key+=L'\x1f'+NumberText(box.style.deviceScale);
++    auto found=cache.find(key);
++    if(found==cache.end()){
++        if(cache.size()>=64||cachedCharacters+source.size()>262144){cache.clear();cachedCharacters=0;}
++        const auto text=NormalizeText(source,false,true,true);
++        auto* factory=SharedWriteFactory();if(!factory)return TextWidth(box.node->text,box.style,true,box.preserveTrailingWhitespace);
++        auto format=TextFormat(factory,box.style);Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
++        if(!format||FAILED(factory->CreateTextLayout(text.c_str(),static_cast<UINT32>(text.size()),
++            format.Get(),100000,100000,&layout)))return TextWidth(box.node->text,box.style,true,box.preserveTrailingWhitespace);
++        ApplyFontFallback(factory,layout.Get(),text,box.style);
++        ApplyCharacterSpacing(layout.Get(),text,box.style);
++        ApplyTabSize(factory,layout.Get(),format.Get(),text,box.style);
++        UINT32 count=0;layout->GetClusterMetrics(nullptr,0,&count);
++        std::vector<DWRITE_CLUSTER_METRICS> clusters(count);
++        if(FAILED(layout->GetClusterMetrics(clusters.data(),count,&count)))return TextWidth(box.node->text,box.style,true,box.preserveTrailingWhitespace);
++        std::vector<float> normalized(text.size()+1);size_t position=0;float advance=0;
++        const float units=64*std::max(.01f,box.style.deviceScale);
++        for(const auto& cluster:clusters){
++            advance+=cluster.width;
++            for(size_t length=0;length<cluster.length&&position<text.size();++length)
++                normalized[++position]=std::ceil(advance*units)/units;
++        }
++        Advances measured;measured.positions.resize(source.size()+1);position=0;bool space=false;
++        for(size_t index=0;index<source.size();++index){
++            if(!IsCollapsibleTextSpace(source[index])){++position;space=false;}
++            else if(!space){++position;space=true;}
++            measured.positions[index+1]=normalized[std::min(position,text.size())];
++        }
++        cachedCharacters+=source.size();found=cache.emplace(std::move(key),std::move(measured)).first;
++    }
++    const auto& advances=found->second.positions;
++    const size_t start=std::min(box.textSourceOffset,source.size());
++    const size_t end=std::min(start+box.node->text.size(),source.size());
++    return std::max(0.0f,advances[end]-advances[start]);
++}
++
+ float TextHeight(const std::wstring& source,const ComputedStyle& style,float availableWidth,
+                  bool preserveLeading=false,bool preserveTrailing=false){
+     const auto whiteSpace=style.Get(L"white-space");
+@@ -2838,6 +2889,25 @@
+     return box.node->tag==L"select"?SelectedOptionText(box.node):std::wstring{};
+ }
+ 
++size_t TextSourceToLayoutOffset(const LayoutBox& box,size_t rawOffset){
++    if(box.node->type!=NodeType::Text||PreservesSpaces(box.style.Get(L"white-space")))
++        return std::min(rawOffset,BoxText(box).size());
++    const auto prefix=box.node->text.substr(0,std::min(rawOffset,box.node->text.size()));
++    return std::min(BoxText(box).size(),NormalizeText(prefix,box.style.Get(L"white-space"),
++        box.preserveLeadingWhitespace&&!box.trimLeadingLineWhitespace,true).size());
++}
++
++size_t TextLayoutToSourceOffset(const LayoutBox& box,size_t layoutOffset){
++    if(box.node->type!=NodeType::Text||PreservesSpaces(box.style.Get(L"white-space")))return layoutOffset;
++    size_t first=0,last=box.node->text.size();
++    while(first<last){
++        const size_t middle=first+(last-first+1)/2;
++        if(TextSourceToLayoutOffset(box,middle)<=layoutOffset)first=middle;
++        else last=middle-1;
++    }
++    return first;
++}
++
+ D2D1_POINT_2F TextOrigin(const LayoutBox& box) {
+     const auto appearance=box.style.Get(L"appearance",box.style.Get(L"-webkit-appearance",L"auto"));
+     const float selectInset=box.node->tag==L"select"&&appearance!=L"none"?4.0f:0.0f;
+@@ -3814,8 +3884,14 @@
+         return value;
+     };
+     if(box.node->type==NodeType::Text){
+-        const float advance=TextWidth(box.node->text,box.style,box.preserveLeadingWhitespace&&!box.trimLeadingLineWhitespace,
++        float advance=TextWidth(box.node->text,box.style,box.preserveLeadingWhitespace&&!box.trimLeadingLineWhitespace,
+                                       box.preserveTrailingWhitespace);
++        if(box.textFlowFragment&&box.generatedFrom&&box.textSourceOffset>0&&
++           !box.trimLeadingLineWhitespace){
++            // Keep the original run's cumulative advance instead of rounding
++            // each word independently to a layout unit.
++            advance=TextFlowFragmentAdvance(box);
++        }
+         return remember(advance);
+     }
+     if(box.node->tag==L"br")return remember(0.0f);
+@@ -4233,6 +4309,119 @@
+     return remember(longest);
+ }
+ 
++bool CanFlattenInlineFlow(const LayoutBox& box,float availableWidth){
++    // Emergency and character wrapping need different widths on the first
++    // and following lines. Keep their existing inline formatting context
++    // until the flattened flow can fragment a shaped run at cluster breaks.
++    const auto wrapping=TextWrappingMode(box.style);
++    if(wrapping==DWRITE_WORD_WRAPPING_CHARACTER||wrapping==DWRITE_WORD_WRAPPING_EMERGENCY_BREAK){
++        if(availableWidth<=0)return false;
++        for(const auto& child:box.children)if(child->node->type==NodeType::Text){
++            const auto& text=child->node->text;size_t start=0;
++            while(start<text.size()){
++                while(start<text.size()&&IsCollapsibleTextSpace(text[start]))++start;
++                size_t end=start;while(end<text.size()&&!IsCollapsibleTextSpace(text[end]))++end;
++                if(TextWidth(text.substr(start,end-start),child->style)>availableWidth)return false;
++                start=end;
++            }
++        }
++    }
++    if(!box.visible||box.node->type!=NodeType::Element||!box.style.Is(L"display",L"inline")||
++       IsAtomicInlineLevel(box)||IsBlockifiedItem(box)||HasInFlowBlockChildren(box)||box.children.empty()||
++       box.style.Is(L"direction",L"rtl")||box.style.Is(L"position",L"relative")||
++       box.style.Is(L"position",L"absolute")||box.style.Is(L"position",L"fixed")||
++       UsedFloatSide(box.style)!=FloatSide::None||
++       box.style.Get(L"transform",L"none")!=L"none"||
++       box.style.Get(L"vertical-align",L"baseline")!=L"baseline"||
++       box.style.Get(L"opacity",L"1")!=L"1"||
++       OverflowX(box)!=L"visible"||OverflowY(box)!=L"visible"||
++       PreservesLineBreaks(box.style.Get(L"white-space"))||
++       PreventsTextWrapping(box.style.Get(L"white-space")))return false;
++    const auto padding=EdgeValues(box.style,L"padding",500,500);
++    const auto border=UsedBorderValues(box),margin=EdgeValues(box.style,L"margin",500,500);
++    return padding.left==0&&padding.right==0&&padding.top==0&&padding.bottom==0&&
++        border.left==0&&border.right==0&&border.top==0&&border.bottom==0&&
++        margin.left==0&&margin.right==0&&margin.top==0&&margin.bottom==0&&
++        std::none_of(box.children.begin(),box.children.end(),[](const auto& child){
++            return child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed")||
++                UsedFloatSide(child->style)!=FloatSide::None;
++        });
++}
++
++std::vector<LayoutBox*> InlineFlowChildren(const LayoutBox& box,
++                                         std::vector<LayoutBox*>* flattened=nullptr,float availableWidth=0){
++    std::vector<LayoutBox*> result;
++    const auto append=[&](auto&& self,LayoutBox& child)->void{
++        if(!box.style.Is(L"direction",L"rtl")&&CanFlattenInlineFlow(child,availableWidth)){
++            if(flattened)flattened->push_back(&child);
++            for(const auto& descendant:child.children)self(self,*descendant);
++        }else result.push_back(&child);
++    };
++    // Keep an inline group together when one of its non-atomic elements
++    // retains its own formatting context. Flattening only its neighbours
++    // loses attached word boundaries and can create spurious overflow.
++    for(size_t begin=0;begin<box.children.size();){
++        size_t end=begin;
++        while(end<box.children.size()&&IsInlineLevel(box.children[end]->style.Get(L"display")))++end;
++        if(end==begin){result.push_back(box.children[begin].get());++begin;continue;}
++        bool safe=true,clusterWrapping=false;
++        for(size_t index=begin;index<end;++index){
++            const auto& child=*box.children[index];
++            const auto wrapping=TextWrappingMode(child.style);
++            clusterWrapping=clusterWrapping||wrapping==DWRITE_WORD_WRAPPING_CHARACTER||
++                wrapping==DWRITE_WORD_WRAPPING_EMERGENCY_BREAK;
++            if(child.visible&&child.node->type==NodeType::Element&&!IsAtomicInlineLevel(child)&&
++               child.node->tag!=L"br"&&!CanFlattenInlineFlow(child,availableWidth))safe=false;
++        }
++        for(size_t index=begin;index<end;++index){
++            if(safe||!clusterWrapping)append(append,*box.children[index]);else result.push_back(box.children[index].get());
++        }
++        begin=end;
++    }
++    return result;
++}
++
++bool InlineBreakBefore(const std::vector<LayoutBox*>& children,size_t index){
++    const auto& child=*children[index];
++    if(child.node->type!=NodeType::Text)return true;
++    if(!child.node->text.empty()&&IsCollapsibleTextSpace(child.node->text.front()))return true;
++    if(!index)return true;
++    const auto& previous=*children[index-1];
++    return IsAtomicInlineLevel(previous)||previous.node->tag==L"br"||
++        (previous.node->type==NodeType::Text&&!previous.node->text.empty()&&
++         IsCollapsibleTextSpace(previous.node->text.back()));
++}
++
++float InlineAttachedTailWidth(const std::vector<LayoutBox*>& children,size_t index){
++    float width=0;
++    for(size_t next=index+1;next<children.size();++next){
++        const auto& previous=*children[next-1];const auto& child=*children[next];
++        if(previous.node->type!=NodeType::Text||previous.node->text.empty()||
++           IsCollapsibleTextSpace(previous.node->text.back())||
++           child.node->type!=NodeType::Text||child.node->text.empty()||
++           IsCollapsibleTextSpace(child.node->text.front())||!child.visible)break;
++        width+=NaturalWidth(child);
++    }
++    return width;
++}
++
++float TextLastLineAdvance(const LayoutBox& box,float width,bool trimLeading){
++    const auto text=NormalizeText(box.node->text,box.style.Get(L"white-space"),
++        box.preserveLeadingWhitespace&&!trimLeading,box.preserveTrailingWhitespace);
++    auto* factory=SharedWriteFactory();if(!factory||text.empty())return 0;
++    auto format=TextFormat(factory,box.style);Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
++    if(!format||FAILED(factory->CreateTextLayout(text.c_str(),static_cast<UINT32>(text.size()),
++        format.Get(),std::max(1.0f,width),100000,&layout)))return width;
++    ApplyFontFallback(factory,layout.Get(),text,box.style);
++    ApplyCharacterSpacing(layout.Get(),text,box.style);
++    ApplyTabSize(factory,layout.Get(),format.Get(),text,box.style);
++    layout->SetWordWrapping(TextWrappingMode(box.style));
++    float x=0,y=0;DWRITE_HIT_TEST_METRICS hit{};
++    if(FAILED(layout->HitTestTextPosition(static_cast<UINT32>(text.size()-1),TRUE,&x,&y,&hit)))return width;
++    const float units=64*std::max(.01f,box.style.deviceScale);
++    return std::ceil(x*units)/units;
++}
++
+ float MinContentWidth(const LayoutBox& box,bool intrinsic,bool ignoreOwnSizing){
+     if(ignoreOwnSizing&&box.minContentWidthValid)return box.minContentWidth;
+     if(!ignoreOwnSizing&&(intrinsic?box.intrinsicMinimumWidthValid:box.minimumWidthValid))
+@@ -4315,10 +4504,21 @@
+     const auto flexWrap=ToLower(Trim(box.style.Get(L"flex-wrap",L"nowrap")));
+     const bool wraps=flex&&horizontal&&(flexWrap==L"wrap"||flexWrap==L"wrap-reverse");
+     float value=0;int visible=0;
+-    for(const auto& child:box.children)if(child->visible&&!child->style.Is(L"position",L"absolute")&&!child->style.Is(L"position",L"fixed")){
++    float unbrokenWidth=0;
++    const auto flowChildren=InlineFlowChildren(box);
++    for(size_t index=0;index<flowChildren.size();++index){
++        const auto* child=flowChildren[index];
++        if(!child->visible||child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed"))continue;
+         const float childWidth=MinContentWidth(*child,intrinsic);
+-        value=horizontal&&!wraps?value+childWidth:std::max(value,childWidth);++visible;
+-    }
++        if(flex||display==L"table-row")value=horizontal&&!wraps?value+childWidth:std::max(value,childWidth);
++        else if(IsInlineLevel(child->style.Get(L"display"))){
++            if(InlineBreakBefore(flowChildren,index)){value=std::max(value,unbrokenWidth);unbrokenWidth=0;}
++            unbrokenWidth+=childWidth;
++            if(IsAtomicInlineLevel(*child)){value=std::max(value,unbrokenWidth);unbrokenWidth=0;}
++        }else{value=std::max(value,std::max(unbrokenWidth,childWidth));unbrokenWidth=0;}
++        ++visible;
++    }
++    value=std::max(value,unbrokenWidth);
+     if(flex&&horizontal&&!wraps)value+=GapValue(box.style,true,500,500)*std::max(0,visible-1);
+     const auto padding=EdgeValues(box.style,L"padding",500,500);const auto border=UsedBorderValues(box);
+     value+=padding.left+padding.right+border.left+border.right+margin.left+margin.right;
+@@ -4349,6 +4549,8 @@
+ }
+ 
+ float NaturalGridHeight(const LayoutBox& box,float availableWidth);
++bool CanLayoutColumns(const LayoutBox& box);
++float NaturalColumnsHeight(const LayoutBox& box,float contentWidth,float viewportWidth);
+ 
+ float NaturalHeight(const LayoutBox& box,float availableWidth=500){
+     if(box.naturalHeightValid&&std::abs(box.naturalHeightReference-availableWidth)<0.01f)return box.naturalHeight;
+@@ -4356,7 +4558,8 @@
+     auto remember=[&](float result){box.naturalHeightReference=availableWidth;box.naturalHeight=result;box.naturalHeightValid=true;return result;};
+     // Ordinary text inherits font/line formatting, not element box edges or
+     // size constraints. Match LayoutBoxTree's text path during intrinsic sizing.
+-    if(box.node->type==NodeType::Text&&!box.generatedFrom)
++    if(box.node->type==NodeType::Text&&
++       (!box.generatedFrom||box.generatedFrom->type==NodeType::Text))
+         return remember(TextHeight(box.node->text,box.style,availableWidth,
+             box.preserveLeadingWhitespace&&!box.trimLeadingLineWhitespace,box.preserveTrailingWhitespace));
+     auto height=box.style.Get(L"height");float value=0;
+@@ -4456,7 +4659,9 @@
+     else if(!box.children.empty()){
+         const auto display=box.style.Get(L"display");const float rowGap=GapValue(box.style,false,availableWidth,availableWidth);
+         auto padding=EdgeValues(box.style,L"padding",availableWidth,availableWidth);auto border=UsedBorderValues(box);const float innerWidth=std::max(1.0f,availableWidth-padding.left-padding.right-border.left-border.right);
+-        if(IsTable(box)){
++        if(CanLayoutColumns(box)){
++            value=NaturalColumnsHeight(box,innerWidth,availableWidth);
++        }else if(IsTable(box)){
+             auto& mutableBox=const_cast<LayoutBox&>(box);
+             const auto& model=BuildTableGrid(mutableBox);
+             const auto& columns=ResolveTableColumns(box,model,innerWidth,availableWidth);
+@@ -4471,8 +4676,7 @@
+             value=NaturalGridHeight(box,innerWidth);
+         }else{
+             const bool flex=display==L"flex"||display==L"inline-flex";
+-            const bool row=(flex&&!IsColumnFlexDirection(box.style))||
+-                (IsInlineLevel(display)&&!IsBlockifiedItem(box)&&!HasInFlowBlockChildren(box))||display==L"table-row";
++            const bool row=(flex&&!IsColumnFlexDirection(box.style))||display==L"table-row";
+             int visible=0;
+             const auto flexWrap=ToLower(Trim(box.style.Get(L"flex-wrap",L"nowrap")));
+             if(flex&&row&&(flexWrap==L"wrap"||flexWrap==L"wrap-reverse")){
+@@ -4603,7 +4807,9 @@
+                         value+=lineHeight;lineWidth=0;lineHeight=0;
+                         lineMetrics=InitialInlineLineMetrics(box);
+                     };
+-                    for(auto& child:box.children){
++                    const auto flowChildren=InlineFlowChildren(box,nullptr,innerWidth);
++                    for(size_t index=0;index<flowChildren.size();++index){
++                        auto* child=flowChildren[index];
+                         if(!child->visible||child->style.Is(L"position",L"absolute")||
+                            child->style.Is(L"position",L"fixed"))continue;
+                         if(child->node->tag==L"br"){
+@@ -4614,12 +4820,19 @@
+                         }
+                         if(IsInlineLevel(child->style.Get(L"display"))){
+                             marginFlow.Separate();
+-                            const float childWidth=HasInFlowBlockChildren(*child)?innerWidth:NaturalWidth(*child);
+-                            if(lineWidth>0&&lineWidth+childWidth>innerWidth+0.5f)flushLine();
+-                            lineWidth+=std::min(childWidth,innerWidth);
++                            float childWidth=HasInFlowBlockChildren(*child)?innerWidth:NaturalWidth(*child);
++                            if(!PreventsTextWrapping(box.style.Get(L"white-space"))&&
++                               lineWidth>0&&InlineBreakBefore(flowChildren,index)&&
++                               lineWidth+childWidth+InlineAttachedTailWidth(flowChildren,index)>
++                                   innerWidth+(child->textFlowFragment?.001f:.5f))flushLine();
++                            const bool trimLeading=lineWidth==0&&child->node->type==NodeType::Text&&
++                                !PreservesSpaces(child->style.Get(L"white-space"));
++                            if(trimLeading)childWidth=TextWidth(child->node->text,child->style,false,child->preserveTrailingWhitespace);
++                            lineWidth+=childWidth;
+                             const bool atomic=IsAtomicInlineLevel(*child);
+-                            float childHeight=NaturalHeight(*child,
+-                                std::max(1.0f,std::min(childWidth,innerWidth)));
++                            const float measureWidth=std::max(1.0f,std::min(childWidth,innerWidth));
++                            float childHeight=trimLeading?TextHeight(child->node->text,child->style,
++                                measureWidth,false,child->preserveTrailingWhitespace):NaturalHeight(*child,measureWidth);
+                             if(!atomic&&child->node->type==NodeType::Element&&
+                                !IsBlockifiedItem(*child)){
+                                 const auto childPadding=EdgeValues(child->style,L"padding",innerWidth,innerWidth);
+@@ -4639,7 +4852,12 @@
+                             // lines. Its full block extent must survive the
+                             // first-line baseline/strut calculation.
+                             lineHeight=std::max(lineHeight,lineMetrics.Height());
+-                            if(child->node->type==NodeType::Text)lineHeight=std::max(lineHeight,childHeight);
++                            if(child->node->type==NodeType::Text&&childHeight>LineHeight(child->style)+.01f){
++                                value+=childHeight-LineHeight(child->style);
++                                lineWidth=TextLastLineAdvance(*child,measureWidth,trimLeading);
++                                lineMetrics=InitialInlineLineMetrics(box);
++                                lineHeight=std::max(LineHeight(box.style),LineHeight(child->style));
++                            }
+                         }else{
+                             if(lineWidth>0||lineHeight>0)flushLine();
+                             const auto childMargins=CollapsedBlockMargins(*child,innerWidth);
+@@ -4680,7 +4898,7 @@
+     // than from this routine's measurement fallback.
+     const auto margin=UsedLayoutMargins(box,availableWidth,availableWidth);
+     const bool normalFlow=display!=L"flex"&&display!=L"inline-flex"&&display!=L"grid"&&
+-        display!=L"inline-grid"&&!IsTable(box)&&display!=L"table-row"&&!IsTableRowGroup(box);
++        display!=L"inline-grid"&&!IsTable(box)&&display!=L"table-row"&&!IsTableRowGroup(box)&&!CanLayoutColumns(box);
+     if(normalFlow&&!box.children.empty()){
+         const auto padding=EdgeValues(box.style,L"padding",availableWidth,availableWidth);
+         const auto border=UsedBorderValues(box);
+@@ -4721,6 +4939,127 @@
+     value=std::max(value-tableCaptionExtent,cellMinimum);
+     value=ConstrainIntrinsicHeight(box.style,value,500)+tableCaptionExtent;
+     return remember(value+margin.top+margin.bottom);
++}
++
++bool CanLayoutColumns(const LayoutBox& box){
++    const auto display=box.style.Get(L"display");
++    if((display!=L"block"&&display!=L"flow-root")||!HasColumnSizing(box.style)||
++       box.style.Get(L"writing-mode",L"horizontal-tb")!=L"horizontal-tb")return false;
++    for(const auto& child:box.children){
++        if(!child->visible||child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed"))continue;
++        if(child->node->type==NodeType::Text){
++            if(NormalizeText(child->node->text,false).empty())continue;
++            return false;
++        }
++        if(UsedFloatSide(child->style)!=FloatSide::None)return false;
++        if(child->style.Is(L"column-span",L"all"))continue;
++        const auto breaking=child->style.Get(L"break-inside",child->style.Get(L"page-break-inside"));
++        if(breaking!=L"avoid"&&breaking!=L"avoid-column"&&!IsAtomicInlineLevel(*child))return false;
++    }
++    return true;
++}
++
++struct ColumnPlacement {LayoutBox* box=nullptr;LayoutRect area;};
++struct ColumnFlowModel {float height=0;std::vector<ColumnPlacement> placements;};
++
++ColumnFlowModel BuildColumnFlow(const LayoutBox& box,float contentWidth,float viewportWidth){
++    ColumnFlowModel model;
++    const auto countText=box.style.Get(L"column-count",L"auto"),widthText=box.style.Get(L"column-width",L"auto");
++    unsigned long long parsedCount=0;size_t parsedLength=0;
++    const bool definiteCount=TryParseUnsignedInteger(countText,parsedCount,&parsedLength)&&
++        parsedLength==countText.size()&&parsedCount>0;
++    const float requestedWidth=StyleSheet::Length(widthText,contentWidth,viewportWidth,-1,FontSize(box.style));
++    const auto gapText=box.style.Get(L"column-gap",L"normal");
++    const float gap=gapText==L"normal"||gapText.empty()?FontSize(box.style):
++        std::max(0.0f,StyleSheet::Length(gapText,contentWidth,viewportWidth,0,FontSize(box.style)));
++    size_t count=definiteCount?static_cast<size_t>(std::min<unsigned long long>(parsedCount,4096)):1;
++    if(requestedWidth>0){
++        const size_t fitting=static_cast<size_t>(std::max(1.0f,std::floor((contentWidth+gap)/(requestedWidth+gap))));
++        count=definiteCount?std::min(count,fitting):std::min<size_t>(4096,fitting);
++    }
++    const float units=64*std::max(.01f,box.style.deviceScale);
++    const float stride=(contentWidth+gap)/count;
++    const float columnWidth=std::max(0.0f,std::floor((stride-gap)*units)/units);
++    float heightLimit=std::numeric_limits<float>::infinity();
++    const auto padding=EdgeValues(box.style,L"padding",contentWidth,viewportWidth),border=UsedBorderValues(box);
++    const float decoration=padding.top+padding.bottom+border.top+border.bottom;
++    for(const auto* name:{L"height",L"max-height"}){
++        const auto value=box.style.Get(name);
++        if(value.empty()||value==L"auto"||value==L"none"||value.find(L'%')!=std::wstring::npos)continue;
++        float height=StyleSheet::Length(value,0,0,std::numeric_limits<float>::infinity(),FontSize(box.style));
++        if(box.style.Is(L"box-sizing",L"border-box"))height-=decoration;
++        heightLimit=std::min(heightLimit,std::max(0.0f,height));
++    }
++    struct Item {LayoutBox* box;float width,height,top,bottom;bool breakBefore,breakAfter;};
++    std::vector<Item> group;
++    float rowY=0;
++    const bool rtl=box.style.Is(L"direction",L"rtl");
++    const auto flush=[&](bool beforeSpanner){
++        if(group.empty())return;
++        size_t forcedColumns=1;float upper=0,lower=0;
++        for(size_t index=0;index<group.size();++index){
++            const auto& item=group[index];
++            upper+=item.height+std::max(0.0f,item.top)+std::max(0.0f,item.bottom);
++            lower=std::max(lower,item.height);
++            if(index&&(item.breakBefore||group[index-1].breakAfter))++forcedColumns;
++        }
++        const size_t budget=std::max(count,forcedColumns);
++        const auto place=[&](float limit,bool save){
++            size_t column=0;float y=0,pending=0,maximum=0;bool empty=true;
++            for(size_t index=0;index<group.size();++index){
++                const auto& item=group[index];
++                float before=std::max(std::max(0.0f,pending),std::max(0.0f,item.top))+
++                    std::min(std::min(0.0f,pending),std::min(0.0f,item.top));
++                if(!empty&&(item.breakBefore||group[index-1].breakAfter||y+before+item.height>limit+.0001f)){
++                    maximum=std::max(maximum,y);++column;y=0;pending=0;before=0;empty=true;
++                }
++                if(save){
++                    const float offset=std::round(column*stride*units)/units;
++                    const float left=rtl?contentWidth-columnWidth-offset:offset;
++                    model.placements.push_back({item.box,{left,rowY+y+before-item.top,
++                        item.width,item.height+item.top+item.bottom}});
++                }
++                y+=before+item.height;pending=item.bottom;empty=false;
++            }
++            maximum=std::max(maximum,y+pending);
++            return std::pair<size_t,float>{column+1,maximum};
++        };
++        float usedHeight=heightLimit;
++        const bool balance=beforeSpanner||box.style.Get(L"column-fill",L"balance")!=L"auto"||!std::isfinite(heightLimit);
++        if(balance){
++            // Find the least height that fits all indivisible blocks while
++            // respecting forced breaks. The search operates in layout units.
++            long long low=static_cast<long long>(std::floor(lower*units));
++            long long high=static_cast<long long>(std::ceil(upper*units));
++            while(low<high){
++                const auto middle=low+(high-low)/2;const auto trial=place(middle/units,false);
++                if(trial.first<=budget&&trial.second<=middle/units+.0001f)high=middle;
++                else low=middle+1;
++            }
++            usedHeight=std::min(heightLimit,low/units);
++        }
++        const auto placed=place(usedHeight,true);
++        rowY+=std::isfinite(heightLimit)?usedHeight:placed.second;
++        group.clear();
++    };
++    for(const auto& child:box.children){
++        if(!child->visible||child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed")||
++           child->node->type==NodeType::Text)continue;
++        const bool spanning=child->style.Is(L"column-span",L"all");
++        if(spanning)flush(true);
++        const float reference=spanning?contentWidth:columnWidth;
++        const float width=BlockOuterWidth(*child,reference,viewportWidth);
++        const auto margin=EdgeValues(child->style,L"margin",reference,viewportWidth);
++        const float height=NaturalHeight(*child,std::max(1.0f,width));
++        if(spanning){model.placements.push_back({child.get(),{0,rowY,width,height}});rowY+=height;continue;}
++        group.push_back({child.get(),width,std::max(0.0f,height-margin.top-margin.bottom),margin.top,margin.bottom,
++            child->style.Is(L"break-before",L"column"),child->style.Is(L"break-after",L"column")});
++    }
++    flush(false);model.height=rowY;return model;
++}
++
++float NaturalColumnsHeight(const LayoutBox& box,float contentWidth,float viewportWidth){
++    return BuildColumnFlow(box,contentWidth,viewportWidth).height;
+ }
+ 
+ const std::vector<float>& ResolveTableRows(const TableGridModel& model,
+@@ -5251,7 +5590,7 @@
+         const float contribution=columns&&minimumMode&&!maxContentMinimum?MinContentWidth(*item.box,true):columns&&definiteAvailable&&
+             (spansFlexibleTrack||spansStretchTrack)?MinContentWidth(*item.box):
+             (columns?NaturalWidth(*item.box):NaturalHeight(*item.box,
+-                HasIntrinsicWidth(*item.box)?BlockOuterWidth(*item.box,spanSize(item),viewport):spanSize(item)));
++                BlockOuterWidth(*item.box,spanSize(item),viewport)));
+         float occupied=gap*std::max(0,static_cast<int>(span)-1);
+         for(size_t index=0;index<span&&start+index<tracks.size();++index)occupied+=tracks[start+index].base;
+         float deficit=std::max(0.0f,contribution-occupied);
+@@ -7537,6 +7876,20 @@
+     bool hasInlineContent=false;
+     size_t elementCount=0;for(const auto& child:node->RenderChildren())if(child->type==NodeType::Element)++elementCount;
+     const auto parentWhiteSpace=box->style.Get(L"white-space");
++    // Keep ordinary paragraphs in one shaped run. Mixed inline content needs
++    // break opportunities inside text siblings, rather than moving the whole
++    // DOM text node to the next line after an atomic inline or styled span.
++    const bool mixedInlineText=!anonymousLayoutItem&&!PreservesLineBreaks(parentWhiteSpace)&&
++        !PreventsTextWrapping(parentWhiteSpace)&&!box->style.Is(L"direction",L"rtl")&&
++        ((box->style.Is(L"display",L"inline")&&!IsAtomicInlineLevel(*box)&&!IsBlockifiedItem(*box))||
++        std::any_of(node->RenderChildren().begin(),node->RenderChildren().end(),
++            [&](const auto& sibling){
++                if(sibling->type!=NodeType::Element||sibling->tag==L"br")return false;
++                const auto style=styleSheet_.Compute(sibling,&box->style);
++                return IsInlineLevel(style.Get(L"display"))&&!style.Is(L"display",L"none")&&
++                    !style.Is(L"position",L"absolute")&&!style.Is(L"position",L"fixed")&&
++                    UsedFloatSide(style)==FloatSide::None;
++            }));
+     const auto hasRenderableText=[&](const std::wstring& text){
+         // Flex and grid turn direct text runs into anonymous layout items, but
+         // a run containing only document-formatting whitespace does not
+@@ -7673,6 +8026,23 @@
+                 continue;
+             }
+         }
++        if(child->type==NodeType::Text&&mixedInlineText&&
++           child->text.find_first_of(L" \t\r\n\f")!=std::wstring::npos){
++            size_t start=0;
++            while(start<child->text.size()){
++                size_t end=start;
++                while(end<child->text.size()&&IsCollapsibleTextSpace(child->text[end]))++end;
++                while(end<child->text.size()&&!IsCollapsibleTextSpace(child->text[end]))++end;
++                auto fragment=std::make_shared<Node>();fragment->type=NodeType::Text;
++                fragment->tag=L"#text";fragment->text=child->text.substr(start,end-start);
++                fragment->parent=node;auto built=Build(fragment,&box->style,cacheKey);
++                if(built){built->textSourceOffset=start;built->textFlowFragment=true;}
++                appendBuilt(std::move(built),child,start>0||hasInlineContent,
++                            end<child->text.size()||hasFollowingContent[childIndex]);
++                start=end;
++            }
++            continue;
++        }
+         if(child->type==NodeType::Element)++elementIndex;
+         auto built=Build(child,&box->style,cacheKey,child->type==NodeType::Element?elementIndex:0,elementCount,previousChildElement);if(child->type==NodeType::Element)previousChildElement=child;
+         appendBuilt(std::move(built),child,hasInlineContent,hasFollowingContent[childIndex]);
+@@ -7988,6 +8358,7 @@
+                                  bool definiteWidth,bool definiteHeight){
+     if(!box.visible)return;
+     box.inlineTextPositioned=false;
++    box.inlineFlowFragments=false;
+     box.inlineContinuationValid=false;
+     box.overflowClipValid=false;
+     box.definiteContentHeight=definiteHeight;
+@@ -8085,6 +8456,7 @@
+         if(display==L"flex"||display==L"inline-flex")LayoutFlex(box);
+         else if(display==L"grid"||display==L"inline-grid")LayoutGrid(box,definiteWidth,definiteHeight);
+         else if(IsTable(box))LayoutTable(box);
++        else if(CanLayoutColumns(box))LayoutColumns(box);
+         else LayoutBlock(box,definiteHeight);
+         for(auto* child:box.relativeChildren)ApplyRelativePosition(*child,viewportWidth_,viewportHeight_);
+         FinalizeScroll(box);
+@@ -8126,7 +8498,8 @@
+     box.splitInlineRectValid=false;
+     box.splitInlinePaintOffsets.clear();
+     if(box.node&&box.node->type==NodeType::Element&&box.style.Is(L"display",L"inline")&&
+-       !IsAtomicInlineLevel(box)&&!IsBlockifiedItem(box)&&HasInFlowBlockChildren(box)){
++       !IsAtomicInlineLevel(box)&&!IsBlockifiedItem(box)&&
++       (HasInFlowBlockChildren(box)||box.inlineFlowFragments)){
+         LayoutRect fragments{};
+         for(const auto& child:box.children){
+             if(!child->visible||child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed"))continue;
+@@ -8560,8 +8933,11 @@
+     BlockMarginFlow marginFlow; marginFlow.parent=CollapsedBlockMargins(box,box.rect.width);
+     std::vector<FloatArea> floats;
+     size_t inlineLineBegin=0;
+-    for(size_t childIndex=0;childIndex<box.children.size();++childIndex){
+-        auto& child=box.children[childIndex];if(!child->visible)continue;
++    std::vector<LayoutBox*> flattened;
++    const auto flowChildren=InlineFlowChildren(box,&flattened,flowWidth);
++    for(auto* child:flattened){child->inlineFlowFragments=true;child->clipsOverflow=false;child->overflowFlagsValid=true;}
++    for(size_t childIndex=0;childIndex<flowChildren.size();++childIndex){
++        auto* child=flowChildren[childIndex];if(!child->visible)continue;
+         const bool absolute=child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed");
+         if(absolute){
+             const LayoutRect area=AbsoluteContainingBlock(*child,viewportWidth_,viewportHeight_);
+@@ -8592,7 +8968,7 @@
+                 cursorY,w,h,floatSide,child->style.Get(L"clear"));
+             if(lineHeight>0&&floatSide==FloatSide::Left){
+                 for(size_t prior=inlineLineBegin;prior<childIndex;++prior){
+-                    auto& inlineChild=*box.children[prior];
++                    auto& inlineChild=*flowChildren[prior];
+                     if(inlineChild.visible&&UsedFloatSide(inlineChild.style)==FloatSide::None&&
+                        !inlineChild.style.Is(L"position",L"absolute")&&!inlineChild.style.Is(L"position",L"fixed"))
+                         TranslateBox(inlineChild,w,0);
+@@ -8628,7 +9004,9 @@
+             const bool wrappingInlineContainer=!noWrap&&
+                 child->node->type==NodeType::Element&&!atomic&&
+                 !child->children.empty();
+-            if((wrapText||wrappingInlineContainer)&&lineX+w>bandRight+0.5f){
++            if((wrapText||wrappingInlineContainer)&&InlineBreakBefore(flowChildren,childIndex)&&
++               lineX+w+InlineAttachedTailWidth(flowChildren,childIndex)>
++                   bandRight+(child->textFlowFragment?.001f:.5f)){
+                 if(lineX>bandLeft){cursorY+=lineHeight;lineHeight=0;}
+                 else if(std::isfinite(nextBottom))cursorY=nextBottom;
+                 AvailableFloatBand(floats,box.content.x,box.content.x+flowWidth,
+@@ -8675,10 +9053,15 @@
+                 mixedInlineLine=InitialInlineLineMetrics(box);inlinePlacedBoxes.clear();
+                 continue;
+             }
+-            inlinePlacedBoxes.push_back({child.get(),h,verticalOffset});
++            inlinePlacedBoxes.push_back({child,h,verticalOffset});
+             lineX+=w;
+             lineHeight=std::max(lineHeight,mixedInlineLine.Height());
+-            if(child->node->type==NodeType::Text)lineHeight=std::max(lineHeight,h);
++            if(child->node->type==NodeType::Text&&h>LineHeight(child->style)+.01f){
++                cursorY+=h-LineHeight(child->style);
++                lineX=bandLeft+TextLastLineAdvance(*child,w,child->trimLeadingLineWhitespace);
++                lineHeight=std::max(LineHeight(box.style),LineHeight(child->style));
++                mixedInlineLine=InitialInlineLineMetrics(box);inlinePlacedBoxes.clear();
++            }
+         }
+         else{
+             if(lineX>box.content.x){cursorY+=lineHeight;lineX=box.content.x;lineHeight=0;}
+@@ -8740,6 +9123,22 @@
+             cursorY+=h+marginFlow.After(childMargins);
+         }
+     }
++    for(auto it=flattened.rbegin();it!=flattened.rend();++it){
++        auto& inlineBox=**it;bool first=true;LayoutRect bounds{};
++        for(const auto& descendant:inlineBox.children){
++            if(!descendant->visible)continue;
++            auto rect=descendant->rect;
++            if(descendant->node->type==NodeType::Text){
++                rect.y+=InlineHalfLeading(descendant->style);
++                rect.height=std::max(0.0f,rect.height-LineHeight(descendant->style)+InlineContentBoxHeight(descendant->style));
++            }
++            if(first){bounds=rect;first=false;}
++            else{const float right=std::max(bounds.x+bounds.width,rect.x+rect.width),bottom=std::max(bounds.y+bounds.height,rect.y+rect.height);
++                bounds.x=std::min(bounds.x,rect.x);bounds.y=std::min(bounds.y,rect.y);
++                bounds.width=right-bounds.x;bounds.height=bottom-bounds.y;}
++        }
++        inlineBox.rect=inlineBox.content=bounds;
++    }
+     if(scrollbarChildExpansion>0&&AutoScrollbarHeight(box,definiteHeight)){
+         box.rect.height+=scrollbarChildExpansion;box.content.height+=scrollbarChildExpansion;
+         box.autoScrollbarHeightExpansion+=scrollbarChildExpansion;
+@@ -8762,6 +9161,20 @@
+             if(child->visible&&!child->style.Is(L"position",L"absolute")&&
+                !child->style.Is(L"position",L"fixed"))TranslateBox(*child,0,offset);
+         }
++    }
++}
++
++void LayoutEngine::LayoutColumns(LayoutBox& box){
++    const auto model=BuildColumnFlow(box,box.content.width,viewportWidth_);
++    for(const auto& placement:model.placements){
++        auto area=placement.area;area.x+=box.content.x;area.y+=box.content.y;
++        const auto height=placement.box->style.Get(L"height");
++        LayoutBoxTree(*placement.box,area,true,true,!height.empty()&&height!=L"auto");
++    }
++    for(const auto& child:box.children)if(child->visible&&
++        (child->style.Is(L"position",L"absolute")||child->style.Is(L"position",L"fixed"))){
++        const auto containing=AbsoluteContainingBlock(*child,viewportWidth_,viewportHeight_);
++        LayoutBoxTree(*child,PositionedRect(*child,containing,viewportWidth_,viewportHeight_),true);
+     }
+ }
+ 
+@@ -10042,7 +10455,7 @@
+     const size_t sourceLength=bestSource->type==NodeType::Text?bestSource->text.size():
+         bestSource->Attribute(L"value").size();
+     const size_t sourceOffset=bestSource->type==NodeType::Text?best->textSourceOffset:0;
+-    textNode=bestSource;textOffset=std::min(sourceLength,sourceOffset+localOffset);return true;
++    textNode=bestSource;textOffset=std::min(sourceLength,sourceOffset+TextLayoutToSourceOffset(*best,localOffset));return true;
+ }
+ 
+ namespace {
+@@ -10106,14 +10519,15 @@
+             if(source==textNode){
+                 const auto text=BoxText(box);
+                 const size_t sourceStart=textNode->type==NodeType::Text?box.textSourceOffset:0;
+-                const size_t sourceEnd=std::min(sourceLength,sourceStart+text.size());
++                const size_t rawLength=box.node->type==NodeType::Text?box.node->text.size():text.size();
++                const size_t sourceEnd=std::min(sourceLength,sourceStart+rawLength);
+                 const size_t first=std::max(rangeStart,sourceStart);
+                 const size_t last=std::min(rangeEnd,sourceEnd);
+                 if(first<last){
+                     EnsureTextLayout(box,SharedWriteFactory(),text);
+                     if(box.textLayout){
+-                        const UINT32 localStart=static_cast<UINT32>(first-sourceStart);
+-                        const UINT32 localLength=static_cast<UINT32>(last-first);
++                        const UINT32 localStart=static_cast<UINT32>(TextSourceToLayoutOffset(box,first-sourceStart));
++                        const UINT32 localLength=static_cast<UINT32>(TextSourceToLayoutOffset(box,last-sourceStart)-localStart);
+                         const auto origin=TextOrigin(box);UINT32 count=0;
+                         box.textLayout->HitTestTextRange(localStart,localLength,
+                             origin.x,origin.y,nullptr,0,&count);
+@@ -10363,7 +10777,8 @@
+             if(source==textNode){
+                 const auto text=BoxText(box);
+                 const size_t start=textNode->type==NodeType::Text?box.textSourceOffset:0;
+-                if(textOffset>=start&&textOffset<=start+text.size()){
++                const size_t rawLength=box.node->type==NodeType::Text?box.node->text.size():text.size();
++                if(textOffset>=start&&textOffset<=start+rawLength){
+                     matched=&box;matchedText=text;return;
+                 }
+             }
+@@ -10382,7 +10797,7 @@
+         if(matched->textLayout){
+             const size_t start=textNode->type==NodeType::Text?matched->textSourceOffset:0;
+             const UINT32 local=matchedText.empty()?0:static_cast<UINT32>(
+-                std::min(matchedText.size(),textOffset-start));
++                TextSourceToLayoutOffset(*matched,textOffset-start));
+             FLOAT hitX=0,hitY=0;DWRITE_HIT_TEST_METRICS metrics{};
+             if(SUCCEEDED(matched->textLayout->HitTestTextPosition(local,FALSE,&hitX,&hitY,&metrics))){
+                 const auto origin=TextOrigin(*matched);
+--- before/TWebFrame2/src/Layout.h
++++ after/TWebFrame2/src/Layout.h
+@@ -100,6 +100,8 @@
+     bool preserveTrailingWhitespace = false;
+     bool trimLeadingLineWhitespace = false;
+     bool inlineTextPositioned = false;
++    bool textFlowFragment = false;
++    bool inlineFlowFragments = false;
+     bool containsSticky = false;
+     bool stickyFlowYValid = false;
+     float stickyFlowY = 0.0f;
+@@ -246,6 +248,7 @@
+     void LayoutRoot();
+     void FinalizeScroll(LayoutBox& box);
+     void LayoutBlock(LayoutBox& box, bool definiteHeight = true);
++    void LayoutColumns(LayoutBox& box);
+     void LayoutFlex(LayoutBox& box);
+     void LayoutGrid(LayoutBox& box, bool definiteWidth, bool definiteHeight);
+     void LayoutTable(LayoutBox& box);

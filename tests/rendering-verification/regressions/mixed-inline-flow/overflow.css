@@ -1,0 +1,8 @@
+html,body{margin:0;background:white;font:12px/18px Arial}
+.sample{width:220px;margin:8px}
+.prefix{font-size:8px;vertical-align:super}
+.anywhere .long{overflow-wrap:anywhere}
+.break-all .long{word-break:break-all}
+.break-word .long{overflow-wrap:break-word}
+.decorated{width:780px;font-family:Consolas;overflow-wrap:anywhere}
+.decorated em{margin-left:5px}

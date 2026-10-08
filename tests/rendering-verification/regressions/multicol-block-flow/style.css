@@ -1,0 +1,8 @@
+html,body{margin:0;background:white}
+body{font:12px/18px Arial;display:grid;grid-template-columns:repeat(2,350px);gap:12px;align-items:start;padding:8px}
+.panel{width:350px;padding:4px;border:1px solid #acbbc8;box-sizing:border-box}
+.columns{position:relative}
+.cell{break-inside:avoid;background:#83b5ce}
+.c1,.c3,.c5{background:#d8b4b9}
+.spanner{column-span:all;height:10px;background:#759c6c}
+.after{height:4px;background:#566b7c;margin-top:3px}

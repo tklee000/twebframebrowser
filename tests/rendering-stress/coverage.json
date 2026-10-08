@@ -1,0 +1,2269 @@
+{
+  "schemaVersion": 1,
+  "generatorVersion": "1.0.0",
+  "scope": "Assigned input levels at document scope; not proof of computed CSS support, rendering correctness, or exhaustive HTML/CSS combinations.",
+  "factors": {
+    "family": [
+      "nested-grid",
+      "flex-wrap",
+      "intrinsic-sizing",
+      "table-spans",
+      "inline-typography",
+      "bidi-writing",
+      "positioned-stacks",
+      "overflow-scroll",
+      "clipping-masks",
+      "backgrounds-shadows",
+      "transforms-3d",
+      "native-forms",
+      "multicolumn-floats",
+      "responsive-units",
+      "cascade-selectors",
+      "replaced-content",
+      "semantic-lists",
+      "containment-queries",
+      "subgrid-tracks",
+      "mixed-dashboard"
+    ],
+    "outerLayout": [
+      "block",
+      "flex",
+      "grid",
+      "columns",
+      "table"
+    ],
+    "nestedLayout": [
+      "flow",
+      "flex-row",
+      "flex-column",
+      "grid",
+      "inline-block"
+    ],
+    "direction": [
+      "ltr",
+      "rtl",
+      "mixed"
+    ],
+    "writingMode": [
+      "horizontal-tb",
+      "vertical-rl",
+      "vertical-lr"
+    ],
+    "sizing": [
+      "fixed",
+      "percentage",
+      "intrinsic",
+      "calc",
+      "clamp"
+    ],
+    "spacing": [
+      "zero",
+      "tight",
+      "fractional",
+      "wide",
+      "negative"
+    ],
+    "overflow": [
+      "visible",
+      "hidden",
+      "clip",
+      "auto",
+      "scroll"
+    ],
+    "position": [
+      "static",
+      "relative",
+      "absolute",
+      "sticky",
+      "fixed"
+    ],
+    "paint": [
+      "solid",
+      "linear",
+      "radial",
+      "conic",
+      "multiple"
+    ],
+    "border": [
+      "none",
+      "solid",
+      "dashed",
+      "double",
+      "mixed"
+    ],
+    "radius": [
+      "zero",
+      "small",
+      "elliptic",
+      "asymmetric",
+      "pill"
+    ],
+    "opacity": [
+      "opaque",
+      "near-opaque",
+      "half",
+      "low",
+      "transparent"
+    ],
+    "transform": [
+      "none",
+      "translate",
+      "scale",
+      "rotate",
+      "skew",
+      "perspective"
+    ],
+    "clip": [
+      "none",
+      "inset",
+      "circle",
+      "ellipse",
+      "polygon"
+    ],
+    "typography": [
+      "sans",
+      "serif",
+      "mono",
+      "mixed"
+    ],
+    "content": [
+      "latin",
+      "korean",
+      "bidi",
+      "cjk",
+      "mixed",
+      "unbreakable"
+    ],
+    "alignment": [
+      "start",
+      "center",
+      "end",
+      "stretch",
+      "baseline"
+    ],
+    "boxModel": [
+      "content-box",
+      "border-box"
+    ],
+    "density": [
+      "medium",
+      "dense",
+      "very-dense"
+    ],
+    "advanced": [
+      "off",
+      "subgrid",
+      "container",
+      "cascade",
+      "selectors",
+      "compositing"
+    ]
+  },
+  "fullFactorialDocumentCount": 227812500000000,
+  "documentCount": 1000,
+  "familyCounts": {
+    "nested-grid": 50,
+    "flex-wrap": 50,
+    "intrinsic-sizing": 50,
+    "table-spans": 50,
+    "inline-typography": 50,
+    "bidi-writing": 50,
+    "positioned-stacks": 50,
+    "overflow-scroll": 50,
+    "clipping-masks": 50,
+    "backgrounds-shadows": 50,
+    "transforms-3d": 50,
+    "native-forms": 50,
+    "multicolumn-floats": 50,
+    "responsive-units": 50,
+    "cascade-selectors": 50,
+    "replaced-content": 50,
+    "semantic-lists": 50,
+    "containment-queries": 50,
+    "subgrid-tracks": 50,
+    "mixed-dashboard": 50
+  },
+  "pairwise": {
+    "total": 5957,
+    "covered": 5957,
+    "missing": 0
+  },
+  "selectedTriples": {
+    "total": 472,
+    "covered": 472,
+    "missing": 0
+  },
+  "interactions": [
+    {
+      "factors": [
+        "family",
+        "outerLayout"
+      ],
+      "total": 100,
+      "covered": 100,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "nestedLayout"
+      ],
+      "total": 100,
+      "covered": 100,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "direction"
+      ],
+      "total": 60,
+      "covered": 60,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "writingMode"
+      ],
+      "total": 60,
+      "covered": 60,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "sizing"
+      ],
+      "total": 100,
+      "covered": 100,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "spacing"
+      ],
+      "total": 100,
+      "covered": 100,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "overflow"
+      ],
+      "total": 100,
+      "covered": 100,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "position"
+      ],
+      "total": 100,
+      "covered": 100,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "paint"
+      ],
+      "total": 100,
+      "covered": 100,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "border"
+      ],
+      "total": 100,
+      "covered": 100,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "radius"
+      ],
+      "total": 100,
+      "covered": 100,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "opacity"
+      ],
+      "total": 100,
+      "covered": 100,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "transform"
+      ],
+      "total": 120,
+      "covered": 120,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "clip"
+      ],
+      "total": 100,
+      "covered": 100,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "typography"
+      ],
+      "total": 80,
+      "covered": 80,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "content"
+      ],
+      "total": 120,
+      "covered": 120,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "alignment"
+      ],
+      "total": 100,
+      "covered": 100,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "boxModel"
+      ],
+      "total": 40,
+      "covered": 40,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "density"
+      ],
+      "total": 60,
+      "covered": 60,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "family",
+        "advanced"
+      ],
+      "total": 120,
+      "covered": 120,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "nestedLayout"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "direction"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "writingMode"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "sizing"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "spacing"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "overflow"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "position"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "paint"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "border"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "radius"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "opacity"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "transform"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "clip"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "typography"
+      ],
+      "total": 20,
+      "covered": 20,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "content"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "alignment"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "boxModel"
+      ],
+      "total": 10,
+      "covered": 10,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "density"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "advanced"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "direction"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "writingMode"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "sizing"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "spacing"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "overflow"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "position"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "paint"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "border"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "radius"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "opacity"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "transform"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "clip"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "typography"
+      ],
+      "total": 20,
+      "covered": 20,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "content"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "alignment"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "boxModel"
+      ],
+      "total": 10,
+      "covered": 10,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "density"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "nestedLayout",
+        "advanced"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "writingMode"
+      ],
+      "total": 9,
+      "covered": 9,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "sizing"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "spacing"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "overflow"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "position"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "paint"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "border"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "radius"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "opacity"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "transform"
+      ],
+      "total": 18,
+      "covered": 18,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "clip"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "typography"
+      ],
+      "total": 12,
+      "covered": 12,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "content"
+      ],
+      "total": 18,
+      "covered": 18,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "alignment"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "boxModel"
+      ],
+      "total": 6,
+      "covered": 6,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "density"
+      ],
+      "total": 9,
+      "covered": 9,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "advanced"
+      ],
+      "total": 18,
+      "covered": 18,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "writingMode",
+        "sizing"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "writingMode",
+        "spacing"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "writingMode",
+        "overflow"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "writingMode",
+        "position"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "writingMode",
+        "paint"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "writingMode",
+        "border"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "writingMode",
+        "radius"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "writingMode",
+        "opacity"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "writingMode",
+        "transform"
+      ],
+      "total": 18,
+      "covered": 18,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "writingMode",
+        "clip"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "writingMode",
+        "typography"
+      ],
+      "total": 12,
+      "covered": 12,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "writingMode",
+        "content"
+      ],
+      "total": 18,
+      "covered": 18,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "writingMode",
+        "alignment"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "writingMode",
+        "boxModel"
+      ],
+      "total": 6,
+      "covered": 6,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "writingMode",
+        "density"
+      ],
+      "total": 9,
+      "covered": 9,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "writingMode",
+        "advanced"
+      ],
+      "total": 18,
+      "covered": 18,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "sizing",
+        "spacing"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "sizing",
+        "overflow"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "sizing",
+        "position"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "sizing",
+        "paint"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "sizing",
+        "border"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "sizing",
+        "radius"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "sizing",
+        "opacity"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "sizing",
+        "transform"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "sizing",
+        "clip"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "sizing",
+        "typography"
+      ],
+      "total": 20,
+      "covered": 20,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "sizing",
+        "content"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "sizing",
+        "alignment"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "sizing",
+        "boxModel"
+      ],
+      "total": 10,
+      "covered": 10,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "sizing",
+        "density"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "sizing",
+        "advanced"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "spacing",
+        "overflow"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "spacing",
+        "position"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "spacing",
+        "paint"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "spacing",
+        "border"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "spacing",
+        "radius"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "spacing",
+        "opacity"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "spacing",
+        "transform"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "spacing",
+        "clip"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "spacing",
+        "typography"
+      ],
+      "total": 20,
+      "covered": 20,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "spacing",
+        "content"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "spacing",
+        "alignment"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "spacing",
+        "boxModel"
+      ],
+      "total": 10,
+      "covered": 10,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "spacing",
+        "density"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "spacing",
+        "advanced"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "overflow",
+        "position"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "overflow",
+        "paint"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "overflow",
+        "border"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "overflow",
+        "radius"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "overflow",
+        "opacity"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "overflow",
+        "transform"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "overflow",
+        "clip"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "overflow",
+        "typography"
+      ],
+      "total": 20,
+      "covered": 20,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "overflow",
+        "content"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "overflow",
+        "alignment"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "overflow",
+        "boxModel"
+      ],
+      "total": 10,
+      "covered": 10,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "overflow",
+        "density"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "overflow",
+        "advanced"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "position",
+        "paint"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "position",
+        "border"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "position",
+        "radius"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "position",
+        "opacity"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "position",
+        "transform"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "position",
+        "clip"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "position",
+        "typography"
+      ],
+      "total": 20,
+      "covered": 20,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "position",
+        "content"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "position",
+        "alignment"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "position",
+        "boxModel"
+      ],
+      "total": 10,
+      "covered": 10,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "position",
+        "density"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "position",
+        "advanced"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "paint",
+        "border"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "paint",
+        "radius"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "paint",
+        "opacity"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "paint",
+        "transform"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "paint",
+        "clip"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "paint",
+        "typography"
+      ],
+      "total": 20,
+      "covered": 20,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "paint",
+        "content"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "paint",
+        "alignment"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "paint",
+        "boxModel"
+      ],
+      "total": 10,
+      "covered": 10,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "paint",
+        "density"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "paint",
+        "advanced"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "border",
+        "radius"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "border",
+        "opacity"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "border",
+        "transform"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "border",
+        "clip"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "border",
+        "typography"
+      ],
+      "total": 20,
+      "covered": 20,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "border",
+        "content"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "border",
+        "alignment"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "border",
+        "boxModel"
+      ],
+      "total": 10,
+      "covered": 10,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "border",
+        "density"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "border",
+        "advanced"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "radius",
+        "opacity"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "radius",
+        "transform"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "radius",
+        "clip"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "radius",
+        "typography"
+      ],
+      "total": 20,
+      "covered": 20,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "radius",
+        "content"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "radius",
+        "alignment"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "radius",
+        "boxModel"
+      ],
+      "total": 10,
+      "covered": 10,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "radius",
+        "density"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "radius",
+        "advanced"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "opacity",
+        "transform"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "opacity",
+        "clip"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "opacity",
+        "typography"
+      ],
+      "total": 20,
+      "covered": 20,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "opacity",
+        "content"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "opacity",
+        "alignment"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "opacity",
+        "boxModel"
+      ],
+      "total": 10,
+      "covered": 10,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "opacity",
+        "density"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "opacity",
+        "advanced"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "transform",
+        "clip"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "transform",
+        "typography"
+      ],
+      "total": 24,
+      "covered": 24,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "transform",
+        "content"
+      ],
+      "total": 36,
+      "covered": 36,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "transform",
+        "alignment"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "transform",
+        "boxModel"
+      ],
+      "total": 12,
+      "covered": 12,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "transform",
+        "density"
+      ],
+      "total": 18,
+      "covered": 18,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "transform",
+        "advanced"
+      ],
+      "total": 36,
+      "covered": 36,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "clip",
+        "typography"
+      ],
+      "total": 20,
+      "covered": 20,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "clip",
+        "content"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "clip",
+        "alignment"
+      ],
+      "total": 25,
+      "covered": 25,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "clip",
+        "boxModel"
+      ],
+      "total": 10,
+      "covered": 10,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "clip",
+        "density"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "clip",
+        "advanced"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "typography",
+        "content"
+      ],
+      "total": 24,
+      "covered": 24,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "typography",
+        "alignment"
+      ],
+      "total": 20,
+      "covered": 20,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "typography",
+        "boxModel"
+      ],
+      "total": 8,
+      "covered": 8,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "typography",
+        "density"
+      ],
+      "total": 12,
+      "covered": 12,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "typography",
+        "advanced"
+      ],
+      "total": 24,
+      "covered": 24,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "content",
+        "alignment"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "content",
+        "boxModel"
+      ],
+      "total": 12,
+      "covered": 12,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "content",
+        "density"
+      ],
+      "total": 18,
+      "covered": 18,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "content",
+        "advanced"
+      ],
+      "total": 36,
+      "covered": 36,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "alignment",
+        "boxModel"
+      ],
+      "total": 10,
+      "covered": 10,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "alignment",
+        "density"
+      ],
+      "total": 15,
+      "covered": 15,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "alignment",
+        "advanced"
+      ],
+      "total": 30,
+      "covered": 30,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "boxModel",
+        "density"
+      ],
+      "total": 6,
+      "covered": 6,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "boxModel",
+        "advanced"
+      ],
+      "total": 12,
+      "covered": 12,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "density",
+        "advanced"
+      ],
+      "total": 18,
+      "covered": 18,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "outerLayout",
+        "nestedLayout",
+        "writingMode"
+      ],
+      "total": 75,
+      "covered": 75,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "overflow",
+        "position",
+        "transform"
+      ],
+      "total": 150,
+      "covered": 150,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "paint",
+        "opacity",
+        "clip"
+      ],
+      "total": 125,
+      "covered": 125,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "sizing",
+        "spacing",
+        "boxModel"
+      ],
+      "total": 50,
+      "covered": 50,
+      "missing": 0
+    },
+    {
+      "factors": [
+        "direction",
+        "content",
+        "typography"
+      ],
+      "total": 72,
+      "covered": 72,
+      "missing": 0
+    }
+  ],
+  "excluded": [
+    "JavaScript DOM mutation",
+    "JavaScript execution in fixtures",
+    "event-handler behavior",
+    "animation/transition timelines",
+    "network-dependent content",
+    "Shadow DOM scripting",
+    "exhaustive unbounded CSS values",
+    "print rendering verification"
+  ],
+  "complexity": {
+    "elements": {
+      "min": 1023,
+      "max": 2794,
+      "total": 2023565
+    },
+    "maxDepth": {
+      "min": 12,
+      "max": 16,
+      "total": 15229
+    },
+    "trackedElements": {
+      "min": 198,
+      "max": 333,
+      "total": 265515
+    },
+    "modules": {
+      "min": 14,
+      "max": 16,
+      "total": 14966
+    },
+    "htmlBytes": {
+      "min": 82608,
+      "max": 193853,
+      "total": 141287599
+    },
+    "cssBytes": {
+      "min": 21799,
+      "max": 22516,
+      "total": 22151747
+    }
+  },
+  "htmlTagCounts": {
+    "a": 24660,
+    "article": 87136,
+    "aside": 1732,
+    "b": 90641,
+    "bdi": 8261,
+    "bdo": 8261,
+    "blockquote": 718,
+    "body": 1000,
+    "button": 1463,
+    "caption": 754,
+    "cite": 718,
+    "code": 768,
+    "col": 5278,
+    "colgroup": 754,
+    "dd": 7250,
+    "defs": 750,
+    "details": 2872,
+    "dialog": 718,
+    "div": 312509,
+    "dl": 1450,
+    "dt": 7250,
+    "em": 111369,
+    "fieldset": 745,
+    "figcaption": 3750,
+    "figure": 3750,
+    "footer": 1000,
+    "form": 745,
+    "h1": 1000,
+    "h2": 2000,
+    "h3": 14966,
+    "h4": 87887,
+    "head": 1000,
+    "header": 1000,
+    "hr": 1000,
+    "html": 1000,
+    "img": 25595,
+    "input": 8940,
+    "label": 8940,
+    "legend": 745,
+    "li": 34340,
+    "lineargradient": 750,
+    "link": 1000,
+    "main": 1000,
+    "mark": 6918,
+    "math": 750,
+    "meta": 5000,
+    "meter": 745,
+    "mfrac": 750,
+    "mi": 2250,
+    "mo": 750,
+    "mrow": 750,
+    "msqrt": 750,
+    "nav": 1732,
+    "ol": 718,
+    "optgroup": 1490,
+    "option": 5960,
+    "output": 745,
+    "p": 150647,
+    "path": 750,
+    "pre": 768,
+    "progress": 745,
+    "rect": 750,
+    "rp": 13836,
+    "rt": 6918,
+    "ruby": 6918,
+    "s": 6918,
+    "section": 15966,
+    "select": 1490,
+    "span": 693783,
+    "stop": 1500,
+    "strong": 94054,
+    "sub": 6918,
+    "summary": 2872,
+    "sup": 6918,
+    "svg": 750,
+    "table": 754,
+    "tbody": 754,
+    "td": 60254,
+    "text": 750,
+    "textarea": 745,
+    "tfoot": 754,
+    "th": 12058,
+    "thead": 754,
+    "title": 1000,
+    "tr": 12806,
+    "ul": 6744,
+    "wbr": 6918
+  }
+}

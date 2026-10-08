@@ -1,0 +1,21 @@
+html{background:white}body{margin:0;font:20px/24px Consolas;color:#162e40}.sample{position:absolute;width:180px}.host{width:130px}.subject{width:min-content;background:#e5eef1}.after{width:130px;height:8px;background:#bdd2db}
+#spaces-sample{left:10px;top:10px}#spaces{}
+#hyphen-sample{left:204px;top:10px}#hyphen{}
+#slash-sample{left:398px;top:10px}#slash{}
+#zero-width-sample{left:592px;top:10px}#zero-width{}
+#soft-hyphen-sample{left:10px;top:120px}#soft-hyphen{}
+#nonbreaking-sample{left:204px;top:120px}#nonbreaking{}
+#cjk-sample{left:398px;top:120px}#cjk{}
+#hangul-sample{left:592px;top:120px}#hangul{}
+#keep-all-sample{left:10px;top:230px}#keep-all{word-break:keep-all}
+#nowrap-sample{left:204px;top:230px}#nowrap{white-space:nowrap}
+#pre-line-sample{left:398px;top:230px}#pre-line{white-space:pre-line}
+#break-all-sample{left:592px;top:230px}#break-all{word-break:break-all}
+#anywhere-sample{left:10px;top:340px}#anywhere{overflow-wrap:anywhere}
+#combining-sample{left:204px;top:340px}#combining{}
+#letter-spacing-sample{left:398px;top:340px}#letter-spacing{letter-spacing:1px}
+#word-spacing-sample{left:592px;top:340px}#word-spacing{word-spacing:5px}
+#hyphens-none-sample{left:10px;top:450px}#hyphens-none{hyphens:none}
+#nonbreaking-hyphen-sample{left:204px;top:450px}#nonbreaking-hyphen{}
+#cjk-punctuation-sample{left:398px;top:450px}#cjk-punctuation{}
+#zwsp-spacing-sample{left:592px;top:450px}#zwsp-spacing{letter-spacing:1px}

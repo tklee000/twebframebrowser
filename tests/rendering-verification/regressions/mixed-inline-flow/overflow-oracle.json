@@ -1,0 +1,22 @@
+{
+  "oracle": "Independent unmodified WebView2 documentElement scroll geometry",
+  "scope": "Attached overflow-wrap:anywhere/break-word, word-break:break-all and inline margins must not create viewport horizontal overflow; detailed first-line geometry is not asserted",
+  "measurements": [
+    {
+      "dpi": 96,
+      "runtime": "154.0.4258.62",
+      "clientWidth": 800,
+      "scrollWidth": 800
+    },
+    {
+      "dpi": 144,
+      "runtime": "154.0.4258.62",
+      "clientWidth": 800,
+      "scrollWidth": 800
+    }
+  ],
+  "inputSha256": {
+    "overflow.html": "bd4d7c70cb9fc7d2d25877d5b4af7454ba86e511e08fecf8a796004a029a45c3",
+    "overflow.css": "ffcbd84fe9ce0f6f2b0e6491e1d440b1ed8443724466b43a2b3c2d671d7b0312"
+  }
+}

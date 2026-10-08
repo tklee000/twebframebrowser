@@ -1,0 +1,1 @@
+(function(){return JSON.stringify({boxes:Array.from(document.querySelectorAll("[data-probe]")).map(n=>{const r=n.getBoundingClientRect();return {id:n.id,rect:[r.x,r.y,r.width,r.height]}})})})()

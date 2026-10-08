@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "corpusManifestSha256": "dec50f45e5aa493b36a890e9ef7ca18682072221139c4b2f726e5b0ea96e8c19",
+  "staticValidation": {
+    "cases": 1000,
+    "errors": 0,
+    "sameSeedByteIdenticalRegeneration": true
+  },
+  "webview2": {
+    "runtimeVersion": "154.0.4258.62",
+    "pageScriptsEnabled": false,
+    "domMutation": false,
+    "successfulSample": {
+      "cases": 20,
+      "measurements": 60,
+      "screenshots": 60,
+      "viewports": [
+        [
+          384,
+          768
+        ],
+        [
+          800,
+          600
+        ],
+        [
+          1280,
+          800
+        ]
+      ],
+      "failures": 0,
+      "actualWindowDpi": 96,
+      "evidenceSummary": "artifacts/webview2-20261007-092234-685/summary.json",
+      "summarySha256": "b6f3ecdcc5bc845560372292ff123a5bad584a731989eaf08739a20597c2904d",
+      "hostSourceSha256": "c6f984386c03fd0f511470b6b12b0b7bd2dd1ec9b5c04a4c3f1f579001135eb4"
+    },
+    "broaderRun": {
+      "completedCasesAt800x600": 50,
+      "completedMeasurements": 90,
+      "completedScreenshots": 60,
+      "requestedCases": 1000,
+      "firstTimeout": "0051-transforms-3d",
+      "status": "incomplete",
+      "evidenceSummary": "artifacts/webview2-20261007-091937-986/summary.json"
+    },
+    "knownTimeouts": [
+      {
+        "id": "0051-transforms-3d",
+        "observed": "navigation-timeout-20s",
+        "isolatedFreshProfile": true,
+        "runtimeVersion": "154.0.4258.62",
+        "viewport": [
+          800,
+          600
+        ],
+        "htmlSha256": "c45c380db3413d8825798e0914609502626c58ea4d942c1ffae0324e1ac7c7b4",
+        "cssSha256": "15523c432671bdac88afd196f405cc8aa41ebf4edae07fd096cd5493bed6bdc0",
+        "factors": {
+          "family": "transforms-3d",
+          "outerLayout": "columns",
+          "nestedLayout": "grid",
+          "direction": "rtl",
+          "writingMode": "horizontal-tb",
+          "sizing": "calc",
+          "spacing": "fractional",
+          "overflow": "visible",
+          "position": "fixed",
+          "paint": "radial",
+          "border": "mixed",
+          "radius": "pill",
+          "opacity": "transparent",
+          "transform": "rotate",
+          "clip": "ellipse",
+          "typography": "sans",
+          "content": "korean",
+          "alignment": "start",
+          "boxModel": "content-box",
+          "density": "dense",
+          "advanced": "off"
+        },
+        "evidenceSummary": "artifacts/webview2-20261007-092323-837/summary.json",
+        "summarySha256": "df7ca4ef60aac57ff8d919d0441eaabd31bc065d0b0dc8fc514438c80f338267",
+        "cause": "not determined"
+      },
+      {
+        "id": "0993-multicolumn-floats",
+        "observed": "navigation-timeout-20s",
+        "isolatedFreshProfile": true,
+        "runtimeVersion": "154.0.4258.62",
+        "viewport": [
+          800,
+          600
+        ],
+        "htmlSha256": "8f5d4d7c3ef5e5edd0d83fe59fa3a1e70db85e6ec4e66cd882cbf8c24fda96ac",
+        "cssSha256": "35cc5cb08fd276ddeb5b7e315a92b7910e33974bab9f6fa1a4ed1915e7b92fad",
+        "factors": {
+          "family": "multicolumn-floats",
+          "outerLayout": "columns",
+          "nestedLayout": "flex-column",
+          "direction": "ltr",
+          "writingMode": "vertical-lr",
+          "sizing": "clamp",
+          "spacing": "fractional",
+          "overflow": "clip",
+          "position": "fixed",
+          "paint": "solid",
+          "border": "mixed",
+          "radius": "asymmetric",
+          "opacity": "opaque",
+          "transform": "perspective",
+          "clip": "inset",
+          "typography": "sans",
+          "content": "korean",
+          "alignment": "stretch",
+          "boxModel": "content-box",
+          "density": "dense",
+          "advanced": "cascade"
+        },
+        "evidenceSummary": "artifacts/webview2-20261007-092324-053/summary.json",
+        "summarySha256": "9cc999413faca258a0c5f2b6d503377654b0702170e6346eba52926469c1dccb",
+        "cause": "not determined"
+      }
+    ]
+  },
+  "renderingComparison": "not-run",
+  "archiveEvidenceNote": "artifacts are retained on the originating machine and excluded from the portable input ZIP; this summary is included."
+}

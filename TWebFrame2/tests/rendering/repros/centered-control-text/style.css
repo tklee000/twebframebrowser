@@ -1,7 +1,0 @@
-body{margin:0;background:#fff;font:14px/20px Arial;color:#17202a}
-.row{display:flex;align-items:center;gap:18px;padding:18px}
-button{font:14px Arial;color:#000}
-button:nth-child(2){width:96px}
-button:nth-child(3){width:96.0625px}
-.medium button{font-size:18px;color:#17202a}
-.large button{font-size:24px;color:#a74f2b}

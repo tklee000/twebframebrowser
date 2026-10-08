@@ -1,0 +1,25 @@
+{
+  "oracle": "Independent unmodified WebView2 rectangles and elementFromPoint",
+  "runtime": "154.0.4258.62",
+  "cssViewport": [
+    800,
+    600
+  ],
+  "dpi": [
+    96,
+    144
+  ],
+  "shapes": 24,
+  "geometryProbes": 48,
+  "hitProbes": 1008,
+  "engineReadsExpectedData": false,
+  "inputAndExpectedSha256": {
+    "index.html": "761f77cebcd11b33d3f3aed43465a805afeed6f869c4ffec3419ceda34bcca27",
+    "style.css": "0f22832be1b9a4ca53f880d1b19a6e6073a9e6abc3fd5d33277811062a48ab20",
+    "oracle-measure.js": "eb2f8301c88e4bcecafb64169095ef191bd1166a6836e06d86c002a6e8123815",
+    "expected-96.tsv": "f73d7a5610510b453681077fbe3abf79654167ae619507529975f265b94d9c7f",
+    "expected-144.tsv": "c17d71dd8108b69e0c886bc5bd54d9074e48c81ba30140d66bd15d68aad33d5d",
+    "hits-96.tsv": "0df2008a1b43ab0eff722733624edb1b59fe774682737046226848bb8fb0831d",
+    "hits-144.tsv": "876560c4cc8254c390c112ceeb90347fa46c1256bf7f1818c9a5759bca491eb5"
+  }
+}

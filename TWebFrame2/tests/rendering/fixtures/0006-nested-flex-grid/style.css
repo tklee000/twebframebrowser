@@ -1,2 +1,0 @@
-body{margin:0;background:#fff;font:16px/20px Arial;color:#17202a}
-.shell{display:flex;gap:10px;padding:12px;width:340px;height:180px;background:#e8eef4}.aside{width:70px;background:#294c70}.main{display:flex;flex-direction:column;flex:1;gap:8px;min-width:0}.header{height:25px;background:#ce743a}.grid{display:grid;grid-template-columns:1fr 2fr;gap:7px;flex:1}.tile{background:#539b8e}

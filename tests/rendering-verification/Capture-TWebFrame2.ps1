@@ -1,0 +1,2 @@
+param([string]$CorpusPath=(Join-Path $PSScriptRoot '..\rendering-stress'),[string]$OutputDirectory='',[string[]]$CaseId=@(),[ValidateSet(96,144)][int[]]$Dpi=@(96,144),[int]$Width=800,[int]$Height=600,[ValidateRange(1,6)][int]$Workers=1,[switch]$SkipBuild,[switch]$ParallelDpi,[switch]$FullDiagnostics,[string]$BuildDirectory=(Join-Path $PSScriptRoot '.work\build'))
+& (Join-Path $PSScriptRoot 'Capture-Engine.ps1') -Engine twebframe2 @PSBoundParameters

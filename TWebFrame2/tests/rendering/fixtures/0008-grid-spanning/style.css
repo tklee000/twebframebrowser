@@ -1,2 +1,0 @@
-body{margin:0;background:#fff;font:16px/20px Arial;color:#17202a}
-.grid{display:grid;grid-template-columns:repeat(3,82px);grid-auto-rows:38px;gap:8px;padding:12px;background:#dde7f0;width:262px}.tile{background:#347c87}.wide{grid-column:span 2;background:#d4863c}.tall{grid-row:span 2;background:#7c5b9a}

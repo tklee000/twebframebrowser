@@ -1,0 +1,2 @@
+html,body{margin:0;background:white}body{width:800px;height:600px}
+.grid{position:absolute;display:grid;width:184px;height:116px;grid-template-columns:repeat(3,20px);grid-template-rows:repeat(3,16px);grid-auto-columns:20px;grid-auto-rows:16px;gap:2px;align-content:start;justify-content:start;align-items:start}.item{height:10px;min-width:0}

@@ -1,0 +1,18 @@
+2026-10-07 WebView2 / TWebFrame2: 우선 수정 검증 완료, 전체 100% 목표는 미완료.
+원본 1,000문서·보관 ZIP 해시 유지. 800x600 CSS viewport 첫 화면, 96/144 DPI. PNG 리사이즈·특정 ID/문서 보정 없음. RGBA 허용 오차 0.
+이번 공통 엔진 변경: CSS.cpp, Layout.cpp, Layout.h. 혼합 inline 첫 줄/후속 줄 배치, 공백·연결 단어·원본 DOM 문자 위치, 명시 폭 grid 항목의 auto 행 높이 측정, 분할 회피 블록의 다단 배치 및 columns shorthand.
+다단 지원: 열 개수/폭/간격, RTL, auto/balance 채움, 강제 열 이동, 전체 열 span, 인접 여백. 일반 문단의 줄 단위 열 분할·widows/orphans·column-rule·세로쓰기는 아직 지원/검증이 충분하지 않음.
+cluster 줄바꿈과 inline 여백/수직 정렬이 섞인 그룹은 기존 formatting context를 유지해 새 가로 넘침을 방지. 별도 WebView2의 viewport scroll 폭으로 검증했으며 상세 첫 줄 cluster 배치는 미검증.
+TWebFrame2 최종 캡처 2000/2000 성공. 실행 파일 SHA-256 c29dce135054293c11e09c777ca5e024fe61f8728e93424bd09f21536b0b7423.
+전체 2000쌍 중 비교 1955, 기존 기준 캡처 실패 45(96 DPI 23, 144 DPI 22), 완전 일치 0.
+원본 픽셀 일치율 75.9041789% -> 76.2211966%; backend 제외 후 78.1731852% -> 78.5446217%.
+비교 픽셀 1,525,200,000; 원본 차이 362,674,310; 입증된 backend 차이 35,436,880; 미설명 차이 327,237,430.
+수정 전 대비 개선 644 / 동일 1026 / 악화 285쌍. 미설명 오차 5,665,150픽셀 감소. 모든 문서가 개선됐다는 뜻은 아님.
+96 DPI: 977쌍 비교, backend 제외 후 80.4355293%. 144 DPI: 978쌍 비교, backend 제외 후 77.7050776%.
+새 MixedInlineFlowRegression 1908검사 통과, MulticolBlockFlowRegression 1776검사 통과. 독립 WebView2 좌표, 반복 relayout, 전체 ID 변경, DOM 순서/문자 위치를 검사.
+누적 C++ 19프로젝트 36,964검사: 36,936통과 / 기존 clip 클릭 영역 28실패. Python 비교기 9검사 통과. 엄격 PNG 17/38쌍 통과.
+새 다단 회귀의 두 DPI PNG 전체 RGBA 동일. 새 혼합 inline PNG는 96/144 DPI 475/8355픽셀 미일치이며 backend 차이로 일괄 제외하지 않음.
+악화가 큰 복합 다단 문서는 내부 문단 열 분할·세로쓰기 등에서 높이 측정과 열 균형이 기준과 달라지는 문제가 남음. 다음 우선순위는 이 공통 단락 분할과 세로쓰기, 잔여 클릭/그리기 차이.
+backend 제외는 native 전체 RGBA가 독립 software와 정확히 같고 GPU와 다른 픽셀만 적용. 기존 기준 run은 첫 browser generation만 실제 backend 진단한 한계가 있음. Runtime 154.0.4258.62, 실제 HWND DPI 96; 144는 명시적 snapshot.
+원본 보관본 3,075항목과 원본 문서 유지. 도구·누적 회귀 소스·공통 엔진·priority-layout-changes.patch·전체 누적 patch·본 결과는 추가 ZIP으로 보관.
+전체 100% 수정/검증이 미완료이므로 실패 PNG·상세 로그·빌드는 재현용으로 유지. 전체 통과 후 산출물을 정리하고 원본 문서·도구·회귀 프로젝트 소스·보관본·간단 결과를 유지.

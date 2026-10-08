@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations"><ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration></ItemGroup>
+  <PropertyGroup Label="Globals"><VCProjectVersion>16.0</VCProjectVersion><ProjectGuid>{811865AB-026E-4EEC-A1C1-03D161417A55}</ProjectGuid><Keyword>Win32Proj</Keyword><WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration"><ConfigurationType>Application</ConfigurationType><UseDebugLibraries>false</UseDebugLibraries><PlatformToolset>v142</PlatformToolset><CharacterSet>Unicode</CharacterSet></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup><OutDir>$(ProjectDir).work\build\bin\</OutDir><IntDir>$(ProjectDir).work\build\obj\</IntDir><TargetName>RenderingCapture</TargetName><WebView2Native>$(ProjectDir)..\..\packages\Microsoft.Web.WebView2.1.0.3595.46\build\native\</WebView2Native></PropertyGroup>
+  <ItemDefinitionGroup><ClCompile><WarningLevel>Level4</WarningLevel><LanguageStandard>stdcpp17</LanguageStandard><ConformanceMode>true</ConformanceMode><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions><AdditionalIncludeDirectories>$(WebView2Native)include;$(ProjectDir)..\..\TWebFrame2\include;$(ProjectDir)..\..\TWebFrame2\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories><PreprocessorDefinitions>UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;_ITERATOR_DEBUG_LEVEL=0;%(PreprocessorDefinitions)</PreprocessorDefinitions><RuntimeLibrary>MultiThreaded</RuntimeLibrary></ClCompile><Link><SubSystem>Console</SubSystem><AdditionalDependencies>$(WebView2Native)x64\WebView2LoaderStatic.lib;ole32.lib;d2d1.lib;dwrite.lib;shlwapi.lib;version.lib;windowscodecs.lib;psapi.lib;crypt32.lib;comctl32.lib;winhttp.lib;uxtheme.lib;%(AdditionalDependencies)</AdditionalDependencies></Link></ItemDefinitionGroup>
+  <ItemGroup><ClCompile Include="Capture.cpp" /></ItemGroup>
+  <ItemGroup><ProjectReference Include="..\..\TWebFrame2\TWebFrame.vcxproj"><Project>{05D5ACB1-7F24-4E5A-9BC0-D910A099A271}</Project></ProjectReference></ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

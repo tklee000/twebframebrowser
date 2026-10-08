@@ -1,0 +1,7 @@
+html,body{margin:0;padding:0;background:white}
+body{font-family:Consolas;font-size:20px;line-height:24px}
+.row{margin-bottom:12px;white-space:nowrap}
+span{display:inline-block;vertical-align:top;background:#dce8eb}
+.positive{word-spacing:5px}.negative{word-spacing:-2px}.both{word-spacing:5px;letter-spacing:2px}
+.inherited{word-spacing:.25em;letter-spacing:.1em}.small{font-size:10px}.reset{word-spacing:initial;letter-spacing:initial}.unset{word-spacing:unset;letter-spacing:unset}
+.preserved,.tabbed{white-space:pre}.tabbed{tab-size:4}.wrap{white-space:normal;width:60px}.rtl{direction:rtl}.calc{font-size:10px;word-spacing:calc(.3em + 1px);letter-spacing:calc(.1em + .5px)}

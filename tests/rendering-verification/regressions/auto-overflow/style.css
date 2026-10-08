@@ -1,0 +1,10 @@
+html{overflow:hidden}body{margin:0}*{box-sizing:border-box}
+.fit,.overflow,.grid,.flex{width:160px;padding:10px;overflow:auto;background:#e5eaf0}
+.fit{height:85px}.fit>div{height:15px;margin:10px 0;background:#567}
+.overflow{height:60px}.overflow>div{height:100px;background:#789}
+.rtl{direction:rtl}
+.grid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:40px;gap:10px}
+.fit-grid{height:60px}.overflow-grid{height:40px}
+.grid>div{background:#687}
+.flex{height:40px;display:flex;gap:10px;align-items:start}
+.flex>div{height:40px;flex:1;min-width:0;background:#876}

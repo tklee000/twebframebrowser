@@ -1,0 +1,14 @@
+--- before/TWebFrame2/src/Layout.cpp
++++ after/TWebFrame2/src/Layout.cpp
+@@ -9402,7 +9402,10 @@
+     if(!Intersects(box.subtreeBounds,clipBounds))return;
+     if(box.node&&box.node->modal&& &box!=paintingTopLayer_)return;
+     float opacity=1;TryParseFloat(box.style.Get(L"opacity",L"1"),opacity);
+-    opacity=std::clamp(opacity,0.0f,1.0f);if(opacity<=0.001f)return;
++    // The compositing surface stores eight-bit coverage. Round the group
++    // alpha before Direct2D's conversion, preserving computed CSS opacity.
++    opacity=std::round(std::clamp(opacity,0.0f,1.0f)*255)/255;
++    if(opacity<=0.001f)return;
+     PushPaintClip(target,PixelAlignedRect(clipBounds,deviceScale_),D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+     // Keep the mask and transform active through deferred z-index descendants.
+     // Clipping only PaintBox would let those descendants escape the shape.
